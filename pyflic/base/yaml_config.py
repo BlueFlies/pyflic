@@ -10,8 +10,20 @@ import yaml
 from .dfm import DFM
 from .experiment import Experiment
 from .experiment_design import ExperimentDesign
+from .hedonic_experiment import HedonicFeedingExperiment
 from .parameters import Parameters
+from .progressive_ratio_experiment import ProgressiveRatioExperiment
+from .single_well_experiment import SingleWellExperiment
 from .treatment import Treatment
+from .two_well_experiment import TwoWellExperiment
+
+# Maps the `experiment_type:` YAML field value to the corresponding class.
+_EXPERIMENT_TYPE_MAP: dict[str, type[Experiment]] = {
+    "hedonic": HedonicFeedingExperiment,
+    "progressive_ratio": ProgressiveRatioExperiment,
+    "two_well": TwoWellExperiment,
+    "single_well": SingleWellExperiment,
+}
 
 
 def _norm_key(k: str) -> str:
@@ -220,6 +232,12 @@ def load_experiment_yaml(
     global_overrides = _normalize_param_overrides(global_params_node)
     global_params_present = global_params_node is not None
     global_constants = dict(global_cfg.get("constants", {}) or {})
+    _et_raw = global_cfg.get("experiment_type") or None
+    experiment_type: str | None = (
+        str(_et_raw).strip().lower().replace("-", "_").replace(" ", "_")
+        if _et_raw is not None
+        else None
+    )
     factors_node = global_cfg.get("experimental_design_factors") or {}
     design_factors: list[str] = list(factors_node.keys()) if factors_node else []
     global_well_names: dict[str, str] = {
@@ -247,7 +265,7 @@ def load_experiment_yaml(
     elif not isinstance(dfm_nodes, list):
         raise ValueError("`dfms` must be either a list or a mapping keyed by DFM id.")
 
-    design = ExperimentDesign()
+    design = ExperimentDesign(experiment_type=experiment_type)
 
     # First pass: compute parameters and capture chamber assignments, but don't load data yet.
     dfm_specs: list[tuple[int, Parameters, dict[int, str], dict[str, str], dict[int, dict[str, str]]]] = []
@@ -352,8 +370,43 @@ def load_experiment_yaml(
         for chamber_index, fl in chamber_factor_levels.items():
             chamber_factors_map[(int(dfm_id), int(chamber_index))] = fl
 
-    # Keep `Experiment.dfms` as a convenience alias to the same dict.
-    exp = Experiment(
+    # Select the appropriate experiment class based on chamber_size.
+    # Mixed chamber sizes across DFMs are rejected here.
+    chamber_sizes = {dfm.params.chamber_size for dfm in loaded.values()}
+    if len(chamber_sizes) > 1:
+        raise ValueError(
+            f"All DFMs in an experiment must share the same chamber_size, "
+            f"but found multiple values: {sorted(chamber_sizes)}.  "
+            f"Set a consistent chamber_size in flic_config.yaml."
+        )
+    uniform_chamber_size = next(iter(chamber_sizes)) if chamber_sizes else 2
+    _CLS: type[Experiment]
+    if experiment_type is not None:
+        if experiment_type not in _EXPERIMENT_TYPE_MAP:
+            raise ValueError(
+                f"Unknown experiment_type {experiment_type!r} in flic_config.yaml. "
+                f"Valid values: {sorted(_EXPERIMENT_TYPE_MAP)}."
+            )
+        _CLS = _EXPERIMENT_TYPE_MAP[experiment_type]
+        # Validate chamber_size compatibility.
+        if issubclass(_CLS, TwoWellExperiment) and uniform_chamber_size != 2:
+            raise ValueError(
+                f"experiment_type={experiment_type!r} requires chamber_size=2, "
+                f"but chamber_size={uniform_chamber_size} was found in flic_config.yaml."
+            )
+        if issubclass(_CLS, SingleWellExperiment) and uniform_chamber_size != 1:
+            raise ValueError(
+                f"experiment_type='single_well' requires chamber_size=1, "
+                f"but chamber_size={uniform_chamber_size} was found in flic_config.yaml."
+            )
+    elif uniform_chamber_size == 1:
+        _CLS = SingleWellExperiment
+    elif uniform_chamber_size == 2:
+        _CLS = TwoWellExperiment
+    else:
+        _CLS = Experiment
+
+    exp = _CLS(
         dfms=design.dfms,
         design=design,
         global_config=global_cfg,

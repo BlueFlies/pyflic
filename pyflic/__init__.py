@@ -10,7 +10,10 @@ from .base.experiment import Experiment
 from .base.experiment_design import ExperimentDesign
 from .base.hedonic_experiment import HedonicFeedingExperiment
 from .base.parameters import Parameters
+from .base.progressive_ratio_experiment import ProgressiveRatioExperiment
+from .base.single_well_experiment import SingleWellExperiment
 from .base.treatment import Treatment, TreatmentChamber
+from .base.two_well_experiment import TwoWellExperiment
 from .base.yaml_config import load_experiment_yaml
 
 __all__ = [
@@ -20,7 +23,10 @@ __all__ = [
     "TreatmentChamber",
     "ExperimentDesign",
     "Experiment",
+    "SingleWellExperiment",
+    "TwoWellExperiment",
     "HedonicFeedingExperiment",
+    "ProgressiveRatioExperiment",
     "load_experiment_yaml",
     "feeding_summary_monitors",
     "binned_feeding_summary_monitors",

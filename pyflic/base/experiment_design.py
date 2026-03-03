@@ -17,6 +17,7 @@ class ExperimentDesign:
 
     dfms: dict[int, DFM] = field(default_factory=dict)
     treatments: dict[str, Treatment] = field(default_factory=dict)
+    experiment_type: str | None = None  # e.g. "hedonic", "progressive_ratio", "two_well", "single_well"
 
     def add_dfm(self, dfm: DFM, *, overwrite: bool = False) -> None:
         dfm_id = int(dfm.id)

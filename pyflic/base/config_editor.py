@@ -709,6 +709,13 @@ class FLICConfigEditor(QMainWindow):
         self._chamber_size_combo.currentIndexChanged.connect(self._on_chamber_size_changed)
         self._exp_form.addRow("Chamber Size:", self._chamber_size_combo)
 
+        self._experiment_type_combo = QComboBox()
+        self._experiment_type_combo.addItems(
+            ["(auto)", "hedonic", "progressive_ratio", "two_well", "single_well"]
+        )
+        self._experiment_type_combo.setMaximumWidth(240)
+        self._exp_form.addRow("Experiment Type:", self._experiment_type_combo)
+
         self._num_dfms_spin = QSpinBox()
         self._num_dfms_spin.setRange(1, 20)
         self._num_dfms_spin.setValue(1)
@@ -908,6 +915,10 @@ class FLICConfigEditor(QMainWindow):
         global_params["chamber_size"] = self._chamber_size()
         global_section: dict[str, Any] = {"params": global_params}
 
+        et = self._experiment_type_combo.currentText()
+        if et != "(auto)":
+            global_section["experiment_type"] = et
+
         # Well names
         if self._chamber_size() == 2:
             wa = self._well_a_edit.text().strip()
@@ -960,6 +971,11 @@ class FLICConfigEditor(QMainWindow):
         params_to_load = {k: v for k, v in global_params_raw.items() if k != "chamber_size"}
         self._global_params.load_values(params_to_load, chamber_size)
         self._global_params.set_chamber_size(chamber_size)
+
+        # Experiment type
+        et = str(global_cfg.get("experiment_type") or "").strip().lower().replace("-", "_").replace(" ", "_")
+        et_items = [self._experiment_type_combo.itemText(i) for i in range(self._experiment_type_combo.count())]
+        self._experiment_type_combo.setCurrentIndex(et_items.index(et) if et in et_items else 0)
 
         # Well names
         well_names = global_cfg.get("well_names") or {}
@@ -1021,6 +1037,7 @@ class FLICConfigEditor(QMainWindow):
         self._min_licks_edit.clear()
         self._max_dur_edit.clear()
         self._max_events_edit.clear()
+        self._experiment_type_combo.setCurrentIndex(0)
 
         self._chamber_size_combo.blockSignals(True)
         self._num_dfms_spin.blockSignals(True)

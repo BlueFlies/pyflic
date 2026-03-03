@@ -116,15 +116,6 @@ class Experiment:
             executor=executor,
         )
 
-    def _simultaneous_feeding_matrix_df(self, dfm: DFM) -> pd.DataFrame:
-        mat = dfm.simultaneous_feeding_matrix()
-        n = int(dfm.params.chamber_sets.shape[0])
-        return pd.DataFrame(
-            mat,
-            index=[f"Chamber{i}" for i in range(1, n + 1)],
-            columns=["Licks1", "Licks2", "Both", "MaxMinSignalAtBoth", "HigherInCol1AtBoth"],
-        )
-
     def _dfm_actual_range_minutes(self, dfm: DFM) -> tuple[float, float] | None:
         """
         Best-effort actual time range in minutes, based on the loaded raw data.
@@ -175,21 +166,15 @@ class Experiment:
             breaks = dfm.data_breaks(multiplier=float(data_breaks_multiplier))
             breaks_count = 0 if breaks is None else int(len(breaks))
 
-            sim_df = None
-            bleed = None
-            if dfm.params.chamber_size == 2:
-                sim_df = self._simultaneous_feeding_matrix_df(dfm)
-                bleed = dfm.bleeding_check(cutoff=float(bleeding_cutoff))
-
             results[dfm_id] = {
                 "integrity": integrity,
                 "integrity_text": integrity_text,
                 "data_breaks_multiplier": float(data_breaks_multiplier),
                 "data_breaks_count": breaks_count,
                 "data_breaks_head": None if breaks is None else breaks.head(10),
-                "simultaneous_feeding_matrix": sim_df,
+                "simultaneous_feeding_matrix": None,
                 "bleeding_cutoff": float(bleeding_cutoff),
-                "bleeding": bleed,
+                "bleeding": None,
             }
 
         self.qc_results = results
@@ -520,10 +505,13 @@ class Experiment:
         )
         import numpy as np
 
-        jitter_aes = aes(size=size_col) if size_col is not None else {}
+        if size_col is not None:
+            jitter_kwargs: dict = {"mapping": aes(size=size_col), "width": jitter_width}
+        else:
+            jitter_kwargs = {"width": jitter_width, "size": point_size}
         p = (
             ggplot(df, aes(x=x_col, y=y_col, color=x_col))
-            + geom_jitter(jitter_aes, width=jitter_width, **({} if size_col else {"size": point_size}))
+            + geom_jitter(**jitter_kwargs)
             + stat_summary(fun_y=np.mean, geom="point", color="#333333", shape="x", size=4)
             + stat_summary(
                 fun_ymin=lambda x: x.mean() - x.sem(),
@@ -555,83 +543,16 @@ class Experiment:
 
         return p
 
-    def facet_plot_well_durations(
-        self,
-        *,
-        metric: str = "MedDuration",
-        range_minutes: Sequence[float] = (0, 0),
-        transform_licks: bool = True,
-        title: str = "",
-        y_label: str | None = None,
-        ylim: tuple[float, float] | None = None,
-        x_labels: dict[str, str] | None = None,
-        annotation: str | None = None,
-        jitter_width: float = 0.25,
-        point_size: float = 3.0,
-        base_font_size: float = 20.0,
-    ):
+    def _feeding_plot_metrics(self) -> list[tuple[str, str]]:
+        """Return ``(column_name, display_label)`` pairs for :meth:`plot_feeding_summary`.
+
+        Override in subclasses to provide chamber-size-specific metric lists.
         """
-        Jitter plot comparing WellA vs WellB for a given feeding metric, faceted by treatment.
+        return []
 
-        Parameters
-        ----------
-        metric : str
-            Base column name without the A/B suffix (e.g. ``"MedDuration"`` looks for
-            ``"MedDurationA"`` and ``"MedDurationB"`` in the feeding summary).
-        x_labels : dict[str, str] | None
-            Optional mapping from ``"WellA"`` / ``"WellB"`` to descriptive food names,
-            e.g. ``{"WellA": "Sucrose", "WellB": "Yeast"}``.  Keys are case-insensitive.
-        """
-        col_a = f"{metric}A"
-        col_b = f"{metric}B"
-
-        df = self.feeding_summary(
-            range_minutes=range_minutes, transform_licks=transform_licks
-        )
-
-        missing = [c for c in (col_a, col_b) if c not in df.columns]
-        if missing:
-            raise ValueError(
-                f"facet_plot_well_durations: columns {missing} not found in feeding summary. "
-                f"Available columns: {list(df.columns)}"
-            )
-
-        id_cols = [c for c in ("Treatment", "DFM", "Chamber") if c in df.columns]
-        df_long = df[id_cols + [col_a, col_b]].melt(
-            id_vars=id_cols,
-            value_vars=[col_a, col_b],
-            var_name="_WellCol",
-            value_name=metric,
-        )
-        df_long["Well"] = df_long["_WellCol"].map({col_a: "WellA", col_b: "WellB"})
-        df_long = df_long.drop(columns=["_WellCol"])
-
-        # Build case-insensitive x_labels keyed by "WellA"/"WellB"
-        normalised_labels: dict[str, str] | None = None
-        if x_labels:
-            normalised_labels = {}
-            for k, v in x_labels.items():
-                key = k.strip().lower().replace(" ", "")
-                if key in ("wella", "a"):
-                    normalised_labels["WellA"] = v
-                elif key in ("wellb", "b"):
-                    normalised_labels["WellB"] = v
-
-        return self.plot_jitter_summary(
-            df_long,
-            x_col="Well",
-            y_col=metric,
-            facet_col="Treatment",
-            title=title,
-            y_label=y_label or metric,
-            ylim=ylim,
-            x_order=["WellA", "WellB"],
-            x_labels=normalised_labels,
-            annotation=annotation,
-            jitter_width=jitter_width,
-            point_size=point_size,
-            base_font_size=base_font_size,
-        )
+    def _feeding_summary_default_ncols(self) -> int:
+        """Default number of columns for :meth:`plot_feeding_summary` facet grid."""
+        return 3
 
     def plot_feeding_summary(
         self,
@@ -676,45 +597,7 @@ class Experiment:
                 + theme_bw()
             )
 
-        chamber_size = next(iter(self.dfms.values())).params.chamber_size
-
-        one_well_metrics = [
-            ("Licks", "Licks"),
-            ("Events", "Events"),
-            ("MeanDuration", "Mean Duration (s)"),
-            ("MedDuration", "Median Duration (s)"),
-            ("MeanTimeBtw", "Mean Time Btw (s)"),
-            ("MedTimeBtw", "Median Time Btw (s)"),
-            ("MeanInt", "Mean Interval (s)"),
-            ("MedianInt", "Median Interval (s)"),
-        ]
-
-        wn = self.well_names or {}
-        na = wn.get("A", "A")
-        nb = wn.get("B", "B")
-        two_well_metrics = [
-            ("PI", "PI"),
-            ("EventPI", "Event PI"),
-            ("LicksA", f"Licks ({na})"),
-            ("LicksB", f"Licks ({nb})"),
-            ("EventsA", f"Events ({na})"),
-            ("EventsB", f"Events ({nb})"),
-            ("MeanDurationA", f"Mean Duration {na} (s)"),
-            ("MeanDurationB", f"Mean Duration {nb} (s)"),
-            ("MedDurationA", f"Median Duration {na} (s)"),
-            ("MedDurationB", f"Median Duration {nb} (s)"),
-            ("MeanTimeBtwA", f"Mean Time Btw {na} (s)"),
-            ("MeanTimeBtwB", f"Mean Time Btw {nb} (s)"),
-            ("MedTimeBtwA", f"Median Time Btw {na} (s)"),
-            ("MedTimeBtwB", f"Median Time Btw {nb} (s)"),
-            ("MeanIntA", f"Mean Interval {na} (s)"),
-            ("MeanIntB", f"Mean Interval {nb} (s)"),
-            ("MedianIntA", f"Median Interval {na} (s)"),
-            ("MedianIntB", f"Median Interval {nb} (s)"),
-        ]
-
-        all_metrics = two_well_metrics if chamber_size == 2 else one_well_metrics
-        metrics = [(col, lbl) for col, lbl in all_metrics if col in df.columns]
+        metrics = [(col, lbl) for col, lbl in self._feeding_plot_metrics() if col in df.columns]
 
         if not metrics:
             from plotnine import annotate
@@ -743,7 +626,7 @@ class Experiment:
         df_long = df_long.drop(columns=["_MetricCol"])
 
         if ncols is None:
-            ncols = 4 if chamber_size == 2 else 3
+            ncols = self._feeding_summary_default_ncols()
         nrows = math.ceil(len(metrics) / ncols)
 
         if figsize is None:

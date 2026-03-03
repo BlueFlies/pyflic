@@ -1,8 +1,24 @@
 global:
+  # experiment_type determines which Experiment subclass is instantiated when
+  # load_experiment_yaml() (or Experiment.load()) reads this file.
+  #
+  # Allowed values:
+  #   hedonic          — HedonicFeedingExperiment  (two-well; adds filter_flies,
+  #                      hedonic_feeding_plot, weighted_duration_summary)
+  #   progressive_ratio — ProgressiveRatioExperiment (two-well; progressive-ratio
+  #                      specific analysis methods)
+  #   two_well         — TwoWellExperiment  (two-well standard choice experiment)
+  #   single_well      — SingleWellExperiment  (single-well, 12 independent wells)
+  #
+  # If omitted the class is chosen automatically from chamber_size:
+  #   chamber_size: 1  →  SingleWellExperiment
+  #   chamber_size: 2  →  TwoWellExperiment
+  experiment_type: hedonic
+
   constants:
     min_transform_licks_cutoff: 0.00001
     max_med_duration_cutoff: 13
-    max_events_cutoff: 150
+    max_events_cutoff: 150000
   params:
     # Full parameter list with two-well defaults (Parameters.two_well()).
     baseline_window_minutes: 3
@@ -13,7 +29,7 @@ global:
     feeding_minevents: 1
     tasting_minevents: 1
     samples_per_second: 5
-    feeding_event_link_gap: 5
+    feeding_event_link_gap: 5  # samples; at 5 Hz, 5 samples = 1 second
     chamber_size: 2  
     correct_for_dual_feeding: false
     pi_direction: left

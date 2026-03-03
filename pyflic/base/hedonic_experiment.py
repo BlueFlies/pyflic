@@ -8,10 +8,11 @@ from typing import Literal, Sequence
 import pandas as pd
 
 from .experiment import Experiment
+from .two_well_experiment import TwoWellExperiment
 
 
 @dataclass(slots=True)
-class HedonicFeedingExperiment(Experiment):
+class HedonicFeedingExperiment(TwoWellExperiment):
     filtered_chambers: pd.DataFrame | None = None
     """
     A two-well (choice) specialisation of :class:`Experiment`.
@@ -56,6 +57,8 @@ class HedonicFeedingExperiment(Experiment):
         """
         from .yaml_config import load_experiment_yaml
 
+        # load_experiment_yaml returns a TwoWellExperiment when chamber_size=2,
+        # and raises ValueError if any DFM uses a different chamber_size.
         base = load_experiment_yaml(
             project_dir,
             range_minutes=range_minutes,
@@ -63,20 +66,6 @@ class HedonicFeedingExperiment(Experiment):
             max_workers=max_workers,
             executor=executor,
         )
-
-        # Validate before constructing — gives a clear error before any state
-        # is stored.
-        bad = [
-            dfm_id
-            for dfm_id, dfm in base.dfms.items()
-            if dfm.params.chamber_size != 2
-        ]
-        if bad:
-            raise ValueError(
-                f"HedonicFeedingExperiment requires chamber_size=2 for every DFM, "
-                f"but DFM(s) {sorted(bad)} have chamber_size != 2.  "
-                f"Set chamber_size: 2 in flic_config.yaml."
-            )
 
         # Re-construct as HedonicFeedingExperiment using the same field values.
         return cls(**{f.name: getattr(base, f.name) for f in dataclasses.fields(base)})
@@ -340,7 +329,7 @@ class HedonicFeedingExperiment(Experiment):
         return text
 
     def execute_basic_analysis(self) -> None:
-        Experiment.execute_basic_analysis(self)
+        TwoWellExperiment.execute_basic_analysis(self)
         self.hedonic_feeding_plot(save=True)
         self.weighted_duration_summary(save=True)
 
@@ -459,20 +448,3 @@ class HedonicFeedingExperiment(Experiment):
 
         return df
 
-    def validate(self) -> None:
-        """
-        Re-check that all loaded DFMs use ``chamber_size=2``.
-
-        Useful after manually modifying DFM parameters.  Raises
-        :class:`ValueError` if any DFM is not two-well.
-        """
-        bad = [
-            dfm_id
-            for dfm_id, dfm in self.dfms.items()
-            if dfm.params.chamber_size != 2
-        ]
-        if bad:
-            raise ValueError(
-                f"HedonicFeedingExperiment requires chamber_size=2, "
-                f"but DFM(s) {sorted(bad)} have chamber_size != 2."
-            )
