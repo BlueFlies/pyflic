@@ -16,7 +16,7 @@ def _fmt_min(v: float) -> str:
     """Format a minute value for use in a filename.  ``inf`` → ``'end'``."""
     if v == float("inf"):
         return "end"
-    return str(int(v)) if v == int(v) else str(v)
+    return str(int(v))
 
 
 @dataclass(slots=True)
@@ -47,19 +47,32 @@ class Experiment:
         """Return the DFM with the given id, or None if it does not exist."""
         return self.dfms.get(int(dfm_id))
 
+    def _range_suffix(self) -> str:
+        """Return ``'_0_30'``-style suffix when a range is active, or ``''``."""
+        rm = self.range_minutes
+        if rm is None or (rm[0] == 0.0 and rm[1] == 0.0):
+            return ""
+        a, b = rm
+        b_eff = b
+        if b == 0.0 or b == float("inf"):
+            actual_max = self._max_experiment_minutes()
+            if actual_max is not None:
+                b_eff = actual_max
+        return f"_{_fmt_min(a)}_{_fmt_min(b_eff)}"
+
     @property
     def analysis_dir(self) -> Path | None:
-        """Return ``project_dir/analysis``, or ``None`` if no ``project_dir`` is set."""
+        """Return ``project_dir/analysis[_start_end]``, or ``None`` if no ``project_dir`` is set."""
         if self.project_dir is None:
             return None
-        return self.project_dir / "analysis"
+        return self.project_dir / f"analysis{self._range_suffix()}"
 
     @property
     def qc_dir(self) -> Path | None:
-        """Return ``project_dir/qc``, or ``None`` if no ``project_dir`` is set."""
+        """Return ``project_dir/qc[_start_end]``, or ``None`` if no ``project_dir`` is set."""
         if self.project_dir is None:
             return None
-        return self.project_dir / "qc"
+        return self.project_dir / f"qc{self._range_suffix()}"
 
     def _auto_save_fig(self, fig: Any, default_name: str) -> None:
         """Save fig to analysis_dir/default_name when project_dir is set."""
@@ -203,6 +216,18 @@ class Experiment:
         out = Path(out_dir).expanduser().resolve()
         out.mkdir(parents=True, exist_ok=True)
 
+        # Subdirectories for each output type
+        dir_integrity = out / "integrity"
+        dir_data_breaks = out / "data_breaks"
+        dir_raw = out / "raw_signal"
+        dir_baselined = out / "baselined"
+        dir_cumulative = out / "cumulative_licks"
+        dir_sim = out / "simultaneous_feeding"
+        dir_bleed = out / "bleeding"
+
+        for d in (dir_integrity, dir_data_breaks, dir_raw, dir_baselined, dir_cumulative):
+            d.mkdir(parents=True, exist_ok=True)
+
         n_total = len(self.dfms)
         print(f"  Computing QC for {n_total} DFM(s)...", flush=True)
         qc = self.compute_qc_results(
@@ -217,9 +242,11 @@ class Experiment:
             print(f"  DFM {dfm_id}  ({n}/{n_total})...", flush=True)
 
             integrity = r["integrity"]
-            pd.DataFrame([integrity]).to_csv(out / f"DFM{dfm_id}_integrity_report.csv", index=False)
+            pd.DataFrame([integrity]).to_csv(
+                dir_integrity / f"DFM{dfm_id}_integrity_report.csv", index=False
+            )
             if r.get("integrity_text"):
-                (out / f"DFM{dfm_id}_integrity_report.txt").write_text(
+                (dir_integrity / f"DFM{dfm_id}_integrity_report.txt").write_text(
                     str(r["integrity_text"]), encoding="utf-8"
                 )
 
@@ -231,30 +258,36 @@ class Experiment:
                 dfm = self.dfms[dfm_id]
                 breaks = dfm.data_breaks(multiplier=float(data_breaks_multiplier))
                 if breaks is not None:
-                    breaks.to_csv(out / f"DFM{dfm_id}_data_breaks.csv", index=False)
+                    breaks.to_csv(
+                        dir_data_breaks / f"DFM{dfm_id}_data_breaks.csv", index=False
+                    )
 
             # Two-well only
             sim_df = r.get("simultaneous_feeding_matrix")
             if isinstance(sim_df, pd.DataFrame):
-                sim_df.to_csv(out / f"DFM{dfm_id}_simultaneous_feeding_matrix.csv")
+                dir_sim.mkdir(parents=True, exist_ok=True)
+                sim_df.to_csv(dir_sim / f"DFM{dfm_id}_simultaneous_feeding_matrix.csv")
 
             bleed = r.get("bleeding")
             if isinstance(bleed, dict) and "Matrix" in bleed and "AllData" in bleed:
-                bleed["Matrix"].to_csv(out / f"DFM{dfm_id}_bleeding_matrix.csv")
-                bleed["AllData"].to_csv(out / f"DFM{dfm_id}_bleeding_alldata.csv", header=True)
+                dir_bleed.mkdir(parents=True, exist_ok=True)
+                bleed["Matrix"].to_csv(dir_bleed / f"DFM{dfm_id}_bleeding_matrix.csv")
+                bleed["AllData"].to_csv(
+                    dir_bleed / f"DFM{dfm_id}_bleeding_alldata.csv", header=True
+                )
 
             # Signal plots
             dfm = self.dfms[dfm_id]
             fig = dfm.plot_raw()
-            fig.savefig(out / f"DFM{dfm_id}_raw.png", dpi=150, bbox_inches="tight")
+            fig.savefig(dir_raw / f"DFM{dfm_id}_raw.png", dpi=150, bbox_inches="tight")
             plt.close(fig)
 
             fig = dfm.plot_baselined(include_thresholds=True)
-            fig.savefig(out / f"DFM{dfm_id}_baselined.png", dpi=150, bbox_inches="tight")
+            fig.savefig(dir_baselined / f"DFM{dfm_id}_baselined.png", dpi=150, bbox_inches="tight")
             plt.close(fig)
 
             fig = dfm.plot_cumulative_licks(transform_licks=True)
-            fig.savefig(out / f"DFM{dfm_id}_cumulative_licks.png", dpi=150, bbox_inches="tight")
+            fig.savefig(dir_cumulative / f"DFM{dfm_id}_cumulative_licks.png", dpi=150, bbox_inches="tight")
             plt.close(fig)
 
         print(f"  QC complete — {n_total} DFM(s) processed.", flush=True)
@@ -1267,9 +1300,8 @@ class Experiment:
         Save the feeding summary CSV to disk and return the resolved output path.
 
         If *path* is not given, defaults to
-        ``project_dir/analysis/feeding_summary.csv`` for the full range, or
-        ``project_dir/analysis/feeding_summary_{a}_{b}.csv`` when
-        ``range_minutes=(a, b)`` is specified.
+        ``project_dir/analysis[_start_end]/feeding_summary.csv``.
+        The range is encoded in the directory name, not the filename.
         Raises ``ValueError`` if neither *path* nor ``project_dir`` is set.
         Only includes DFM chambers assigned to a treatment.
         """
@@ -1278,16 +1310,7 @@ class Experiment:
                 raise ValueError(
                     "path must be provided when no project_dir is set on the Experiment."
                 )
-            a, b = float(range_minutes[0]), float(range_minutes[1])
-            if a == 0.0 and b == 0.0:
-                stem = "feeding_summary"
-            else:
-                actual_max = self._max_experiment_minutes()
-                b_name = b
-                if actual_max is not None and (b == float("inf") or b > actual_max):
-                    b_name = actual_max
-                stem = f"feeding_summary_{_fmt_min(a)}_{_fmt_min(b_name)}"
-            path = self.analysis_dir / f"{stem}.csv"
+            path = self.analysis_dir / "feeding_summary.csv"
         out = Path(path).expanduser().resolve()
         out.parent.mkdir(parents=True, exist_ok=True)
         df = self.feeding_summary(range_minutes=range_minutes, transform_licks=transform_licks)
@@ -1334,8 +1357,22 @@ class Experiment:
         ranges = [(edges[i], edges[i + 1]) for i in range(len(edges) - 1)]
 
         paths: list[Path] = []
-        for rng in ranges:
-            paths.append(self.write_feeding_summary(range_minutes=rng, transform_licks=transform_licks))
+        if self.analysis_dir is None:
+            raise ValueError("project_dir must be set to write parsed feeding summaries.")
+        for a, b in ranges:
+            b_eff = b
+            if b == float("inf"):
+                actual_max = self._max_experiment_minutes()
+                if actual_max is not None:
+                    b_eff = actual_max
+            fname = f"feeding_summary_{_fmt_min(a)}_{_fmt_min(b_eff)}.csv"
+            paths.append(
+                self.write_feeding_summary(
+                    path=self.analysis_dir / fname,
+                    range_minutes=(a, b),
+                    transform_licks=transform_licks,
+                )
+            )
         return paths
 
     def write_summary(

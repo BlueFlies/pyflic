@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re as _re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Literal, Mapping, Sequence
@@ -313,6 +314,51 @@ def load_experiment_yaml(
             **{str(k): str(v) for k, v in dfm_well_names_node.items()},
         }
         dfm_specs.append((dfm_id, params, chamber_assignments, well_names, chamber_factor_levels))
+
+    # ── Cross-check config DFMs vs. data directory ──────────────────────
+    config_ids = {s[0] for s in dfm_specs}
+
+    # Discover DFM IDs present on disk (v3: DFM{id}_*.csv, v2: DFM_{id}[_*].csv)
+    data_ids: set[int] = set()
+    if data_dir.is_dir():
+        for f in data_dir.iterdir():
+            if not f.suffix.lower() == ".csv":
+                continue
+            name = f.name
+            # v3: DFM{id}_...
+            m = _re.match(r"DFM(\d+)_", name)
+            if m:
+                data_ids.add(int(m.group(1)))
+                continue
+            # v2: DFM_{id}.csv or DFM_{id}_*.csv
+            m = _re.match(r"DFM_(\d+)(?:_|\.)", name)
+            if m:
+                data_ids.add(int(m.group(1)))
+
+    config_only = sorted(config_ids - data_ids)
+    data_only = sorted(data_ids - config_ids)
+    if config_only:
+        import warnings
+        warnings.warn(
+            f"DFM(s) in config but missing from data/: {config_only} — skipping these.",
+            stacklevel=1,
+        )
+        print(f"  WARNING: DFM(s) in config but not in data/: {config_only}", flush=True)
+    if data_only:
+        import warnings
+        warnings.warn(
+            f"DFM data file(s) in data/ but not in config: {data_only} — ignoring these.",
+            stacklevel=1,
+        )
+        print(f"  WARNING: DFM(s) in data/ but not in config: {data_only}", flush=True)
+
+    # Only load DFMs that are in both config and data.
+    dfm_specs = [s for s in dfm_specs if s[0] in data_ids]
+    if not dfm_specs:
+        raise ValueError(
+            "No DFMs to load: none of the configured DFM IDs have matching data files "
+            f"in {data_dir}.  Config IDs: {sorted(config_ids)}, data IDs: {sorted(data_ids)}."
+        )
 
     n_total = len(dfm_specs)
     dfm_ids_str = ", ".join(str(s[0]) for s in dfm_specs)

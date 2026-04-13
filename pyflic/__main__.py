@@ -8,6 +8,7 @@ def main() -> None:
         "Available commands:\n"
         "  pyflic-config   Launch the experiment config editor GUI\n"
         "  pyflic-qc       Launch the QC viewer  (usage: pyflic-qc <project_dir>)\n"
+        "  pyflic-hub      Launch the analysis hub GUI (workflows + helpers)\n"
         "\n"
         "Python API:\n"
         "  from pyflic import load_experiment_yaml, Experiment\n"

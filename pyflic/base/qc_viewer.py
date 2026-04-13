@@ -148,6 +148,14 @@ class DfmTab(QtWidgets.QWidget):
         super().__init__(parent)
         self._build(dfm_id, qc_dir)
 
+    @staticmethod
+    def _resolve(qc_dir: Path, subdir: str, filename: str) -> Path:
+        """Look for a file in *qc_dir/subdir/filename* first, then fall back to *qc_dir/filename*."""
+        p = qc_dir / subdir / filename
+        if p.exists():
+            return p
+        return qc_dir / filename
+
     def _build(self, dfm_id: int, qc_dir: Path) -> None:
         outer = QtWidgets.QVBoxLayout(self)
         outer.setContentsMargins(4, 4, 4, 4)
@@ -156,11 +164,9 @@ class DfmTab(QtWidgets.QWidget):
         outer.addWidget(self._tabs)
         tabs = self._tabs  # local alias for the rest of _build
 
-        prefix = qc_dir / f"DFM{dfm_id}"
-
         # ── Integrity ──────────────────────────────────────────────────────
-        integ_csv = Path(f"{prefix}_integrity_report.csv")
-        integ_txt = Path(f"{prefix}_integrity_report.txt")
+        integ_csv = self._resolve(qc_dir, "integrity", f"DFM{dfm_id}_integrity_report.csv")
+        integ_txt = self._resolve(qc_dir, "integrity", f"DFM{dfm_id}_integrity_report.txt")
 
         integ_widget = QtWidgets.QWidget()
         integ_outer = QtWidgets.QVBoxLayout(integ_widget)
@@ -204,7 +210,7 @@ class DfmTab(QtWidgets.QWidget):
         # ── Simultaneous Feeding + Bleeding (two-well only) ────────────────
         # The sim-feeding CSV is only written for two-well DFMs, so its
         # presence is used as the chamber_size=2 indicator.
-        sim_path = Path(f"{prefix}_simultaneous_feeding_matrix.csv")
+        sim_path = self._resolve(qc_dir, "simultaneous_feeding", f"DFM{dfm_id}_simultaneous_feeding_matrix.csv")
         if sim_path.exists():
             sim_widget = QtWidgets.QWidget()
             sim_layout = QtWidgets.QVBoxLayout(sim_widget)
@@ -217,8 +223,8 @@ class DfmTab(QtWidgets.QWidget):
             sim_layout.addStretch()
             tabs.addTab(sim_widget, "Sim. Feeding")
 
-            bleed_mat_path = Path(f"{prefix}_bleeding_matrix.csv")
-            bleed_all_path = Path(f"{prefix}_bleeding_alldata.csv")
+            bleed_mat_path = self._resolve(qc_dir, "bleeding", f"DFM{dfm_id}_bleeding_matrix.csv")
+            bleed_all_path = self._resolve(qc_dir, "bleeding", f"DFM{dfm_id}_bleeding_alldata.csv")
             bleed_widget = QtWidgets.QWidget()
             bleed_layout = QtWidgets.QVBoxLayout(bleed_widget)
             bleed_layout.setContentsMargins(8, 8, 8, 8)
@@ -245,12 +251,12 @@ class DfmTab(QtWidgets.QWidget):
             tabs.addTab(bleed_widget, "Bleeding")
 
         # ── Signal plots (always shown; message if file absent) ────────────
-        for label, suffix in [
-            ("Raw Signal",       "_raw.png"),
-            ("Baselined",        "_baselined.png"),
-            ("Cumulative Licks", "_cumulative_licks.png"),
+        for label, subdir, suffix in [
+            ("Raw Signal",       "raw_signal",       f"DFM{dfm_id}_raw.png"),
+            ("Baselined",        "baselined",        f"DFM{dfm_id}_baselined.png"),
+            ("Cumulative Licks", "cumulative_licks",  f"DFM{dfm_id}_cumulative_licks.png"),
         ]:
-            tabs.addTab(_png_widget(Path(f"{prefix}{suffix}")), label)
+            tabs.addTab(_png_widget(self._resolve(qc_dir, subdir, suffix)), label)
 
 
 # ───────────────────────────────────────────────────────────────────────────
@@ -259,12 +265,13 @@ class DfmTab(QtWidgets.QWidget):
 
 class MainWindow(QtWidgets.QMainWindow):
 
-    def __init__(self, project_dir: Path) -> None:
+    def __init__(self, project_dir: Path, qc_dir: Path | None = None) -> None:
         super().__init__()
-        self.setWindowTitle(f"FLIC QC Viewer  —  {project_dir}")
         self.resize(1280, 860)
 
-        qc_dir = project_dir / "qc"
+        if qc_dir is None:
+            qc_dir = project_dir / "qc"
+        self.setWindowTitle(f"FLIC QC Viewer  —  {qc_dir}")
 
         central = QtWidgets.QWidget()
         self.setCentralWidget(central)
@@ -288,11 +295,12 @@ class MainWindow(QtWidgets.QMainWindow):
             self._dfm_tabs.addTab(err, "Error")
             return
 
-        # Discover DFM IDs from filenames like DFM{id}_*.
+        # Discover DFM IDs from filenames like DFM{id}_* in qc_dir and its
+        # subdirectories (integrity/, raw_signal/, etc.).
         dfm_ids = sorted({
             int(m.group(1))
-            for f in qc_dir.iterdir()
-            if (m := re.match(r"DFM(\d+)_", f.name))
+            for f in qc_dir.rglob("DFM*_*")
+            if f.is_file() and (m := re.match(r"DFM(\d+)_", f.name))
         })
 
         if not dfm_ids:
@@ -336,19 +344,23 @@ class MainWindow(QtWidgets.QMainWindow):
 # ───────────────────────────────────────────────────────────────────────────
 
 def main() -> None:
-    if len(sys.argv) > 2:
-        print("Usage: pyflic-qc [project_dir]", file=sys.stderr)
+    if len(sys.argv) > 3:
+        print("Usage: pyflic-qc [project_dir] [qc_dir]", file=sys.stderr)
         sys.exit(1)
 
-    project_dir = Path(sys.argv[1] if len(sys.argv) == 2 else ".").expanduser().resolve()
+    project_dir = Path(sys.argv[1] if len(sys.argv) >= 2 else ".").expanduser().resolve()
     if not project_dir.is_dir():
         print(f"Error: not a directory: {project_dir}", file=sys.stderr)
         sys.exit(1)
 
+    qc_dir: Path | None = None
+    if len(sys.argv) >= 3:
+        qc_dir = Path(sys.argv[2]).expanduser().resolve()
+
     app = QtWidgets.QApplication(sys.argv)
     app.setApplicationName("FLIC QC Viewer")
 
-    win = MainWindow(project_dir)
+    win = MainWindow(project_dir, qc_dir=qc_dir)
     win.show()
     sys.exit(app.exec())
 

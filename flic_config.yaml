@@ -1,26 +1,5 @@
 global:
-  # experiment_type determines which Experiment subclass is instantiated when
-  # load_experiment_yaml() (or Experiment.load()) reads this file.
-  #
-  # Allowed values:
-  #   hedonic          — HedonicFeedingExperiment  (two-well; adds filter_flies,
-  #                      hedonic_feeding_plot, weighted_duration_summary)
-  #   progressive_ratio — ProgressiveRatioExperiment (two-well; progressive-ratio
-  #                      specific analysis methods)
-  #   two_well         — TwoWellExperiment  (two-well standard choice experiment)
-  #   single_well      — SingleWellExperiment  (single-well, 12 independent wells)
-  #
-  # If omitted the class is chosen automatically from chamber_size:
-  #   chamber_size: 1  →  SingleWellExperiment
-  #   chamber_size: 2  →  TwoWellExperiment
-  experiment_type: hedonic
-
-  constants:
-    min_transform_licks_cutoff: 0.00001
-    max_med_duration_cutoff: 13
-    max_events_cutoff: 150000
   params:
-    # Full parameter list with two-well defaults (Parameters.two_well()).
     baseline_window_minutes: 3
     feeding_threshold: 10
     feeding_minimum: 10
@@ -29,95 +8,103 @@ global:
     feeding_minevents: 1
     tasting_minevents: 1
     samples_per_second: 5
-    feeding_event_link_gap: 5  # samples; at 5 Hz, 5 samples = 1 second
-    chamber_size: 2  
-    correct_for_dual_feeding: false
+    feeding_event_link_gap: 5
     pi_direction: left
-  experimental_design_factors:
-    paired: [Paired, Unpaired]
-    genotype: [Chrim, WCS]
+    correct_for_dual_feeding: false
+    chamber_size: 2
+  experiment_type: two_well
   well_names:
     A: Sucrose
     B: Yeast
-
+  constants:
+    min_transform_licks_cutoff: 1.0e-05
+    max_med_duration_cutoff: 13.0
+    max_events_cutoff: 150000.0
+  experimental_design_factors:
+    paired:
+    - Paired
+    - Unpaired
+    genotype:
+    - Chrim
+    - WCS
 dfms:
-  1:
-    params:      
-      pi_direction: left    
-    chambers:
-      1: Paired,WCS 
-      2: Unpaired,WCS
-      3: Paired,Chrim
-      4: Unpaired,Chrim
-      5: Paired,Chrim
-      6: Unpaired,Chrim
-  2:
-    params:      
-      pi_direction: left
-    chambers:
-      1: Unpaired,WCS
-      2: Paired,WCS
-      3: Unpaired,Chrim
-      4: Paired,Chrim
-      5: Unpaired,Chrim
-      6: Paired,Chrim
-  3:
-    params:      
-      pi_direction: right
-    chambers:
-      1: Paired,WCS
-      2: Unpaired,WCS
-      3: Paired,Chrim
-      4: Unpaired,Chrim
-      5: Paired,Chrim
-      6: Unpaired,Chrim
-  4:
-    params:      
-      pi_direction: right
-    chambers:
-      1: Unpaired,WCS
-      2: Paired,WCS
-      3: Unpaired,Chrim
-      4: Paired,Chrim
-      5: Unpaired,Chrim
-      6: Paired,Chrim
-  5 :
-    params:      
-      pi_direction: left
-    chambers:
-      1: Paired,Chrim
-      2: Unpaired,Chrim
-      3: Paired,WCS
-      4: Unpaired,WCS
-      5: Paired,WCS
-      6: Unpaired,WCS
-  6:
-    params:      
-      pi_direction: left
-    chambers:
-      1: Unpaired,Chrim
-      2: Paired,Chrim
-      3: Unpaired,WCS
-      4: Paired,WCS
-      5: Unpaired,WCS
-      6: Paired,WCS
-  7:
-    params:      
-      pi_direction: right
-    chambers:
-      1: Paired,Chrim
-      2: Unpaired,Chrim
-      3: Paired,WCS
-      4: Unpaired,WCS
-      5: Paired,WCS
-      6: Unpaired,WCS
-  8:
-    params:      
-      pi_direction: right
-    chambers:
-      1: Unpaired,Chrim
-      2: Paired,Chrim
-      3: Unpaired,WCS
-      4: Paired,WCS
-      5: Unpaired,WCS
-      6: Paired,WCS
+- id: 1
+  params:
+    pi_direction: left
+  chambers:
+    1: Paired, WCS
+    2: Unpaired, WCS
+    3: Paired, Chrim
+    4: Unpaired, Chrim
+    5: Paired, Chrim
+    6: Unpaired, Chrim
+- id: 2
+  params:
+    pi_direction: left
+  chambers:
+    1: Unpaired, WCS
+    2: Paired, WCS
+    3: Unpaired, Chrim
+    4: Paired, Chrim
+    5: Unpaired, Chrim
+    6: Paired, Chrim
+- id: 3
+  params:
+    pi_direction: right
+  chambers:
+    1: Paired, WCS
+    2: Unpaired, WCS
+    3: Paired, Chrim
+    4: Unpaired, Chrim
+    5: Paired, Chrim
+    6: Unpaired, Chrim
+- id: 4
+  params:
+    pi_direction: right
+  chambers:
+    1: Unpaired, WCS
+    2: Paired, WCS
+    3: Unpaired, Chrim
+    4: Paired, Chrim
+    5: Unpaired, Chrim
+    6: Paired, Chrim
+- id: 5
+  params:
+    pi_direction: left
+  chambers:
+    1: Paired, Chrim
+    2: Unpaired, Chrim
+    3: Paired, WCS
+    4: Unpaired, WCS
+    5: Paired, WCS
+    6: Unpaired, WCS
+- id: 6
+  params:
+    pi_direction: left
+  chambers:
+    1: Unpaired, Chrim
+    2: Paired, Chrim
+    3: Unpaired, WCS
+    4: Paired, WCS
+    5: Unpaired, WCS
+    6: Paired, WCS
+- id: 7
+  params:
+    pi_direction: right
+  chambers:
+    1: Paired, Chrim
+    2: Unpaired, Chrim
+    3: Paired, WCS
+    4: Unpaired, WCS
+    5: Paired, WCS
+    6: Unpaired, WCS
+- id: 8
+  params:
+    pi_direction: right
+  chambers:
+    1: Unpaired, Chrim
+    2: Paired, Chrim
+    3: Unpaired, WCS
+    4: Paired, WCS
+    5: Unpaired, WCS
+    6: Paired, WCS
