@@ -87,7 +87,7 @@ Hard limits used during data validation. Chambers that exceed these thresholds a
 
 | Key | Default | Description |
 |---|---|---|
-| `min_untransformed_licks_cutoff` | *(unset)* | Minimum non-transformed lick count; chambers where at least one well is below this are excluded by `auto_filter_flies()` |
+| `min_untransformed_licks_cutoff` | *(unset)* | Minimum non-transformed lick count; chambers where at least one well is below this are excluded by `auto_remove_chambers()` |
 | `max_med_duration_cutoff` | `13` | Maximum median bout duration (seconds); chambers above are flagged |
 | `max_events_cutoff` | `150000` | Maximum number of raw events; chambers above are flagged |
 

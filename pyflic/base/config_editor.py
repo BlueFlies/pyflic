@@ -735,8 +735,8 @@ class FLICConfigEditor(QMainWindow):
         self._well_b_row = self._exp_form.rowCount()
         self._exp_form.addRow("Well B:", self._well_b_edit)
 
-        # Auto-filter thresholds (used by auto_filter_flies)
-        filter_header = QLabel("Auto-filter Thresholds  (used by auto_filter_flies)")
+        # Auto-filter thresholds (used by auto_remove_chambers)
+        filter_header = QLabel("Auto-filter Thresholds  (used by auto_remove_chambers)")
         filter_header.setStyleSheet("color: gray; font-size: 11px; margin-top: 4px;")
         self._filter_header_row = self._exp_form.rowCount()
         self._exp_form.addRow(filter_header)

@@ -11,12 +11,11 @@ import shutil
 import subprocess
 import sys
 import traceback
-from io import StringIO
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any, Callable
 
 import yaml
-from PyQt6.QtCore import QObject, QThread, Qt, pyqtSignal
+from PyQt6.QtCore import QObject, QThread, pyqtSignal
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -32,7 +31,6 @@ from PyQt6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QSpinBox,
-    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -107,6 +105,24 @@ def _resolve_cli(name: str, module: str) -> list[str]:
     return [sys.executable, "-m", module]
 
 
+def _print_excluded_chambers(removed) -> None:
+    """Print a summary of chambers excluded by auto_remove_chambers()."""
+    import pandas as pd
+
+    print("Excluded chambers", flush=True)
+    print("-----------------", flush=True)
+    if removed is None or (isinstance(removed, pd.DataFrame) and removed.empty):
+        print("  (none)", flush=True)
+        return
+    for _, row in removed.iterrows():
+        print(
+            f"  DFM {int(row['DFM'])} Chamber {int(row['Chamber'])}"
+            f" ({row['Treatment']}): {row['Reason']}",
+            flush=True,
+        )
+    print(f"  Total: {len(removed)} chamber(s) excluded.", flush=True)
+
+
 class _SignalWriter:
     """File-like object that emits a Qt signal on each line written."""
 
@@ -160,7 +176,7 @@ class AnalysisHubWindow(QMainWindow):
     def __init__(self, project_dir: str | Path | None = None) -> None:
         super().__init__()
         self.setWindowTitle("pyflic — Analysis Hub")
-        self.resize(920, 720)
+        self.resize(1350, 860)
         self._initial_dir = Path(project_dir).expanduser().resolve() if project_dir else None
 
         self._thread: QThread | None = None
@@ -168,12 +184,13 @@ class AnalysisHubWindow(QMainWindow):
         self._busy = False
         self._cached_exp: Any = None
         self._cached_exp_key: tuple | None = None
+        self._analysis_buttons: list[QPushButton] = []
 
         root = QWidget()
         self.setCentralWidget(root)
         outer = QVBoxLayout(root)
 
-        # Project row
+        # ── Project directory row ────────────────────────────────────────
         proj_row = QHBoxLayout()
         proj_row.addWidget(QLabel("Project directory:"))
         self._path_edit = QLineEdit()
@@ -184,13 +201,15 @@ class AnalysisHubWindow(QMainWindow):
         proj_row.addWidget(browse)
         outer.addLayout(proj_row)
 
+        # ── Status label ─────────────────────────────────────────────────
         self._status = QLabel("No project loaded.")
         self._status.setWordWrap(True)
         outer.addWidget(self._status)
 
-        # Options
+        # ── Load options ─────────────────────────────────────────────────
         opt_box = QGroupBox("Load options")
         opt_form = QFormLayout(opt_box)
+
         self._spin_start = QDoubleSpinBox()
         self._spin_start.setRange(0, 1_000_000)
         self._spin_start.setSpecialValueText("0")
@@ -206,35 +225,32 @@ class AnalysisHubWindow(QMainWindow):
         self._chk_parallel = QCheckBox("Load DFMs in parallel")
         self._chk_parallel.setChecked(True)
         opt_form.addRow(self._chk_parallel)
+
+        self._spin_binsize = QSpinBox()
+        self._spin_binsize.setRange(1, 10_000)
+        self._spin_binsize.setValue(30)
+        opt_form.addRow("Bin size (minutes):", self._spin_binsize)
+
         outer.addWidget(opt_box)
 
-        # Toolbar actions
-        tool = QHBoxLayout()
-        self._btn_config = QPushButton("Edit config (pyflic-config)…")
-        self._btn_config.clicked.connect(self._launch_config_editor)
-        tool.addWidget(self._btn_config)
+        # ── Three action group boxes (side by side) ───────────────────────
+        self._grp_load = QGroupBox("Load")
+        QVBoxLayout(self._grp_load)
+        self._build_grp_load()
 
-        self._btn_qc = QPushButton("QC viewer (pyflic-qc)…")
-        self._btn_qc.clicked.connect(self._launch_qc_viewer)
-        tool.addWidget(self._btn_qc)
+        self._grp_analyze = QGroupBox("Analyze")
+        QVBoxLayout(self._grp_analyze)
 
-        self._btn_refresh = QPushButton("Refresh project info")
-        self._btn_refresh.clicked.connect(self._refresh_meta)
-        tool.addWidget(self._btn_refresh)
+        self._grp_plots = QGroupBox("Plots")
+        QVBoxLayout(self._grp_plots)
 
-        tool.addStretch()
-        outer.addLayout(tool)
+        mid = QHBoxLayout()
+        mid.addWidget(self._grp_load, stretch=1)
+        mid.addWidget(self._grp_analyze, stretch=2)
+        mid.addWidget(self._grp_plots, stretch=2)
+        outer.addLayout(mid)
 
-        # Tabs — built once; conditional tabs are added/removed in _refresh_meta
-        self._tabs = QTabWidget()
-        self._tab_overview = self._build_tab_overview()
-        self._tab_grouped = self._build_tab_grouped()
-        self._tab_two_well = self._build_tab_two_well()
-        self._tab_hedonic = self._build_tab_hedonic()
-        self._tab_pr = self._build_tab_pr()
-        outer.addWidget(self._tabs, stretch=1)
-
-        # Log
+        # ── Output log ───────────────────────────────────────────────────
         outer.addWidget(QLabel("Output"))
         self._log = QPlainTextEdit()
         self._log.setReadOnly(True)
@@ -247,33 +263,43 @@ class AnalysisHubWindow(QMainWindow):
         self._path_edit.setText(str(start_dir))
         self._refresh_meta()
 
-        self._analysis_buttons: list[QPushButton] = []
-        for w in self.findChildren(QPushButton):
-            t = w.text()
-            if t.startswith("Browse") or t in (
-                "Edit config (pyflic-config)…",
-                "QC viewer (pyflic-qc)…",
-                "Refresh project info",
-            ):
-                continue
-            self._analysis_buttons.append(w)
+    # ------------------------------------------------------------------
+    # Load group box (static)
+    # ------------------------------------------------------------------
 
-    def _append_log(self, text: str) -> None:
-        self._log.appendPlainText(text.rstrip())
+    def _build_grp_load(self) -> None:
+        lay = self._grp_load.layout()
 
-    def _range_minutes(self) -> tuple[float, float]:
-        a = float(self._spin_start.value())
-        b = float(self._spin_end.value())
-        return a, b
+        btn_load = QPushButton("Load experiment")
+        btn_load.clicked.connect(self._action_load_experiment)
+        lay.addWidget(btn_load)
+        self._analysis_buttons.append(btn_load)
 
-    def _project_dir(self) -> Path:
-        return Path(self._path_edit.text().strip()).expanduser().resolve()
+        self._btn_config = QPushButton("Edit config (pyflic-config)…")
+        self._btn_config.clicked.connect(self._launch_config_editor)
+        lay.addWidget(self._btn_config)
 
-    def _browse_project(self) -> None:
-        d = QFileDialog.getExistingDirectory(self, "Select project directory", str(self._project_dir()))
-        if d:
-            self._path_edit.setText(d)
-            self._refresh_meta()
+        self._btn_qc = QPushButton("QC viewer (pyflic-qc)…")
+        self._btn_qc.clicked.connect(self._launch_qc_viewer)
+        lay.addWidget(self._btn_qc)
+
+        lay.addStretch()
+
+    # ------------------------------------------------------------------
+    # Dynamic group box rebuilding (Analyze / Plots)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _clear_layout(lay) -> None:
+        """Recursively remove all items from a layout."""
+        while lay.count():
+            item = lay.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+            sub = item.layout()
+            if sub is not None:
+                AnalysisHubWindow._clear_layout(sub)
 
     def _refresh_meta(self) -> None:
         self._invalidate_exp_cache()
@@ -281,7 +307,7 @@ class AnalysisHubWindow(QMainWindow):
         meta = read_project_meta(p)
         if not meta.get("ok"):
             self._status.setText(meta.get("error", "Invalid project."))
-            self._rebuild_tabs(None, None)
+            self._rebuild_dynamic_groups(None, None)
             return
         et = meta.get("experiment_type")
         inf = meta.get("inferred_type")
@@ -298,34 +324,90 @@ class AnalysisHubWindow(QMainWindow):
         data_ok = (p / "data").is_dir()
         parts.append("data/: " + ("found" if data_ok else "<span style='color:#a50'>missing</span>"))
         self._status.setText(" — ".join(parts))
-        self._rebuild_tabs(et or inf, cs)
+        self._rebuild_dynamic_groups(et or inf, cs)
 
-    def _rebuild_tabs(self, exp_type: str | None, chamber_size: int | None) -> None:
-        """Show only the analysis tabs appropriate for the experiment type."""
-        prev = self._tabs.currentWidget()
-        self._tabs.clear()
+    def _rebuild_dynamic_groups(self, exp_type: str | None, chamber_size: int | None) -> None:
+        # Preserve the Load-group button in _analysis_buttons; clear the rest.
+        load_btns = [b for b in self._analysis_buttons if b.parent() is self._grp_load]
+        self._analysis_buttons.clear()
+        self._analysis_buttons.extend(load_btns)
+        self._rebuild_grp_analyze(exp_type, chamber_size)
+        self._rebuild_grp_plots(exp_type, chamber_size)
 
-        # Always shown
-        self._tabs.addTab(self._tab_overview, "Overview & QC")
-        self._tabs.addTab(self._tab_grouped, "Grouped summaries")
+    def _rebuild_grp_analyze(self, exp_type: str | None, chamber_size: int | None) -> None:
+        lay = self._grp_analyze.layout()
+        self._clear_layout(lay)
 
-        # Two-well tab: shown when chamber_size is 2 or experiment type implies it
-        two_well_types = {"two_well", "hedonic"}
-        if chamber_size == 2 or exp_type in two_well_types:
-            self._tabs.addTab(self._tab_two_well, "Two-well / choice")
+        b = QPushButton("Run full basic analysis")
+        b.clicked.connect(self._action_basic_full)
+        lay.addWidget(b)
+        self._analysis_buttons.append(b)
 
-        # Hedonic tab
+        b = QPushButton("Write feeding summary CSV")
+        b.clicked.connect(self._action_write_feeding_csv)
+        lay.addWidget(b)
+        self._analysis_buttons.append(b)
+
+        b = QPushButton("Write binned feeding summary CSV")
+        b.clicked.connect(self._action_binned_csv)
+        lay.addWidget(b)
+        self._analysis_buttons.append(b)
+
         if exp_type == "hedonic":
-            self._tabs.addTab(self._tab_hedonic, "Hedonic")
+            b = QPushButton("Write weighted duration summary")
+            b.clicked.connect(self._action_weighted_duration)
+            lay.addWidget(b)
+            self._analysis_buttons.append(b)
 
-        # Progressive ratio tab
+        lay.addStretch()
+
+    def _rebuild_grp_plots(self, exp_type: str | None, chamber_size: int | None) -> None:
+        lay = self._grp_plots.layout()
+        self._clear_layout(lay)
+
+        b = QPushButton("Write feeding summary plot")
+        b.clicked.connect(self._action_feeding_plot)
+        lay.addWidget(b)
+        self._analysis_buttons.append(b)
+
+        b = QPushButton("Plot binned licks by treatment (mean ± SEM)")
+        b.clicked.connect(self._action_binned_plot)
+        lay.addWidget(b)
+        self._analysis_buttons.append(b)
+
+        two_well_types = {"two_well", "hedonic", "progressive_ratio"}
+        if chamber_size == 2 or exp_type in two_well_types:
+            b = QPushButton("Save facet well-duration plot")
+            b.clicked.connect(self._action_facet_durations)
+            lay.addWidget(b)
+            self._analysis_buttons.append(b)
+
+        if exp_type == "hedonic":
+            b = QPushButton("Save hedonic feeding plot")
+            b.clicked.connect(self._action_hedonic_plot)
+            lay.addWidget(b)
+            self._analysis_buttons.append(b)
+
         if exp_type == "progressive_ratio":
-            self._tabs.addTab(self._tab_pr, "Progressive ratio")
+            pr_row = QHBoxLayout()
+            pr_row.addWidget(QLabel("BP config:"))
+            self._spin_pr_cfg = QSpinBox()
+            self._spin_pr_cfg.setRange(1, 4)
+            self._spin_pr_cfg.setValue(1)
+            pr_row.addWidget(self._spin_pr_cfg)
+            pr_row.addStretch()
+            lay.addLayout(pr_row)
 
-        # Restore previous tab selection if it's still visible
-        idx = self._tabs.indexOf(prev)
-        if idx >= 0:
-            self._tabs.setCurrentIndex(idx)
+            b = QPushButton("Save breaking-point plots (plotnine, all DFMs)")
+            b.clicked.connect(self._action_pr_plots)
+            lay.addWidget(b)
+            self._analysis_buttons.append(b)
+
+        lay.addStretch()
+
+    # ------------------------------------------------------------------
+    # Busy / worker helpers
+    # ------------------------------------------------------------------
 
     def _set_busy(self, busy: bool) -> None:
         self._busy = busy
@@ -333,7 +415,6 @@ class AnalysisHubWindow(QMainWindow):
             w.setEnabled(not busy)
 
     def _clear_worker_refs(self) -> None:
-        """Reset references so we don't touch deleted C++ objects on the next run."""
         self._thread = None
         self._worker = None
 
@@ -367,6 +448,27 @@ class AnalysisHubWindow(QMainWindow):
     def _on_failed(self, msg: str) -> None:
         self._append_log(msg)
         QMessageBox.critical(self, "Analysis error", msg[:1200])
+
+    def _append_log(self, text: str) -> None:
+        self._log.appendPlainText(text.rstrip())
+        sb = self._log.verticalScrollBar()
+        sb.setValue(sb.maximum())
+
+    # ------------------------------------------------------------------
+    # Project / experiment helpers
+    # ------------------------------------------------------------------
+
+    def _range_minutes(self) -> tuple[float, float]:
+        return float(self._spin_start.value()), float(self._spin_end.value())
+
+    def _project_dir(self) -> Path:
+        return Path(self._path_edit.text().strip()).expanduser().resolve()
+
+    def _browse_project(self) -> None:
+        d = QFileDialog.getExistingDirectory(self, "Select project directory", str(self._project_dir()))
+        if d:
+            self._path_edit.setText(d)
+            self._refresh_meta()
 
     def _exp_cache_key(self) -> tuple:
         return (str(self._project_dir()), self._range_minutes(), self._chk_parallel.isChecked())
@@ -404,7 +506,6 @@ class AnalysisHubWindow(QMainWindow):
             QMessageBox.critical(self, "Could not start", str(e))
 
     def _qc_dir_for_range(self) -> Path:
-        """Return the range-specific qc directory, falling back to plain qc/."""
         p = self._project_dir()
         a, b = self._range_minutes()
         if a == 0.0 and b == 0.0:
@@ -427,141 +528,17 @@ class AnalysisHubWindow(QMainWindow):
         except OSError as e:
             QMessageBox.critical(self, "Could not start", str(e))
 
-    # --- tabs ---
+    # ------------------------------------------------------------------
+    # Actions
+    # ------------------------------------------------------------------
 
-    def _build_tab_overview(self) -> QWidget:
-        w = QWidget()
-        lay = QVBoxLayout(w)
-        intro = QLabel(
-            "Load experiment summary text, write QC reports only, or run the full basic analysis "
-            "(QC → summary → feeding CSV → feeding plot). Matches <code>execute_basic_analysis()</code>."
-        )
-        intro.setWordWrap(True)
-        intro.setTextFormat(Qt.TextFormat.RichText)
-        lay.addWidget(intro)
-
-        b1 = QPushButton("Print experiment summary to log")
-        b1.clicked.connect(self._action_summary_text)
-        lay.addWidget(b1)
-
-        b2 = QPushButton("Write QC reports only (no summary/plots)")
-        b2.clicked.connect(self._action_qc_only)
-        lay.addWidget(b2)
-
-        b3 = QPushButton("Run full basic analysis")
-        b3.clicked.connect(self._action_basic_full)
-        lay.addWidget(b3)
-        lay.addStretch()
-        return w
-
-    def _build_tab_grouped(self) -> QWidget:
-        w = QWidget()
-        lay = QVBoxLayout(w)
-        lay.addWidget(
-            QLabel(
-                "Feeding summaries and binned time courses. "
-                "Bin size applies to binned CSV and binned licks plot."
-            )
-        )
-        row = QHBoxLayout()
-        row.addWidget(QLabel("Bin size (minutes):"))
-        self._spin_binsize = QSpinBox()
-        self._spin_binsize.setRange(1, 10_000)
-        self._spin_binsize.setValue(30)
-        row.addWidget(self._spin_binsize)
-        row.addStretch()
-        lay.addLayout(row)
-
-        b1 = QPushButton("Write feeding summary CSV")
-        b1.clicked.connect(self._action_write_feeding_csv)
-        lay.addWidget(b1)
-
-        b2 = QPushButton("Write feeding summary plot")
-        b2.clicked.connect(self._action_feeding_plot)
-        lay.addWidget(b2)
-
-        b3 = QPushButton("Write binned feeding summary CSV")
-        b3.clicked.connect(self._action_binned_csv)
-        lay.addWidget(b3)
-
-        b4 = QPushButton("Plot binned licks by treatment (mean ± SEM)")
-        b4.clicked.connect(self._action_binned_plot)
-        lay.addWidget(b4)
-
-        lay.addStretch()
-        return w
-
-    def _build_tab_two_well(self) -> QWidget:
-        w = QWidget()
-        lay = QVBoxLayout(w)
-        note = QLabel(
-            "For two-well experiments (<code>chamber_size: 2</code>): "
-            "facet jitter plot of well durations by treatment."
-        )
-        note.setWordWrap(True)
-        note.setTextFormat(Qt.TextFormat.RichText)
-        lay.addWidget(note)
-        b = QPushButton("Save facet well-duration plot (plotnine)")
-        b.clicked.connect(self._action_facet_durations)
-        lay.addWidget(b)
-        lay.addStretch()
-        return w
-
-    def _build_tab_hedonic(self) -> QWidget:
-        w = QWidget()
-        lay = QVBoxLayout(w)
-        note = QLabel(
-            "Requires <code>experiment_type: hedonic</code>. Runs hedonic basic analysis "
-            "(standard pipeline plus hedonic feeding plot and weighted duration summary)."
-        )
-        note.setWordWrap(True)
-        note.setTextFormat(Qt.TextFormat.RichText)
-        lay.addWidget(note)
-        b = QPushButton("Run hedonic execute_basic_analysis()")
-        b.clicked.connect(self._action_hedonic_full)
-        lay.addWidget(b)
-        lay.addStretch()
-        return w
-
-    def _build_tab_pr(self) -> QWidget:
-        w = QWidget()
-        lay = QVBoxLayout(w)
-        note = QLabel(
-            "Requires <code>experiment_type: progressive_ratio</code>. "
-            "Breaking-point schedule layout from R port (configurations 1–4)."
-        )
-        note.setWordWrap(True)
-        note.setTextFormat(Qt.TextFormat.RichText)
-        lay.addWidget(note)
-        row = QHBoxLayout()
-        row.addWidget(QLabel("Breaking-point configuration:"))
-        self._spin_pr_cfg = QSpinBox()
-        self._spin_pr_cfg.setRange(1, 4)
-        self._spin_pr_cfg.setValue(1)
-        row.addWidget(self._spin_pr_cfg)
-        row.addStretch()
-        lay.addLayout(row)
-
-        b = QPushButton("Save breaking-point plots (plotnine, all DFMs)")
-        b.clicked.connect(self._action_pr_plots)
-        lay.addWidget(b)
-        lay.addStretch()
-        return w
-
-    # --- actions ---
-
-    def _action_summary_text(self) -> None:
+    def _action_load_experiment(self) -> None:
         def task() -> None:
             exp = self._load_exp()
+            removed = exp.auto_remove_chambers()
+            _print_excluded_chambers(removed)
+            print(flush=True)
             print(exp.summary_text(), flush=True)
-
-        self._start_worker(task)
-
-    def _action_qc_only(self) -> None:
-        def task() -> None:
-            exp = self._load_exp()
-            out = exp.write_qc_reports()
-            print(f"QC written to: {out}", flush=True)
 
         self._start_worker(task)
 
@@ -586,16 +563,6 @@ class AnalysisHubWindow(QMainWindow):
 
         self._start_worker(task)
 
-    def _action_feeding_plot(self) -> None:
-        rm = self._range_minutes()
-
-        def task() -> None:
-            exp = self._load_exp()
-            p = exp.write_feeding_summary_plot(range_minutes=rm)
-            print(f"Wrote: {p}", flush=True)
-
-        self._start_worker(task)
-
     def _action_binned_csv(self) -> None:
         rm = self._range_minutes()
         bs = float(self._spin_binsize.value())
@@ -607,16 +574,40 @@ class AnalysisHubWindow(QMainWindow):
 
         self._start_worker(task)
 
+    def _action_weighted_duration(self) -> None:
+        rm = self._range_minutes()
+
+        def task() -> None:
+            from pyflic import HedonicFeedingExperiment
+
+            exp = self._load_exp()
+            if not isinstance(exp, HedonicFeedingExperiment):
+                raise TypeError(
+                    "Set experiment_type: hedonic in flic_config.yaml. "
+                    f"Got {type(exp).__name__}."
+                )
+            p = exp.weighted_duration_summary(save=True, range_minutes=rm)
+            print(f"Wrote: {p}", flush=True)
+
+        self._start_worker(task)
+
+    def _action_feeding_plot(self) -> None:
+        rm = self._range_minutes()
+
+        def task() -> None:
+            exp = self._load_exp()
+            p = exp.write_feeding_summary_plot(range_minutes=rm)
+            print(f"Wrote: {p}", flush=True)
+
+        self._start_worker(task)
+
     def _action_binned_plot(self) -> None:
         rm = self._range_minutes()
         bs = float(self._spin_binsize.value())
 
         def task() -> None:
             exp = self._load_exp()
-            fig = exp.plot_binned_licks_by_treatment(
-                binsize_min=bs,
-                range_minutes=rm,
-            )
+            fig = exp.plot_binned_licks_by_treatment(binsize_min=bs, range_minutes=rm)
             out = exp.analysis_dir / "binned_licks_by_treatment.png"
             out.parent.mkdir(parents=True, exist_ok=True)
             fig.savefig(str(out), dpi=150, bbox_inches="tight")
@@ -644,12 +635,11 @@ class AnalysisHubWindow(QMainWindow):
 
         self._start_worker(task)
 
-    def _action_hedonic_full(self) -> None:
+    def _action_hedonic_plot(self) -> None:
         rm = self._range_minutes()
 
         def task() -> None:
             from pyflic import HedonicFeedingExperiment
-            from pyflic.base.experiment import Experiment
 
             exp = self._load_exp()
             if not isinstance(exp, HedonicFeedingExperiment):
@@ -657,13 +647,8 @@ class AnalysisHubWindow(QMainWindow):
                     "Set experiment_type: hedonic in flic_config.yaml. "
                     f"Got {type(exp).__name__}."
                 )
-            Experiment.execute_basic_analysis(
-                exp,
-                range_minutes=rm,
-            )
             exp.hedonic_feeding_plot(save=True, range_minutes=rm)
-            exp.weighted_duration_summary(save=True, range_minutes=rm)
-            print("Hedonic basic analysis complete.", flush=True)
+            print("Hedonic feeding plot saved.", flush=True)
 
         self._start_worker(task)
 

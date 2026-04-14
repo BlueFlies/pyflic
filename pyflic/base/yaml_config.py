@@ -307,6 +307,17 @@ def load_experiment_yaml(
             chamber_assignments = _parse_chamber_assignments(chambers_raw)
             chamber_factor_levels = {}
 
+        # Apply excluded_chambers: remove listed indices from assignments before design build.
+        excluded_raw = node.get("excluded_chambers") or []
+        if excluded_raw:
+            excluded_set = {int(x) for x in excluded_raw}
+            chamber_assignments = {k: v for k, v in chamber_assignments.items() if k not in excluded_set}
+            chamber_factor_levels = {k: v for k, v in chamber_factor_levels.items() if k not in excluded_set}
+            print(
+                f"  DFM {dfm_id}: excluding chamber(s) {sorted(excluded_set)} (from excluded_chambers in YAML)",
+                flush=True,
+            )
+
         # well_names: DFM entry overrides global
         dfm_well_names_node = node.get("well_names") or {}
         well_names: dict[str, str] = {

@@ -43,6 +43,7 @@ class Experiment:
     qc_results: dict[int, dict[str, Any]] | None = None
     _feeding_summary_cache: dict = field(default_factory=dict)
     filtered_chambers: pd.DataFrame | None = None
+    filter_criteria_summary: str = field(default="")
 
     def get_dfm(self, dfm_id: int) -> DFM | None:
         """Return the DFM with the given id, or None if it does not exist."""
@@ -60,7 +61,7 @@ class Experiment:
             ]
         self._feeding_summary_cache.clear()
 
-    def auto_filter_flies(
+    def auto_remove_chambers(
         self,
         *,
         range_minutes: Sequence[float] = (0, 0),
@@ -80,13 +81,18 @@ class Experiment:
         - the explicit argument if provided, otherwise
         - ``global.constants.min_untransformed_licks_cutoff`` from ``flic_config.yaml``.
 
-        Filtering rule (all experiment types)
-        -------------------------------------
-        A chamber is removed if **at least one well in the chamber** has *non-transformed*
-        licks below the cutoff.
+        Filtering rules (all experiment types)
+        ---------------------------------------
+        A chamber is removed if **any** of the following apply to at least one
+        well in the chamber:
+
+        1. The lick value is ``NaN`` / ``None`` / undefined — the well produced
+           no usable data regardless of any threshold.
+        2. The lick value is below ``min_untransformed_licks_cutoff`` (when that
+           threshold is configured).
 
         - chamber_size=1: uses ``Licks``
-        - chamber_size=2: uses ``LicksA`` / ``LicksB`` (removes chamber if either is below)
+        - chamber_size=2: uses ``LicksA`` / ``LicksB`` (removes chamber if either fails)
 
         Returns
         -------
@@ -97,12 +103,14 @@ class Experiment:
         constants = self.global_constants or {}
         if min_untransformed_licks_cutoff is None:
             raw = constants.get("min_untransformed_licks_cutoff")
-            if raw is None or str(raw).strip() == "":
-                result = pd.DataFrame(columns=["DFM", "Chamber", "Treatment", "Reason"])
-                self.filtered_chambers = result
-                return result
-            min_untransformed_licks_cutoff = float(raw)
-        cutoff = float(min_untransformed_licks_cutoff)
+            if raw is not None and str(raw).strip() != "":
+                min_untransformed_licks_cutoff = float(raw)
+        # None means "no cutoff configured" — NaN licks are still caught below.
+        cutoff: float | None = (
+            float(min_untransformed_licks_cutoff)
+            if min_untransformed_licks_cutoff is not None
+            else None
+        )
 
         fs = self.feeding_summary(range_minutes=range_minutes, transform_licks=False)
         if fs.empty:
@@ -132,14 +140,20 @@ class Experiment:
             reasons: list[str] = []
             if has_single:
                 val = row.get("Licks")
-                if pd.notna(val) and float(val) < cutoff:
+                if pd.isna(val):
+                    reasons.append("Licks is NaN/undefined")
+                elif cutoff is not None and float(val) < cutoff:
                     reasons.append(f"Licks={float(val):.6g} < min_untransformed_licks_cutoff={cutoff:.6g}")
             else:
                 va = row.get("LicksA")
                 vb = row.get("LicksB")
-                if pd.notna(va) and float(va) < cutoff:
+                if pd.isna(va):
+                    reasons.append("LicksA is NaN/undefined")
+                elif cutoff is not None and float(va) < cutoff:
                     reasons.append(f"LicksA={float(va):.6g} < min_untransformed_licks_cutoff={cutoff:.6g}")
-                if pd.notna(vb) and float(vb) < cutoff:
+                if pd.isna(vb):
+                    reasons.append("LicksB is NaN/undefined")
+                elif cutoff is not None and float(vb) < cutoff:
                     reasons.append(f"LicksB={float(vb):.6g} < min_untransformed_licks_cutoff={cutoff:.6g}")
 
             if reasons:
@@ -153,7 +167,7 @@ class Experiment:
                     }
                 )
                 print(
-                    f"  [auto_filter_flies] Removing DFM {dfm_id} Chamber {chamber_idx}"
+                    f"  [auto_remove_chambers] Removing DFM {dfm_id} Chamber {chamber_idx}"
                     f" ({treatment_name}): {'; '.join(reasons)}",
                     flush=True,
                 )
@@ -163,11 +177,25 @@ class Experiment:
 
         result = pd.DataFrame(removed_rows, columns=["DFM", "Chamber", "Treatment", "Reason"])
         if result.empty:
-            print("auto_filter_flies: no chambers removed.", flush=True)
+            print("auto_remove_chambers: no chambers removed.", flush=True)
         else:
-            print(f"auto_filter_flies: done — {len(result)} chamber(s) removed.", flush=True)
+            print(f"auto_remove_chambers: done — {len(result)} chamber(s) removed.", flush=True)
 
         self.filtered_chambers = result
+
+        # Build human-readable criteria summary
+        lines = ["Lick filter (applied to all experiment types)", ""]
+        lines.append("  • Chambers with NaN/undefined lick values are always excluded.")
+        if cutoff is not None:
+            lick_col = "Licks" if has_single else "LicksA or LicksB"
+            lines.append(
+                f"  • min_untransformed_licks_cutoff = {cutoff:g}\n"
+                f"    Excluded if {lick_col} < {cutoff:g}"
+            )
+        else:
+            lines.append("  • No lick-count cutoff configured — only NaN check applied.")
+        self.filter_criteria_summary = "\n".join(lines)
+
         return result
 
     def _range_suffix(self) -> str:
@@ -486,7 +514,7 @@ class Experiment:
             buf.write("\n\n")
 
         if self.filtered_chambers is not None and not self.filtered_chambers.empty:
-            buf.write("Filtered chambers (removed by auto_filter_flies)\n")
+            buf.write("Filtered chambers (removed by auto_remove_chambers)\n")
             buf.write("----------------------------------------------\n")
             for _, row in self.filtered_chambers.iterrows():
                 buf.write(
@@ -1622,6 +1650,20 @@ class Experiment:
         print(f"  Project : {self.project_dir}", flush=True)
         print(f"  DFMs    : {sorted(self.dfms.keys())}", flush=True)
         print("=" * 50, flush=True)
+
+        print("\nExcluded chambers", flush=True)
+        print("-----------------", flush=True)
+        fc = self.filtered_chambers
+        if fc is None or fc.empty:
+            print("  (none)", flush=True)
+        else:
+            for _, row in fc.iterrows():
+                print(
+                    f"  DFM {int(row['DFM'])} Chamber {int(row['Chamber'])}"
+                    f" ({row['Treatment']}): {row['Reason']}",
+                    flush=True,
+                )
+            print(f"  Total: {len(fc)} chamber(s) excluded.", flush=True)
 
         print("\n[1/4] QC reports...", flush=True)
         qc_dir = self.write_qc_reports(

@@ -122,7 +122,7 @@ class HedonicFeedingExperiment(TwoWellExperiment):
                 "Feeding summary is empty — no data was collected. "
                 f"Design has {n_treatments} treatment(s) with {n_chambers} total chamber(s). "
                 "Check that your flic_config.yaml has valid 'chambers:' assignments under each DFM, "
-                "or that auto_filter_flies() has not removed all chambers."
+                "or that auto_remove_chambers() has not removed all chambers."
             )
 
         if col_a not in fs.columns or col_b not in fs.columns:
@@ -183,7 +183,7 @@ class HedonicFeedingExperiment(TwoWellExperiment):
 
 
     
-    def auto_filter_flies(
+    def auto_remove_chambers(
         self,
         *,
         range_minutes: Sequence[float] = (0, 0),
@@ -219,7 +219,7 @@ class HedonicFeedingExperiment(TwoWellExperiment):
             ``DFM``, ``Chamber``, ``Treatment``, and ``Reason``.
         """
         # First apply the general (all-experiment) lick-based filter.
-        base = Experiment.auto_filter_flies(
+        base = Experiment.auto_remove_chambers(
             self,
             range_minutes=range_minutes,
             min_untransformed_licks_cutoff=min_untransformed_licks_cutoff,
@@ -276,7 +276,7 @@ class HedonicFeedingExperiment(TwoWellExperiment):
                         }
                     )
                     print(
-                        f"  [auto_filter_flies] Removing DFM {dfm_id} Chamber {chamber_idx}"
+                        f"  [auto_remove_chambers] Removing DFM {dfm_id} Chamber {chamber_idx}"
                         f" ({treatment_name}): {reason_str}",
                         flush=True,
                     )
@@ -289,10 +289,10 @@ class HedonicFeedingExperiment(TwoWellExperiment):
             removed_rows, columns=["DFM", "Chamber", "Treatment", "Reason"]
         )
         if extra.empty:
-            print("auto_filter_flies (hedonic extras): no additional chambers removed.", flush=True)
+            print("auto_remove_chambers (hedonic extras): no additional chambers removed.", flush=True)
         else:
             print(
-                f"auto_filter_flies (hedonic extras): done — {len(extra)} additional chamber(s) removed.",
+                f"auto_remove_chambers (hedonic extras): done — {len(extra)} additional chamber(s) removed.",
                 flush=True,
             )
 
@@ -304,6 +304,28 @@ class HedonicFeedingExperiment(TwoWellExperiment):
             combined = pd.concat([base, extra], ignore_index=True)
 
         self.filtered_chambers = combined
+
+        # Append hedonic-specific criteria to the base summary
+        hedonic_lines = ["", "Hedonic feeding filter (additional criteria)"]
+        hedonic_lines.append("")
+        if max_dur is not None:
+            hedonic_lines.append(
+                f"  • max_med_duration_cutoff = {float(max_dur):g}\n"
+                f"    Excluded if MedDurationA > {float(max_dur):g}"
+            )
+        else:
+            hedonic_lines.append("  • max_med_duration_cutoff: not configured.")
+        if max_events is not None:
+            hedonic_lines.append(
+                f"  • max_events_cutoff = {float(max_events):g}\n"
+                f"    Excluded if EventsB > {float(max_events):g}"
+            )
+        else:
+            hedonic_lines.append("  • max_events_cutoff: not configured.")
+        self.filter_criteria_summary = (
+            self.filter_criteria_summary + "\n" + "\n".join(hedonic_lines)
+        )
+
         return combined
 
     def execute_basic_analysis(self) -> None:
