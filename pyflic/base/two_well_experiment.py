@@ -132,7 +132,8 @@ class TwoWellExperiment(Experiment):
                 f"Available columns: {list(df.columns)}"
             )
 
-        id_cols = [c for c in ("Treatment", "DFM", "Chamber") if c in df.columns]
+        df, group_col = self._resolve_group_col(df)
+        id_cols = [c for c in dict.fromkeys([group_col, "DFM", "Chamber"]) if c in df.columns]
         df_long = df[id_cols + [col_a, col_b]].melt(
             id_vars=id_cols,
             value_vars=[col_a, col_b],
@@ -156,7 +157,7 @@ class TwoWellExperiment(Experiment):
             df_long,
             x_col="Well",
             y_col=metric,
-            facet_col="Treatment",
+            facet_col=group_col,
             title=title,
             y_label=y_label or metric,
             ylim=ylim,

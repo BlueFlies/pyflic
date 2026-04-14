@@ -735,17 +735,17 @@ class FLICConfigEditor(QMainWindow):
         self._well_b_row = self._exp_form.rowCount()
         self._exp_form.addRow("Well B:", self._well_b_edit)
 
-        # Filter thresholds (two-well / HedonicFeedingExperiment only)
-        filter_header = QLabel("Filter Thresholds  (used by filter_flies)")
+        # Auto-filter thresholds (used by auto_filter_flies)
+        filter_header = QLabel("Auto-filter Thresholds  (used by auto_filter_flies)")
         filter_header.setStyleSheet("color: gray; font-size: 11px; margin-top: 4px;")
         self._filter_header_row = self._exp_form.rowCount()
         self._exp_form.addRow(filter_header)
 
-        self._min_licks_edit = QLineEdit()
-        self._min_licks_edit.setPlaceholderText("e.g. 0.00001  (leave blank to skip)")
-        self._min_licks_edit.setMaximumWidth(220)
-        self._min_licks_row = self._exp_form.rowCount()
-        self._exp_form.addRow("Min Transform Licks:", self._min_licks_edit)
+        self._min_raw_licks_edit = QLineEdit()
+        self._min_raw_licks_edit.setPlaceholderText("e.g. 20  (leave blank to skip)")
+        self._min_raw_licks_edit.setMaximumWidth(220)
+        self._min_raw_licks_row = self._exp_form.rowCount()
+        self._exp_form.addRow("Min Untransformed Licks:", self._min_raw_licks_edit)
 
         self._max_dur_edit = QLineEdit()
         self._max_dur_edit.setPlaceholderText("e.g. 13  (leave blank to skip)")
@@ -825,8 +825,10 @@ class FLICConfigEditor(QMainWindow):
         show = self._chamber_size() == 2
         self._exp_form.setRowVisible(self._well_a_row, show)
         self._exp_form.setRowVisible(self._well_b_row, show)
-        self._exp_form.setRowVisible(self._filter_header_row, show)
-        self._exp_form.setRowVisible(self._min_licks_row, show)
+        # The "min untransformed licks" threshold applies to all experiment types.
+        self._exp_form.setRowVisible(self._filter_header_row, True)
+        self._exp_form.setRowVisible(self._min_raw_licks_row, True)
+        # The remaining thresholds are currently hedonic/two-well specific.
         self._exp_form.setRowVisible(self._max_dur_row, show)
         self._exp_form.setRowVisible(self._max_events_row, show)
 
@@ -930,10 +932,17 @@ class FLICConfigEditor(QMainWindow):
                 }
 
         # Filter thresholds → global.constants
+        constants: dict[str, Any] = {}
+        # Applies to all experiment types
+        text = self._min_raw_licks_edit.text().strip()
+        if text:
+            try:
+                constants["min_untransformed_licks_cutoff"] = float(text)
+            except ValueError:
+                pass
+        # Two-well / hedonic extras
         if self._chamber_size() == 2:
-            constants: dict[str, Any] = {}
             for attr, key in (
-                ("_min_licks_edit", "min_transform_licks_cutoff"),
                 ("_max_dur_edit", "max_med_duration_cutoff"),
                 ("_max_events_edit", "max_events_cutoff"),
             ):
@@ -943,8 +952,8 @@ class FLICConfigEditor(QMainWindow):
                         constants[key] = float(text)
                     except ValueError:
                         pass
-            if constants:
-                global_section["constants"] = constants
+        if constants:
+            global_section["constants"] = constants
 
         # Experimental design factors
         factors = self._factors_widget.get_factors()
@@ -984,8 +993,9 @@ class FLICConfigEditor(QMainWindow):
 
         # Filter thresholds
         constants = global_cfg.get("constants") or {}
+        val = constants.get("min_untransformed_licks_cutoff")
+        self._min_raw_licks_edit.setText("" if val is None else str(val))
         for attr, key in (
-            ("_min_licks_edit", "min_transform_licks_cutoff"),
             ("_max_dur_edit", "max_med_duration_cutoff"),
             ("_max_events_edit", "max_events_cutoff"),
         ):
@@ -1034,7 +1044,7 @@ class FLICConfigEditor(QMainWindow):
         self._data_dir_edit.clear()
         self._well_a_edit.clear()
         self._well_b_edit.clear()
-        self._min_licks_edit.clear()
+        self._min_raw_licks_edit.clear()
         self._max_dur_edit.clear()
         self._max_events_edit.clear()
         self._experiment_type_combo.setCurrentIndex(0)

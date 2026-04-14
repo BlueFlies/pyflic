@@ -87,7 +87,7 @@ Hard limits used during data validation. Chambers that exceed these thresholds a
 
 | Key | Default | Description |
 |---|---|---|
-| `min_transform_licks_cutoff` | `0.00001` | Minimum transformed lick value; chambers below this are excluded |
+| `min_untransformed_licks_cutoff` | *(unset)* | Minimum non-transformed lick count; chambers where at least one well is below this are excluded by `auto_filter_flies()` |
 | `max_med_duration_cutoff` | `13` | Maximum median bout duration (seconds); chambers above are flagged |
 | `max_events_cutoff` | `150000` | Maximum number of raw events; chambers above are flagged |
 
@@ -195,7 +195,7 @@ dfms:
 global:
   experiment_type: hedonic
   constants:
-    min_transform_licks_cutoff: 0.00001
+    min_untransformed_licks_cutoff: 20
     max_med_duration_cutoff: 13
     max_events_cutoff: 150000
   params:

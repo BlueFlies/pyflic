@@ -42,10 +42,133 @@ class Experiment:
     qc_report_dir: Path | None = None
     qc_results: dict[int, dict[str, Any]] | None = None
     _feeding_summary_cache: dict = field(default_factory=dict)
+    filtered_chambers: pd.DataFrame | None = None
 
     def get_dfm(self, dfm_id: int) -> DFM | None:
         """Return the DFM with the given id, or None if it does not exist."""
         return self.dfms.get(int(dfm_id))
+
+    def _remove_chambers_from_design(self, remove_set: set[tuple[int, int]]) -> None:
+        """Remove (DFM,Chamber) pairs from all treatments and clear caches."""
+        if not remove_set:
+            return
+        for treatment in self.design.treatments.values():
+            treatment.chambers = [
+                tc
+                for tc in treatment.chambers
+                if (int(tc.dfm_id), int(tc.chamber_index)) not in remove_set
+            ]
+        self._feeding_summary_cache.clear()
+
+    def auto_filter_flies(
+        self,
+        *,
+        range_minutes: Sequence[float] = (0, 0),
+        min_untransformed_licks_cutoff: float | None = None,
+    ) -> pd.DataFrame:
+        """
+        Automatically remove chambers from the analysis design based on lick-count thresholds.
+
+        This method updates ``self.design`` in-place by removing (DFM,Chamber) assignments from
+        all treatments, then clears the feeding-summary cache so downstream summaries/plots
+        reflect the filtered design.
+
+        Threshold source
+        ----------------
+        ``min_untransformed_licks_cutoff`` is taken from:
+
+        - the explicit argument if provided, otherwise
+        - ``global.constants.min_untransformed_licks_cutoff`` from ``flic_config.yaml``.
+
+        Filtering rule (all experiment types)
+        -------------------------------------
+        A chamber is removed if **at least one well in the chamber** has *non-transformed*
+        licks below the cutoff.
+
+        - chamber_size=1: uses ``Licks``
+        - chamber_size=2: uses ``LicksA`` / ``LicksB`` (removes chamber if either is below)
+
+        Returns
+        -------
+        pd.DataFrame
+            Record of every removed chamber with columns ``DFM``, ``Chamber``,
+            ``Treatment``, and ``Reason``.
+        """
+        constants = self.global_constants or {}
+        if min_untransformed_licks_cutoff is None:
+            raw = constants.get("min_untransformed_licks_cutoff")
+            if raw is None or str(raw).strip() == "":
+                result = pd.DataFrame(columns=["DFM", "Chamber", "Treatment", "Reason"])
+                self.filtered_chambers = result
+                return result
+            min_untransformed_licks_cutoff = float(raw)
+        cutoff = float(min_untransformed_licks_cutoff)
+
+        fs = self.feeding_summary(range_minutes=range_minutes, transform_licks=False)
+        if fs.empty:
+            result = pd.DataFrame(columns=["DFM", "Chamber", "Treatment", "Reason"])
+            self.filtered_chambers = result
+            return result
+
+        # Identify which lick columns exist for the chamber size.
+        has_single = "Licks" in fs.columns
+        has_two = ("LicksA" in fs.columns) and ("LicksB" in fs.columns)
+        if not (has_single or has_two):
+            result = pd.DataFrame(columns=["DFM", "Chamber", "Treatment", "Reason"])
+            self.filtered_chambers = result
+            return result
+
+        removed_rows: list[dict[str, object]] = []
+        remove_set: set[tuple[int, int]] = set()
+
+        for _, row in fs.iterrows():
+            dfm_id = int(row["DFM"])
+            chamber_idx = int(row["Chamber"])
+            treatment_name = str(row.get("Treatment", ""))
+            key = (dfm_id, chamber_idx)
+            if key in remove_set:
+                continue
+
+            reasons: list[str] = []
+            if has_single:
+                val = row.get("Licks")
+                if pd.notna(val) and float(val) < cutoff:
+                    reasons.append(f"Licks={float(val):.6g} < min_untransformed_licks_cutoff={cutoff:.6g}")
+            else:
+                va = row.get("LicksA")
+                vb = row.get("LicksB")
+                if pd.notna(va) and float(va) < cutoff:
+                    reasons.append(f"LicksA={float(va):.6g} < min_untransformed_licks_cutoff={cutoff:.6g}")
+                if pd.notna(vb) and float(vb) < cutoff:
+                    reasons.append(f"LicksB={float(vb):.6g} < min_untransformed_licks_cutoff={cutoff:.6g}")
+
+            if reasons:
+                remove_set.add(key)
+                removed_rows.append(
+                    {
+                        "DFM": dfm_id,
+                        "Chamber": chamber_idx,
+                        "Treatment": treatment_name,
+                        "Reason": "; ".join(reasons),
+                    }
+                )
+                print(
+                    f"  [auto_filter_flies] Removing DFM {dfm_id} Chamber {chamber_idx}"
+                    f" ({treatment_name}): {'; '.join(reasons)}",
+                    flush=True,
+                )
+
+        if remove_set:
+            self._remove_chambers_from_design(remove_set)
+
+        result = pd.DataFrame(removed_rows, columns=["DFM", "Chamber", "Treatment", "Reason"])
+        if result.empty:
+            print("auto_filter_flies: no chambers removed.", flush=True)
+        else:
+            print(f"auto_filter_flies: done — {len(result)} chamber(s) removed.", flush=True)
+
+        self.filtered_chambers = result
+        return result
 
     def _range_suffix(self) -> str:
         """Return ``'_0_30'``-style suffix when a range is active, or ``''``."""
@@ -362,6 +485,16 @@ class Experiment:
             buf.write(design_df.to_string(index=False))
             buf.write("\n\n")
 
+        if self.filtered_chambers is not None and not self.filtered_chambers.empty:
+            buf.write("Filtered chambers (removed by auto_filter_flies)\n")
+            buf.write("----------------------------------------------\n")
+            for _, row in self.filtered_chambers.iterrows():
+                buf.write(
+                    f"DFM {int(row['DFM'])} Chamber {int(row['Chamber'])}"
+                    f" Treatment={row['Treatment']}: {row['Reason']}\n"
+                )
+            buf.write("\n")
+
         # Per-DFM details
         overall_min: float | None = None
         overall_max: float | None = None
@@ -640,7 +773,8 @@ class Experiment:
                 + theme_bw()
             )
 
-        id_cols = [c for c in ("Treatment", "DFM", "Chamber") if c in df.columns]
+        df, group_col = self._resolve_group_col(df)
+        id_cols = [c for c in dict.fromkeys([group_col, "DFM", "Chamber"]) if c in df.columns]
         metric_cols = [col for col, _ in metrics]
         label_map = {col: lbl for col, lbl in metrics}
 
@@ -665,19 +799,17 @@ class Experiment:
         if figsize is None:
             figsize = (ncols * 3.5, nrows * 3.2)
 
-        treatments = sorted(df["Treatment"].unique().tolist())
-
         p = (
-            ggplot(df_long, aes(x="Treatment", y="Value"))
+            ggplot(df_long, aes(x=group_col, y="Value"))
             + geom_boxplot(
-                aes(group="Treatment"),
+                aes(group=group_col),
                 fill="white",
                 color="#666666",
                 alpha=0.5,
                 outlier_alpha=0,
                 width=0.4,
             )
-            + geom_jitter(aes(color="Treatment"), width=0.15, size=2, alpha=0.8)
+            + geom_jitter(aes(color=group_col), width=0.15, size=2, alpha=0.8)
             + facet_wrap("~ Metric", ncol=ncols, scales="free_y")
             + theme_bw()
             + theme(
@@ -856,10 +988,11 @@ class Experiment:
         df["MetricValue"] = pd.to_numeric(df["MetricValue"], errors="coerce")
         df = df.dropna(subset=["Minutes", "MetricValue"])
 
-        treatments = sorted(df["Treatment"].unique().tolist())
+        df, group_col = self._resolve_group_col(df)
+        treatments = sorted(df[group_col].unique().tolist())
 
         agg = (
-            df.groupby(["Treatment", "Minutes"], as_index=False)["MetricValue"]
+            df.groupby([group_col, "Minutes"], as_index=False)["MetricValue"]
             .agg(mean="mean", std="std", n="count")
             .rename(columns={"mean": "Mean", "std": "Std", "n": "N"})
         )
@@ -870,7 +1003,7 @@ class Experiment:
 
         if show_individual_chambers:
             for i, trt in enumerate(treatments):
-                tmp = df[df["Treatment"] == trt]
+                tmp = df[df[group_col] == trt]
                 for (_, _), g in tmp.groupby(["DFM", "Chamber"]):
                     g = g.sort_values("Minutes")
                     ax.plot(
@@ -882,7 +1015,7 @@ class Experiment:
                     )
 
         for i, trt in enumerate(treatments):
-            tmp = agg[agg["Treatment"] == trt].sort_values("Minutes")
+            tmp = agg[agg[group_col] == trt].sort_values("Minutes")
             x = tmp["Minutes"].to_numpy(dtype=float)
             y = tmp["Mean"].to_numpy(dtype=float)
             e = tmp["SEM"].to_numpy(dtype=float)
@@ -940,7 +1073,8 @@ class Experiment:
         df = df.copy()
         df["Minutes"] = pd.to_numeric(df["Minutes"], errors="coerce")
         df = df.dropna(subset=["Minutes"])
-        treatments = sorted(df["Treatment"].unique().tolist())
+        df, group_col = self._resolve_group_col(df)
+        treatments = sorted(df[group_col].unique().tolist())
         colors = [plt.cm.tab10(i % 10) for i in range(len(treatments))]
 
         nrows = math.ceil(len(metrics) / int(ncols))
@@ -959,7 +1093,7 @@ class Experiment:
             tmp = tmp.dropna(subset=["MetricValue"])
 
             agg = (
-                tmp.groupby(["Treatment", "Minutes"], as_index=False)["MetricValue"]
+                tmp.groupby([group_col, "Minutes"], as_index=False)["MetricValue"]
                 .agg(mean="mean", std="std", n="count")
                 .rename(columns={"mean": "Mean", "std": "Std", "n": "N"})
             )
@@ -967,7 +1101,7 @@ class Experiment:
 
             if show_individual_chambers:
                 for t_i, trt in enumerate(treatments):
-                    chamber_rows = tmp[tmp["Treatment"] == trt]
+                    chamber_rows = tmp[tmp[group_col] == trt]
                     for (_dfm_id, _ch), g in chamber_rows.groupby(["DFM", "Chamber"]):
                         g = g.sort_values("Minutes")
                         ax.plot(
@@ -979,7 +1113,7 @@ class Experiment:
                         )
 
             for t_i, trt in enumerate(treatments):
-                g = agg[agg["Treatment"] == trt].sort_values("Minutes")
+                g = agg[agg[group_col] == trt].sort_values("Minutes")
                 x = g["Minutes"].to_numpy(dtype=float)
                 y = g["Mean"].to_numpy(dtype=float)
                 e = g["SEM"].to_numpy(dtype=float)
@@ -1025,6 +1159,20 @@ class Experiment:
             show_individual_chambers=show_individual_chambers,
             figsize=figsize,
         )
+
+    def _resolve_group_col(self, df: pd.DataFrame) -> tuple[pd.DataFrame, str]:
+        """Return ``(df, group_col)`` where *group_col* encodes all factor combinations.
+
+        When ``design_factors`` are set and those columns are present in *df*, a
+        synthetic ``_Group`` column is created by joining the factor values
+        (e.g. ``"Ctrl / Male"``).  Otherwise ``"Treatment"`` is returned unchanged.
+        """
+        factor_cols = [f for f in (self.design_factors or []) if f in df.columns]
+        if not factor_cols:
+            return df, "Treatment"
+        df = df.copy()
+        df["_Group"] = df[factor_cols].astype(str).agg(" / ".join, axis=1)
+        return df, "_Group"
 
     def _append_factor_columns(self, df: pd.DataFrame) -> pd.DataFrame:
         """Insert per-factor columns after the Treatment column when design_factors is set."""

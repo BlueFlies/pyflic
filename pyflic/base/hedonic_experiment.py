@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import dataclasses
 from dataclasses import dataclass
-from io import StringIO
 from pathlib import Path
 from typing import Literal, Sequence
 import pandas as pd
@@ -13,7 +12,6 @@ from .two_well_experiment import TwoWellExperiment
 
 @dataclass(slots=True)
 class HedonicFeedingExperiment(TwoWellExperiment):
-    filtered_chambers: pd.DataFrame | None = None
     """
     A two-well (choice) specialisation of :class:`Experiment`.
 
@@ -124,7 +122,7 @@ class HedonicFeedingExperiment(TwoWellExperiment):
                 "Feeding summary is empty — no data was collected. "
                 f"Design has {n_treatments} treatment(s) with {n_chambers} total chamber(s). "
                 "Check that your flic_config.yaml has valid 'chambers:' assignments under each DFM, "
-                "or that filter_flies() has not removed all chambers."
+                "or that auto_filter_flies() has not removed all chambers."
             )
 
         if col_a not in fs.columns or col_b not in fs.columns:
@@ -133,7 +131,8 @@ class HedonicFeedingExperiment(TwoWellExperiment):
                 f"Available columns: {list(fs.columns)}"
             )
 
-        keep = [c for c in ("DFM", "Chamber", "Treatment") if c in fs.columns]
+        fs, group_col = self._resolve_group_col(fs)
+        keep = [c for c in dict.fromkeys([group_col, "DFM", "Chamber"]) if c in fs.columns]
         df_a = fs[keep + [col_a, "EventsA"]].copy() if "EventsA" in fs.columns else fs[keep + [col_a]].copy()
         df_a["Well"] = "WellA"
         df_a = df_a.rename(columns={col_a: metric, "EventsA": "Events"})
@@ -156,7 +155,7 @@ class HedonicFeedingExperiment(TwoWellExperiment):
             df_long,
             x_col="Well",
             y_col=metric,
-            facet_col="Treatment",
+            facet_col=group_col,
             title=title,
             x_label="Well",
             y_label=y_label or metric,
@@ -184,18 +183,20 @@ class HedonicFeedingExperiment(TwoWellExperiment):
 
 
     
-    def filter_flies(
+    def auto_filter_flies(
         self,
         *,
         range_minutes: Sequence[float] = (0, 0),
         transform_licks: bool = True,
+        min_untransformed_licks_cutoff: float | None = None,
     ) -> pd.DataFrame:
         """
         Remove chambers that fail QC thresholds defined in ``global_constants``.
 
         Thresholds (all read from ``self.global_constants``):
 
-        - ``min_transform_licks_cutoff`` — remove if ``LicksA`` is **below** this value.
+        - ``min_untransformed_licks_cutoff`` — remove if **either** ``LicksA`` or ``LicksB`` (non-transformed)
+          is below this value.
         - ``max_med_duration_cutoff``    — remove if ``MedDurationA`` is **above** this value.
         - ``max_events_cutoff``          — remove if ``EventsB`` is **above** this value.
 
@@ -217,28 +218,35 @@ class HedonicFeedingExperiment(TwoWellExperiment):
             Record of every removed chamber with columns
             ``DFM``, ``Chamber``, ``Treatment``, and ``Reason``.
         """
-        constants = self.global_constants
-        min_licks = constants.get("min_transform_licks_cutoff")
+        # First apply the general (all-experiment) lick-based filter.
+        base = Experiment.auto_filter_flies(
+            self,
+            range_minutes=range_minutes,
+            min_untransformed_licks_cutoff=min_untransformed_licks_cutoff,
+        )
+
+        constants = self.global_constants or {}
         max_dur = constants.get("max_med_duration_cutoff")
         max_events = constants.get("max_events_cutoff")
 
         fs = self.feeding_summary(range_minutes=range_minutes, transform_licks=transform_licks)
 
+        already_removed: set[tuple[int, int]] = set()
+        if base is not None and not base.empty:
+            already_removed = {
+                (int(r["DFM"]), int(r["Chamber"])) for _, r in base.iterrows()
+            }
+
         to_remove: dict[tuple[int, int], list[str]] = {}
-        removed_rows: list[dict] = []
+        removed_rows: list[dict[str, object]] = []
 
         for _, row in fs.iterrows():
             dfm_id = int(row["DFM"])
             chamber_idx = int(row["Chamber"])
             treatment_name = str(row["Treatment"])
+            if (dfm_id, chamber_idx) in already_removed:
+                continue
             reasons: list[str] = []
-
-            if min_licks is not None and "LicksA" in row.index:
-                val = row["LicksA"]
-                if pd.notna(val) and float(val) < float(min_licks):
-                    reasons.append(
-                        f"LicksA={val:.6g} < min_transform_licks_cutoff={min_licks}"
-                    )
 
             if max_dur is not None and "MedDurationA" in row.index:
                 val = row["MedDurationA"]
@@ -268,65 +276,35 @@ class HedonicFeedingExperiment(TwoWellExperiment):
                         }
                     )
                     print(
-                        f"  [filter_flies] Removing DFM {dfm_id} Chamber {chamber_idx}"
+                        f"  [auto_filter_flies] Removing DFM {dfm_id} Chamber {chamber_idx}"
                         f" ({treatment_name}): {reason_str}",
                         flush=True,
                     )
 
         # Remove failing chambers from every treatment in the design.
         if to_remove:
-            remove_set = set(to_remove.keys())
-            for treatment in self.design.treatments.values():
-                treatment.chambers = [
-                    tc
-                    for tc in treatment.chambers
-                    if (tc.dfm_id, tc.chamber_index) not in remove_set
-                ]
-            # Invalidate cache — design has changed.
-            self._feeding_summary_cache.clear()
+            self._remove_chambers_from_design(set(to_remove.keys()))
 
-        result = pd.DataFrame(
+        extra = pd.DataFrame(
             removed_rows, columns=["DFM", "Chamber", "Treatment", "Reason"]
         )
-        if result.empty:
-            print("filter_flies: no chambers removed.", flush=True)
+        if extra.empty:
+            print("auto_filter_flies (hedonic extras): no additional chambers removed.", flush=True)
         else:
-            print(f"filter_flies: done — {len(result)} chamber(s) removed.", flush=True)
+            print(
+                f"auto_filter_flies (hedonic extras): done — {len(extra)} additional chamber(s) removed.",
+                flush=True,
+            )
 
-        self.filtered_chambers = result
-        return result
+        if base is None or base.empty:
+            combined = extra
+        elif extra.empty:
+            combined = base
+        else:
+            combined = pd.concat([base, extra], ignore_index=True)
 
-    def summary_text(
-        self,
-        *,
-        include_qc: bool = True,
-        qc_data_breaks_multiplier: float = 4.0,
-        qc_bleeding_cutoff: float = 50.0,
-    ) -> str:
-        """
-        Return the experiment summary, appending a filtered-chambers section
-        when :meth:`filter_flies` has been called and removed any chambers.
-        """
-        text = Experiment.summary_text(
-            self,
-            include_qc=include_qc,
-            qc_data_breaks_multiplier=qc_data_breaks_multiplier,
-            qc_bleeding_cutoff=qc_bleeding_cutoff,
-        )
-
-        if self.filtered_chambers is not None and not self.filtered_chambers.empty:
-            buf = StringIO()
-            buf.write("\nFiltered chambers (removed by filter_flies)\n")
-            buf.write("-------------------------------------------\n")
-            for _, row in self.filtered_chambers.iterrows():
-                buf.write(
-                    f"DFM {int(row['DFM'])} Chamber {int(row['Chamber'])}"
-                    f" Treatment={row['Treatment']}: {row['Reason']}\n"
-                )
-            buf.write("\n")
-            text += buf.getvalue()
-
-        return text
+        self.filtered_chambers = combined
+        return combined
 
     def execute_basic_analysis(self) -> None:
         TwoWellExperiment.execute_basic_analysis(self)

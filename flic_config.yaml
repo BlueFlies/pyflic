@@ -17,7 +17,7 @@ global:
     A: Sucrose
     B: Yeast
   constants:
-    min_transform_licks_cutoff: 1.0e-05
+    min_untransformed_licks_cutoff: 20
     max_med_duration_cutoff: 13.0
     max_events_cutoff: 150000.0
   experimental_design_factors:
