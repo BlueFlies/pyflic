@@ -6,6 +6,7 @@ from io import StringIO
 from pathlib import Path
 from typing import Any, Literal, Sequence
 
+import numpy as np
 import pandas as pd
 
 from .dfm import DFM

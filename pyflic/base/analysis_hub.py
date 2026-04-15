@@ -78,10 +78,27 @@ _WELL_CMP_METRICS: list[str] = [
     "MedianInt",
 ]
 
+# Default two_well_mode for each metric (used by script runner)
+_METRIC_DEFAULT_MODE: dict[str, str] = {
+    metric: mode for _, metric, mode in _TWO_WELL_BINNED + _SINGLE_WELL_BINNED
+}
+
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _parse_scripts(cfg: dict) -> list[dict]:
+    """Return list of script dicts from YAML config, or [] if none defined."""
+    raw = cfg.get("scripts") or []
+    if not isinstance(raw, list):
+        return []
+    result = []
+    for item in raw:
+        if isinstance(item, dict) and item.get("name") and isinstance(item.get("steps"), list):
+            result.append(item)
+    return result
+
 
 def _read_yaml(path: Path) -> dict[str, Any]:
     text = path.read_text(encoding="utf-8")
@@ -293,6 +310,7 @@ class AnalysisHubWindow(QMainWindow):
         self._load_buttons: list[QPushButton] = []   # always enabled when not busy
         self._data_buttons: list[QPushButton] = []   # enabled only when exp loaded
         self._plot_windows: list[_PlotWindow] = []
+        self._scripts: list[dict] = []
 
         root = QWidget()
         self.setCentralWidget(root)
@@ -385,6 +403,18 @@ class AnalysisHubWindow(QMainWindow):
         lay.addWidget(btn_load)
         self._load_buttons.append(btn_load)
 
+        # Script selector row — shown only when flic_config.yaml has a scripts: section
+        script_row = QHBoxLayout()
+        self._cmb_script = QComboBox()
+        self._btn_run_script = QPushButton("Run Script")
+        self._btn_run_script.clicked.connect(self._action_run_script)
+        script_row.addWidget(self._cmb_script, stretch=1)
+        script_row.addWidget(self._btn_run_script)
+        lay.addLayout(script_row)
+        self._load_buttons.append(self._btn_run_script)
+        self._cmb_script.setVisible(False)
+        self._btn_run_script.setVisible(False)
+
         self._btn_config = QPushButton("Edit config (pyflic-config)…")
         self._btn_config.clicked.connect(self._launch_config_editor)
         lay.addWidget(self._btn_config)
@@ -434,6 +464,16 @@ class AnalysisHubWindow(QMainWindow):
         parts.append("data/: " + ("found" if data_ok else "<span style='color:#a50'>missing</span>"))
         self._status.setText(" — ".join(parts))
         self._rebuild_dynamic_groups(et or inf, cs)
+
+        # Populate script dropdown from YAML
+        cfg = _read_yaml(p / "flic_config.yaml")
+        self._scripts = _parse_scripts(cfg)
+        self._cmb_script.clear()
+        for s in self._scripts:
+            self._cmb_script.addItem(s.get("name", "(unnamed)"))
+        has_scripts = bool(self._scripts)
+        self._cmb_script.setVisible(has_scripts)
+        self._btn_run_script.setVisible(has_scripts)
 
     def _rebuild_dynamic_groups(self, exp_type: str | None, chamber_size: int | None) -> None:
         self._data_buttons.clear()
@@ -904,6 +944,194 @@ class AnalysisHubWindow(QMainWindow):
             return results
 
         self._start_worker(task)
+
+
+    # ------------------------------------------------------------------
+    # Script execution
+    # ------------------------------------------------------------------
+
+    def _action_run_script(self) -> None:
+        idx = self._cmb_script.currentIndex()
+        if idx < 0 or idx >= len(self._scripts):
+            return
+        self._run_script(self._scripts[idx])
+
+    def _run_script(self, script: dict) -> None:
+        steps = script.get("steps") or []
+        ui_start, ui_end = self._range_minutes()
+        script_start = float(script.get("start", ui_start))
+        script_end = float(script.get("end", ui_end))
+        ui_binsize = float(self._spin_binsize.value())
+        ui_parallel = self._chk_parallel.isChecked()
+        project_dir = self._project_dir()
+
+        def task() -> list[tuple[str, bytes]]:
+            exp = None
+            figures: list[tuple[str, bytes]] = []
+
+            def _get_rm(step: dict) -> tuple[float, float]:
+                return (
+                    float(step.get("start", script_start)),
+                    float(step.get("end", script_end)),
+                )
+
+            def _make_cache_key(rm, parallel):
+                return (str(project_dir), rm, parallel)
+
+            def _ensure_exp(rm):
+                nonlocal exp
+                if exp is None:
+                    cache_key = _make_cache_key(rm, ui_parallel)
+                    if (self._cached_exp is not None
+                            and self._cached_exp_key == cache_key):
+                        print("Using cached experiment (same project / options).", flush=True)
+                        exp = self._cached_exp
+                        return exp
+                    from pyflic import load_experiment_yaml
+                    exp = load_experiment_yaml(
+                        project_dir, range_minutes=rm, parallel=ui_parallel
+                    )
+                    self._cached_exp = exp
+                    self._cached_exp_key = cache_key
+                return exp
+
+            for i, step in enumerate(steps):
+                action = str(step.get("action", "")).strip().lower()
+                rm = _get_rm(step)
+                print(f"\n[Script step {i + 1}/{len(steps)}] {action}", flush=True)
+
+                if action == "load":
+                    parallel = bool(step.get("parallel", ui_parallel))
+                    cache_key = _make_cache_key(rm, parallel)
+                    if (self._cached_exp is not None
+                            and self._cached_exp_key == cache_key):
+                        exp = self._cached_exp
+                        print("Using cached experiment (same project / options).", flush=True)
+                    else:
+                        from pyflic import load_experiment_yaml
+                        exp = load_experiment_yaml(
+                            project_dir, range_minutes=rm, parallel=parallel
+                        )
+                        self._cached_exp = exp
+                        self._cached_exp_key = cache_key
+                        print("Loaded.", flush=True)
+
+                elif action == "basic_analysis":
+                    e = _ensure_exp(rm)
+                    e.execute_basic_analysis(range_minutes=rm, skip_qc=True)
+
+                elif action == "feeding_csv":
+                    e = _ensure_exp(rm)
+                    p = e.write_feeding_summary(range_minutes=rm)
+                    print(f"Wrote: {p}", flush=True)
+
+                elif action == "binned_csv":
+                    bs = float(step.get("binsize", ui_binsize))
+                    e = _ensure_exp(rm)
+                    df = e.binned_feeding_summary(binsize_min=bs, range_minutes=rm, save=True)
+                    print(f"Binned rows: {len(df)}", flush=True)
+
+                elif action == "weighted_duration":
+                    from pyflic import HedonicFeedingExperiment
+                    e = _ensure_exp(rm)
+                    if not isinstance(e, HedonicFeedingExperiment):
+                        print("[Skip] weighted_duration requires hedonic experiment.", flush=True)
+                        continue
+                    p = e.weighted_duration_summary(save=True, range_minutes=rm)
+                    print(f"Wrote: {p}", flush=True)
+
+                elif action == "plot_feeding_summary":
+                    e = _ensure_exp(rm)
+                    fig = e.plot_feeding_summary(range_minutes=rm)
+                    out = e.analysis_dir / "feeding_summary.png"
+                    out.parent.mkdir(parents=True, exist_ok=True)
+                    if hasattr(fig, "save"):
+                        fig.save(str(out), dpi=150)
+                    else:
+                        fig.savefig(str(out), dpi=150, bbox_inches="tight")
+                    print(f"Wrote: {out}", flush=True)
+                    figures.append(("Feeding Summary", _figure_to_bytes(fig)))
+
+                elif action in ("plot_binned", "plot_dot"):
+                    metric = str(step.get("metric", "Licks"))
+                    mode = str(step.get("mode", _METRIC_DEFAULT_MODE.get(metric, "total")))
+                    bs = float(step.get("binsize", ui_binsize))
+                    e = _ensure_exp(rm)
+                    if action == "plot_binned":
+                        fig = e.plot_binned_metric_by_treatment(
+                            metric=metric, two_well_mode=mode, binsize_min=bs, range_minutes=rm
+                        )
+                        safe = metric.replace("/", "_")
+                        out = e.analysis_dir / f"binned_{safe}.png"
+                        out.parent.mkdir(parents=True, exist_ok=True)
+                        fig.savefig(str(out), dpi=150, bbox_inches="tight")
+                        print(f"Wrote: {out}", flush=True)
+                        figures.append((f"Binned: {metric}", _figure_to_bytes(fig)))
+                    else:
+                        fig = e.plot_dot_metric_by_treatment(
+                            metric=metric, two_well_mode=mode, range_minutes=rm
+                        )
+                        safe = metric.replace("/", "_")
+                        out = e.analysis_dir / f"dot_{safe}.png"
+                        out.parent.mkdir(parents=True, exist_ok=True)
+                        if hasattr(fig, "save"):
+                            fig.save(str(out), dpi=150)
+                        else:
+                            fig.savefig(str(out), dpi=150, bbox_inches="tight")
+                        print(f"Wrote: {out}", flush=True)
+                        figures.append((f"Dot: {metric}", _figure_to_bytes(fig)))
+
+                elif action == "plot_well_comparison":
+                    from pyflic import TwoWellExperiment
+                    metric = str(step.get("metric", "MedDuration"))
+                    e = _ensure_exp(rm)
+                    if not isinstance(e, TwoWellExperiment):
+                        print("[Skip] plot_well_comparison requires two-well experiment.", flush=True)
+                        continue
+                    fig = e.facet_plot_well_durations(metric=metric, range_minutes=rm)
+                    out = e.analysis_dir / f"well_comparison_{metric}.png"
+                    out.parent.mkdir(parents=True, exist_ok=True)
+                    fig.save(str(out), dpi=150)
+                    print(f"Wrote: {out}", flush=True)
+                    figures.append((f"Well A vs B: {metric}", _figure_to_bytes(fig)))
+
+                elif action == "plot_hedonic":
+                    from pyflic import HedonicFeedingExperiment
+                    e = _ensure_exp(rm)
+                    if not isinstance(e, HedonicFeedingExperiment):
+                        print("[Skip] plot_hedonic requires hedonic experiment.", flush=True)
+                        continue
+                    fig = e.hedonic_feeding_plot(save=True, range_minutes=rm)
+                    print("Wrote hedonic feeding plot.", flush=True)
+                    figures.append(("Hedonic Feeding Plot", _figure_to_bytes(fig)))
+
+                elif action == "plot_breaking_point":
+                    from pyflic import ProgressiveRatioExperiment
+                    cfg_idx = int(step.get("config", 1))
+                    e = _ensure_exp(rm)
+                    if not isinstance(e, ProgressiveRatioExperiment):
+                        print("[Skip] plot_breaking_point requires progressive_ratio experiment.", flush=True)
+                        continue
+                    ad = e.analysis_dir
+                    ad.mkdir(parents=True, exist_ok=True)
+                    for dfm_id, dfm in sorted(e.dfms.items()):
+                        fig = e.plot_breaking_point_dfm_gg(dfm, cfg_idx)
+                        out = ad / f"breaking_point_dfm{dfm_id}_config{cfg_idx}.png"
+                        fig.save(str(out), dpi=150)
+                        print(f"Wrote: {out}", flush=True)
+                        figures.append((
+                            f"Breaking Point — DFM {dfm_id} (config {cfg_idx})",
+                            _figure_to_bytes(fig),
+                        ))
+
+                else:
+                    print(f"[Skip] Unknown action: {action!r}", flush=True)
+
+            return figures
+
+        self._start_worker(task)
+        if self._worker is not None:
+            self._worker.finished.connect(self._on_load_finished)
 
 
 def main() -> None:

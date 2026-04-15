@@ -9,10 +9,11 @@ Source code: [https://github.com/PletcherLab/pyflic](https://github.com/Pletcher
 1. [What pyflic does](#1-what-pyflic-does)
 2. [Project directory layout](#2-project-directory-layout)
 3. [Configuration file (`flic_config.yaml`)](#3-configuration-file-flic_configyaml)
-4. [Command-line tools](#4-command-line-tools)
-5. [Python API](#5-python-api)
-6. [Typical workflows](#6-typical-workflows)
-7. [Jupyter notebooks](#7-jupyter-notebooks)
+4. [Scripts — automated hub pipelines (`scripts:`)](#4-scripts--automated-hub-pipelines-scripts)
+5. [Command-line tools](#5-command-line-tools)
+6. [Python API](#6-python-api)
+7. [Typical workflows](#7-typical-workflows)
+8. [Jupyter notebooks](#8-jupyter-notebooks)
 
 ---
 
@@ -64,6 +65,12 @@ dfms:
       2: TreatmentB
   2:
     ...
+
+scripts:                                 # optional — see Section 4
+  - name: "My Pipeline"
+    steps:
+      - action: load
+      - action: basic_analysis
 ```
 
 ---
@@ -235,9 +242,142 @@ dfms:
 
 ---
 
-## 4. Command-line tools
+## 4. Scripts — automated hub pipelines (`scripts:`)
+
+The optional `scripts:` key in `flic_config.yaml` lets you define named analysis pipelines that run in a single click from the **pyflic-hub** GUI. When at least one script is defined, a dropdown and **Run Script** button appear in the Load group of the hub.
+
+### Structure
+
+```yaml
+scripts:
+  - name: "Standard Analysis"       # label shown in the hub dropdown
+    start: 0                        # optional — default start minute for all steps
+    end: 0                          # optional — 0 means end of recording
+    steps:
+      - action: load
+      - action: basic_analysis
+      - action: feeding_csv
+      - action: binned_csv
+        binsize: 30
+      - action: plot_feeding_summary
+      - action: plot_binned
+        metric: Licks
+        mode: total
+        binsize: 30
+      - action: plot_dot
+        metric: PI
+
+  - name: "Quick Plots"
+    steps:
+      - action: load
+      - action: plot_feeding_summary
+      - action: plot_dot
+        metric: Licks
+      - action: plot_dot
+        metric: PI
+```
+
+Each script is a named list of **steps**. Every step has an `action:` key plus optional parameters. Steps execute in order; they all share the experiment loaded by the first `load` step (or auto-loaded on first use if no `load` step appears).
+
+---
+
+### Parameter resolution order
+
+For each step, parameter values are resolved in this order:
+
+1. **Per-step value** — set directly on the step (e.g. `binsize: 30`)
+2. **Script-level default** — `start:` / `end:` set at the script level
+3. **UI value** — the spinbox / control value currently shown in the hub
+
+---
+
+### Supported actions
+
+| `action:` | Parameters | Experiment type |
+|---|---|---|
+| `load` | `start`, `end`, `parallel` | all |
+| `basic_analysis` | `start`, `end` | all |
+| `feeding_csv` | `start`, `end` | all |
+| `binned_csv` | `start`, `end`, `binsize` | all |
+| `weighted_duration` | `start`, `end` | hedonic only |
+| `plot_feeding_summary` | `start`, `end` | all |
+| `plot_binned` | `metric`, `mode`, `binsize`, `start`, `end` | all |
+| `plot_dot` | `metric`, `mode`, `start`, `end` | all |
+| `plot_well_comparison` | `metric`, `start`, `end` | two-well only |
+| `plot_hedonic` | `start`, `end` | hedonic only |
+| `plot_breaking_point` | `config` (1–4), `start`, `end` | progressive_ratio only |
+
+Actions that require a specific experiment type (e.g. `plot_hedonic` on a two-well experiment) are skipped with a log message rather than raising an error. Unknown action names are also skipped.
+
+---
+
+### `plot_binned` and `plot_dot` — `metric` and `mode`
+
+`metric` names for **two-well** experiments:
+`Licks`, `PI`, `EventPI`, `LicksA`, `LicksB`, `Events`, `MedDuration`, `MedDurationA`, `MedDurationB`, `MeanDuration`, `MedTimeBtw`
+
+`metric` names for **single-well** experiments:
+`Licks`, `Events`, `MedDuration`, `MeanDuration`, `MedTimeBtw`, `MeanInt`, `MedianInt`
+
+`mode` is optional. When omitted, a sensible default is chosen automatically:
+- Metrics ending in `A` → `A`
+- Metrics ending in `B` → `B`
+- Duration / interval metrics without a suffix → `mean_ab`
+- `Licks`, `Events`, `PI` without a suffix → `total`
+
+Valid `mode` values: `total`, `mean_ab`, `A`, `B`
+
+---
+
+### `plot_well_comparison` — `metric`
+
+Valid `metric` names: `MedDuration`, `MeanDuration`, `Licks`, `MedTimeBtw`, `MeanTimeBtw`, `MeanInt`, `MedianInt`
+
+---
+
+### Example
+
+```yaml
+scripts:
+  - name: "Standard Analysis"
+    start: 0
+    end: 0
+    steps:
+      - action: load
+      - action: basic_analysis
+      - action: feeding_csv
+      - action: binned_csv
+        binsize: 30
+      - action: plot_feeding_summary
+      - action: plot_binned
+        metric: Licks
+        mode: total
+        binsize: 30
+      - action: plot_binned
+        metric: PI
+      - action: plot_dot
+        metric: MedDuration
+      - action: plot_well_comparison
+        metric: MedDuration
+```
+
+After this script runs, all CSVs and PNG files are written to the `analysis/` subdirectory and each plot opens in its own window.
+
+---
+
+## 5. Command-line tools
 
 Three tools are installed with pyflic.
+
+### `pyflic-hub`
+
+Opens the graphical Analysis Hub (PyQt6) — the primary interactive interface for running analyses and generating plots without writing Python. Accepts an optional project directory as an argument.
+
+```bash
+pyflic-hub /path/to/project_dir
+```
+
+The hub automatically reads `flic_config.yaml` from the selected project directory and shows the appropriate controls for the experiment type. If a `scripts:` section is present in the config, a dropdown and **Run Script** button appear in the Load group (see [Section 4](#4-scripts--automated-hub-pipelines-scripts)).
 
 ### `pyflic`
 
@@ -275,7 +415,7 @@ pyflic-qc /path/to/project_dir
 
 ---
 
-## 5. Python API
+## 6. Python API
 
 ### Loading an experiment
 
@@ -399,9 +539,23 @@ dfm.plot_cumulative_licks()        # cumulative lick count plot
 
 ---
 
-## 6. Typical workflows
+## 7. Typical workflows
 
-### Workflow A — Full analysis from scratch
+### Workflow A — One-click analysis with a script
+
+The fastest path once your config is set up:
+
+1. Add a `scripts:` section to `flic_config.yaml` (see [Section 4](#4-scripts--automated-hub-pipelines-scripts)).
+2. Open the hub:
+   ```bash
+   pyflic-hub /path/to/project_dir
+   ```
+3. Select the script from the dropdown in the **Load** group.
+4. Click **Run Script** — the hub loads the experiment, runs all analysis steps, writes outputs to `analysis/`, and opens each plot in its own window.
+
+---
+
+### Workflow B — Full analysis from scratch
 
 ```bash
 # 1. Create the config file with the GUI
@@ -424,7 +578,7 @@ pyflic-qc /path/to/project_dir
 
 ---
 
-### Workflow B — Custom analysis in a notebook
+### Workflow C — Custom analysis in a notebook
 
 ```python
 from pyflic import load_experiment_yaml
@@ -452,7 +606,7 @@ fig = exp.plot_binned_licks_by_treatment(binned)
 
 ---
 
-### Workflow C — QC only
+### Workflow D — QC only
 
 If you want to inspect data quality before running a full analysis:
 
@@ -467,7 +621,7 @@ pyflic-qc /path/to/project_dir
 
 ---
 
-## 7. Jupyter notebooks
+## 8. Jupyter notebooks
 
 The `doc/` directory contains a series of tutorial notebooks. Work through them in order for a complete introduction, or jump to the one that matches your experiment type.
 
