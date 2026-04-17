@@ -88,6 +88,28 @@ _METRIC_DEFAULT_MODE: dict[str, str] = {
 # Helpers
 # ---------------------------------------------------------------------------
 
+def _is_deleted(widget) -> bool:
+    """Return True if the underlying C++ object has been destroyed."""
+    try:
+        widget.objectName()
+        return False
+    except RuntimeError:
+        return True
+
+
+def _is_child_of(widget, parent) -> bool:
+    """Walk up the widget tree to check parentage."""
+    try:
+        w = widget.parentWidget()
+        while w is not None:
+            if w is parent:
+                return True
+            w = w.parentWidget()
+    except RuntimeError:
+        return True
+    return False
+
+
 def _parse_scripts(cfg: dict) -> list[dict]:
     """Return list of script dicts from YAML config, or [] if none defined."""
     raw = cfg.get("scripts") or []
@@ -477,6 +499,13 @@ class AnalysisHubWindow(QMainWindow):
 
     def _rebuild_dynamic_groups(self, exp_type: str | None, chamber_size: int | None) -> None:
         self._data_buttons.clear()
+        # Purge load_buttons that live inside the dynamic groups (they'll be
+        # re-created below).  Keep only buttons whose C++ side is still alive
+        # AND whose parent is NOT the Analyze or Plots group box.
+        self._load_buttons = [
+            b for b in self._load_buttons
+            if not _is_deleted(b) and not _is_child_of(b, self._grp_analyze)
+        ]
         self._rebuild_grp_analyze(exp_type, chamber_size)
         self._rebuild_grp_plots(exp_type, chamber_size)
         self._update_data_buttons()
@@ -1156,22 +1185,15 @@ class AnalysisHubWindow(QMainWindow):
         except ValueError:
             QMessageBox.warning(self, "Bad input", "Values must be numeric")
             return
-        metric, ok = QInputDialog.getText(
-            self, "Parameter sensitivity",
-            "Metric to track (e.g. Events, MedDuration):", text="Events",
-        )
-        if not ok or not metric.strip():
-            return
 
         def task() -> list[tuple[str, bytes]]:
             from .analytics import parameter_sensitivity
             exp = self._load_exp()
             res = parameter_sensitivity(
                 exp, parameter=param, values=values,
-                metric=metric.strip(), two_well_mode="total",
                 range_minutes=rm,
             )
-            out = exp.analysis_dir / f"param_sensitivity_{param}_{metric.strip()}.csv"
+            out = exp.analysis_dir / f"param_sensitivity_{param}.csv"
             out.parent.mkdir(parents=True, exist_ok=True)
             res.grid.to_csv(out, index=False)
             print(f"Wrote: {out}\n{res.grid.to_string(index=False)}", flush=True)
@@ -1503,15 +1525,12 @@ class AnalysisHubWindow(QMainWindow):
                     from .analytics import parameter_sensitivity
                     param = str(step.get("parameter", "feeding_event_link_gap"))
                     values = step.get("values") or []
-                    metric = str(step.get("metric", "Events"))
-                    mode = str(step.get("mode", "total"))
                     res = parameter_sensitivity(
                         e, parameter=param,
                         values=[float(v) for v in values],
-                        metric=metric, two_well_mode=mode,
                         range_minutes=rm,
                     )
-                    out = e.analysis_dir / f"param_sensitivity_{param}_{metric}.csv"
+                    out = e.analysis_dir / f"param_sensitivity_{param}.csv"
                     out.parent.mkdir(parents=True, exist_ok=True)
                     res.grid.to_csv(out, index=False)
                     print(f"Wrote: {out}\n{res.grid.to_string(index=False)}", flush=True)

@@ -106,17 +106,18 @@ def lint_flic_config(path: str | Path) -> list[LintIssue]:
         return issues
 
     # Top-level keys
-    expected_top = {"global", "dfms", "DFMs", "scripts", "data_dir"}
+    expected_top = {"global", "dfms", "DFMs", "scripts"}
     for k in cfg.keys():
-        if k not in expected_top:
+        if k == "data_dir":
+            _emit(
+                issues,
+                "warning",
+                "'data_dir' is no longer used and should be removed; "
+                "data is always read from project_dir/data/",
+                path="data_dir",
+            )
+        elif k not in expected_top:
             _emit(issues, "warning", f"unknown top-level key {k!r}", path=k)
-    if "data_dir" in cfg:
-        _emit(
-            issues,
-            "warning",
-            "'data_dir' is ignored by the loader; data is always read from project_dir/data",
-            path="data_dir",
-        )
 
     g = cfg.get("global") or {}
     if g and not isinstance(g, dict):

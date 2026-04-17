@@ -690,18 +690,6 @@ class FLICConfigEditor(QMainWindow):
         self._exp_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         self._exp_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
 
-        dir_row = QWidget()
-        dir_layout = QHBoxLayout(dir_row)
-        dir_layout.setContentsMargins(0, 0, 0, 0)
-        self._data_dir_edit = QLineEdit()
-        self._data_dir_edit.setPlaceholderText("e.g. ./flic  (relative to config file)")
-        browse_btn = QPushButton("Browse…")
-        browse_btn.setMaximumWidth(90)
-        browse_btn.clicked.connect(self._browse_data_dir)
-        dir_layout.addWidget(self._data_dir_edit, stretch=1)
-        dir_layout.addWidget(browse_btn)
-        self._exp_form.addRow("Data Directory:", dir_row)
-
         self._chamber_size_combo = QComboBox()
         self._chamber_size_combo.addItems(["1  (single-well, 12 chambers)", "2  (two-well, 6 chambers)"])
         self._chamber_size_combo.setCurrentIndex(1)
@@ -898,22 +886,12 @@ class FLICConfigEditor(QMainWindow):
                     )
                 break
 
-    def _browse_data_dir(self) -> None:
-        start = str(Path.cwd())
-        d = QFileDialog.getExistingDirectory(self, "Select Data Directory", start)
-        if d:
-            self._data_dir_edit.setText(d)
-
     # ------------------------------------------------------------------
     # YAML serialisation / deserialisation
     # ------------------------------------------------------------------
 
     def _collect_yaml(self) -> dict[str, Any]:
         cfg: dict[str, Any] = {}
-
-        data_dir = self._data_dir_edit.text().strip()
-        if data_dir:
-            cfg["data_dir"] = data_dir
 
         global_params = self._global_params.get_values()
         global_params["chamber_size"] = self._chamber_size()
@@ -967,8 +945,6 @@ class FLICConfigEditor(QMainWindow):
         return cfg
 
     def _populate_from_yaml(self, cfg: dict[str, Any]) -> None:
-        self._data_dir_edit.setText(str(cfg.get("data_dir", "")))
-
         global_cfg = cfg.get("global", {}) or {}
         global_params_raw = global_cfg.get("params", global_cfg.get("parameters", {})) or {}
         chamber_size = int(global_params_raw.get("chamber_size", 2))
@@ -1043,7 +1019,6 @@ class FLICConfigEditor(QMainWindow):
     def _new(self) -> None:
         self._current_path = None
         self.setWindowTitle("FLIC Config Editor")
-        self._data_dir_edit.clear()
         self._well_a_edit.clear()
         self._well_b_edit.clear()
         self._min_raw_licks_edit.clear()

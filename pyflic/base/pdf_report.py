@@ -3,10 +3,10 @@ Single-file PDF report for an Experiment.
 
 Combines:
   - Summary text (experiment type, DFMs, range, filters)
-  - Treatment-level feeding summary table
+  - Treatment-level feeding summary table (key metrics only)
   - Feeding summary plot(s)
-  - Binned licks plot
-  - Tukey HSD output (if statsmodels present and comparison requested)
+  - Binned metric plots
+  - ANOVA / Tukey HSD output (when requested)
 
 Uses matplotlib's ``PdfPages`` so no extra dependency is needed.
 """
@@ -23,6 +23,41 @@ from matplotlib.backends.backend_pdf import PdfPages
 from .experiment import Experiment
 
 
+# Key columns to show in the PDF table (in display order).
+# Columns not present in the DataFrame are silently skipped.
+_TWO_WELL_COLS = [
+    "DFM", "Chamber", "Treatment",
+    "PI", "EventPI",
+    "LicksA", "LicksB",
+    "EventsA", "EventsB",
+    "MedDurationA", "MedDurationB",
+]
+_SINGLE_WELL_COLS = [
+    "DFM", "Chamber", "Treatment",
+    "Licks", "Events",
+    "MedDuration", "MeanInt",
+    "MedTimeBtw",
+]
+
+
+def _slim_summary(df: pd.DataFrame) -> pd.DataFrame:
+    """Select only the most useful columns for PDF display."""
+    # Try two-well columns first, fall back to single-well
+    for candidate in (_TWO_WELL_COLS, _SINGLE_WELL_COLS):
+        cols = [c for c in candidate if c in df.columns]
+        if len(cols) >= 4:
+            # Also include any design-factor columns that come after Treatment
+            if "Treatment" in df.columns:
+                trt_idx = list(df.columns).index("Treatment")
+                extra = [
+                    c for c in df.columns[trt_idx + 1:]
+                    if c not in cols and df[c].dtype == object
+                ]
+                cols = cols[:3] + extra + cols[3:]
+            return df[cols]
+    return df
+
+
 def _text_page(pdf: PdfPages, title: str, body: str) -> None:
     fig, ax = plt.subplots(figsize=(8.5, 11))
     ax.axis("off")
@@ -32,36 +67,71 @@ def _text_page(pdf: PdfPages, title: str, body: str) -> None:
     plt.close(fig)
 
 
-def _table_page(pdf: PdfPages, title: str, df: pd.DataFrame, max_rows: int = 45) -> None:
+def _table_page(
+    pdf: PdfPages,
+    title: str,
+    df: pd.DataFrame,
+    max_rows: int = 50,
+) -> None:
     if df.empty:
         _text_page(pdf, title, "(no rows)")
         return
-    show = df.head(max_rows)
-    fig, ax = plt.subplots(figsize=(11, 8.5))
+
+    show = df.head(max_rows).copy()
+    # Round numeric columns for readability
+    for c in show.select_dtypes(include="number").columns:
+        show[c] = show[c].round(3)
+
+    n_cols = len(show.columns)
+    # Scale font and page orientation based on column count
+    landscape = n_cols > 8
+    figsize = (11, 8.5) if landscape else (8.5, 11)
+    fontsize = max(5.0, min(8.0, 80.0 / n_cols))
+
+    fig, ax = plt.subplots(figsize=figsize)
     ax.axis("off")
-    ax.set_title(title, fontsize=14, fontweight="bold", loc="left")
+    ax.set_title(title, fontsize=12, fontweight="bold", loc="left", pad=12)
+
     tbl = ax.table(
-        cellText=show.round(3).astype(str).values,
+        cellText=show.astype(str).values,
         colLabels=list(show.columns),
-        loc="center",
-        cellLoc="left",
+        loc="upper center",
+        cellLoc="center",
     )
     tbl.auto_set_font_size(False)
-    tbl.set_fontsize(7)
-    tbl.scale(1.0, 1.25)
+    tbl.set_fontsize(fontsize)
+    tbl.auto_set_column_width(list(range(n_cols)))
+    tbl.scale(1.0, 1.2)
+
+    # Style header row
+    for j in range(n_cols):
+        cell = tbl[0, j]
+        cell.set_text_props(fontweight="bold")
+        cell.set_facecolor("#d9e2f3")
+
     if len(df) > max_rows:
         ax.text(
-            0.02, 0.02,
-            f"... {len(df) - max_rows} more row(s) omitted",
-            fontsize=8, style="italic",
+            0.5, 0.01,
+            f"... {len(df) - max_rows} more row(s) omitted — see CSV for full data",
+            fontsize=7, style="italic", ha="center", transform=ax.transAxes,
         )
     pdf.savefig(fig, bbox_inches="tight")
     plt.close(fig)
 
 
+def _ggplot_to_mpl(fig_or_gg):
+    """Convert a plotnine ggplot to a matplotlib Figure, or return as-is."""
+    try:
+        from plotnine import ggplot
+        if isinstance(fig_or_gg, ggplot):
+            return fig_or_gg.draw()
+    except ImportError:
+        pass
+    return fig_or_gg
+
+
 def _figure_page(pdf: PdfPages, title: str, fig) -> None:
-    if hasattr(fig, "draw"):
-        fig = fig.draw()
+    fig = _ggplot_to_mpl(fig)
     if fig is None:
         return
     fig.suptitle(title, fontsize=14, fontweight="bold")
@@ -100,7 +170,7 @@ def write_experiment_report(
         summary_df = experiment.feeding_summary(
             range_minutes=range_minutes, transform_licks=transform_licks,
         )
-        _table_page(pdf, "Feeding summary (per chamber)", summary_df)
+        _table_page(pdf, "Feeding summary (key metrics)", _slim_summary(summary_df))
 
         # Feeding summary plot
         try:

@@ -116,9 +116,13 @@ def test_light_phase_summary_has_two_phases(experiment):
 def test_parameter_sensitivity_grid(experiment):
     res = parameter_sensitivity(
         experiment, parameter="feeding_event_link_gap",
-        values=[0, 5, 20], metric="Events", two_well_mode="total",
+        values=[0, 5, 20],
     )
-    assert {"feeding_event_link_gap", "Group", "n", "mean"}.issubset(res.grid.columns)
+    assert {"feeding_event_link_gap", "Group", "n_chambers"}.issubset(res.grid.columns)
+    # All three metrics should appear as mean/sem columns
+    for m in ("Licks", "Events", "MedDuration"):
+        assert f"mean_{m}" in res.grid.columns, f"missing mean_{m}"
+        assert f"sem_{m}" in res.grid.columns, f"missing sem_{m}"
     # 3 values × at least 1 group → ≥3 rows
     assert len(res.grid) >= 3
 

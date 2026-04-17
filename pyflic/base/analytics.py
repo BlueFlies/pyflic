@@ -416,22 +416,44 @@ _SUPPORTED_SWEEP_PARAMS = {
 }
 
 
+_SENSITIVITY_METRICS = ("Licks", "Events", "MedDuration")
+
+
+def _resolve_metric_col(
+    df: pd.DataFrame, metric: str, chamber_size: int,
+) -> pd.Series:
+    """Return per-row values for *metric*, summing A+B for two-well Licks/Events."""
+    if metric in df.columns:
+        return df[metric]
+    a_col, b_col = f"{metric}A", f"{metric}B"
+    if a_col in df.columns and b_col in df.columns:
+        if metric == "MedDuration":
+            return df[a_col]
+        return df[a_col] + df[b_col]
+    return pd.Series(float("nan"), index=df.index)
+
+
 def parameter_sensitivity(
     experiment: Experiment,
     *,
     parameter: str,
     values: Sequence[float],
-    metric: str = "Events",
-    two_well_mode: str = "total",
     range_minutes: Sequence[float] = (0, 0),
     transform_licks: bool = True,
 ) -> SensitivityResult:
     """
-    Sweep *parameter* across *values*, recompute each DFM and aggregate
-    *metric* per treatment.
+    Sweep *parameter* across *values*, recompute each DFM and report
+    Licks, Events, and MedDuration per treatment group.
+
+    Output columns (per metric M in {Licks, Events, MedDuration}):
+      - ``mean_M`` — mean of per-chamber M across chambers in the group
+      - ``sem_M``  — standard error of that mean
+
+    For two-well experiments, Licks and Events are summed across wells
+    (A+B) while MedDuration uses well A only.
 
     This is **expensive** — each value re-runs the per-well feeding/tasting
-    pipeline.  Sweep over a handful of values (e.g. 5–10), not hundreds.
+    pipeline.  Sweep over a handful of values (e.g. 5-10), not hundreds.
     """
     if parameter not in _SUPPORTED_SWEEP_PARAMS:
         raise ValueError(
@@ -440,16 +462,14 @@ def parameter_sensitivity(
 
     rows: list[dict[str, Any]] = []
     base_dfms = dict(experiment.dfms)
+    chamber_size = next(iter(base_dfms.values())).params.chamber_size if base_dfms else 2
 
     for v in values:
-        # Build per-DFM with overridden parameter
         new_dfms: dict[int, DFM] = {}
         for dfm_id, dfm in base_dfms.items():
             new_params = dfm.params.with_updates(**{parameter: type(getattr(dfm.params, parameter))(v)})
             new_dfms[dfm_id] = dfm.with_params(new_params)
 
-        # Build a temporary experiment with the same design but new DFMs
-        # so cached methods aren't reused.
         from copy import copy
         tmp_exp = copy(experiment)
         tmp_exp.dfms = new_dfms
@@ -461,38 +481,22 @@ def parameter_sensitivity(
         if df.empty:
             continue
         df, group_col = tmp_exp._resolve_group_col(df)
-        if metric not in df.columns:
-            a_col, b_col = f"{metric}A", f"{metric}B"
-            if a_col in df.columns and b_col in df.columns:
-                if two_well_mode == "A":
-                    df = df.assign(_metric=df[a_col])
-                elif two_well_mode == "B":
-                    df = df.assign(_metric=df[b_col])
-                elif two_well_mode == "total":
-                    df = df.assign(_metric=df[a_col] + df[b_col])
-                elif two_well_mode == "diff":
-                    df = df.assign(_metric=df[a_col] - df[b_col])
-                else:
-                    raise ValueError(f"two_well_mode {two_well_mode!r}")
-                value_col = "_metric"
-            else:
-                raise ValueError(f"metric {metric!r} not present")
-        else:
-            value_col = metric
         for grp, sub in df.groupby(group_col):
-            v_arr = sub[value_col].dropna().to_numpy(dtype=float)
-            n = v_arr.size
-            rows.append({
+            row: dict[str, Any] = {
                 parameter: float(v),
                 "Group": grp,
-                "n": int(n),
-                "mean": float(v_arr.mean()) if n else float("nan"),
-                "sem": float(v_arr.std(ddof=1) / np.sqrt(n)) if n > 1 else float("nan"),
-            })
+                "n_chambers": int(len(sub)),
+            }
+            for m in _SENSITIVITY_METRICS:
+                vals = _resolve_metric_col(sub, m, chamber_size).dropna().to_numpy(dtype=float)
+                n = vals.size
+                row[f"mean_{m}"] = float(vals.mean()) if n else float("nan")
+                row[f"sem_{m}"] = float(vals.std(ddof=1) / np.sqrt(n)) if n > 1 else float("nan")
+            rows.append(row)
 
     return SensitivityResult(
         parameter=parameter,
-        metric=metric,
+        metric="Licks, Events, MedDuration",
         grid=pd.DataFrame(rows),
     )
 
