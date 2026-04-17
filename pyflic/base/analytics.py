@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Literal, Sequence
+from typing import Any, Literal, Sequence
 
 import numpy as np
 import pandas as pd
@@ -238,9 +238,15 @@ def compare_treatments(
 
     Lazy-imports ``statsmodels`` so the rest of pyflic works without it.
     """
-    import statsmodels.api as sm
-    import statsmodels.formula.api as smf
-    from statsmodels.stats.multicomp import pairwise_tukeyhsd
+    try:
+        import statsmodels.api as sm
+        import statsmodels.formula.api as smf
+        from statsmodels.stats.multicomp import pairwise_tukeyhsd
+    except ImportError as exc:
+        raise RuntimeError(
+            "compare_treatments requires statsmodels. "
+            "Install it with: pip install statsmodels"
+        ) from exc
 
     df = experiment.feeding_summary(
         range_minutes=range_minutes, transform_licks=transform_licks,
@@ -303,14 +309,23 @@ def compare_treatments(
         raise ValueError(f"model must be 'aov' or 'lmm', got {model!r}")
 
     posthoc_df: pd.DataFrame | None = None
-    if posthoc == "tukey" and len(factors) == 1:
-        try:
-            tuk = pairwise_tukeyhsd(df["Y"].to_numpy(dtype=float), df[factors[0]])
-            posthoc_df = pd.DataFrame(
-                data=tuk.summary().data[1:], columns=tuk.summary().data[0]
+    if posthoc == "tukey":
+        if len(factors) == 1:
+            try:
+                tuk = pairwise_tukeyhsd(df["Y"].to_numpy(dtype=float), df[factors[0]])
+                posthoc_df = pd.DataFrame(
+                    data=tuk.summary().data[1:], columns=tuk.summary().data[0]
+                )
+            except Exception as exc:  # pragma: no cover
+                posthoc_df = pd.DataFrame({"warning": [str(exc)]})
+        else:
+            import warnings
+            warnings.warn(
+                f"Tukey HSD posthoc is only supported for single-factor models, "
+                f"but {len(factors)} factors were specified ({', '.join(factors)}). "
+                f"Skipping posthoc — use single-factor subsets or manual contrasts.",
+                stacklevel=2,
             )
-        except Exception as exc:  # pragma: no cover
-            posthoc_df = pd.DataFrame({"warning": [str(exc)]})
 
     return ComparisonResult(
         metric=metric,
@@ -334,9 +349,14 @@ def light_phase_summary(
     """
     Per-chamber feeding metrics split by **light vs dark** phase.
 
-    A sample is "light" iff ``OptoCol1 != 0`` in the DFM's ``lights_df``.
-    Returns one row per (DFM, Chamber, Phase) with Licks, Events,
-    MedDuration (and the A/B variants for two-well).
+    Phase assignment is **global per DFM row**: a sample is classified as
+    "light" iff ``OptoCol1 != 0`` at that time point.  This treats the
+    opto signal as a room-level (or DFM-level) synchronization flag, not
+    a per-well bitmask.  If your hardware encodes independent per-well
+    light states, decode ``lights_df["W{n}"]`` columns instead.
+
+    Returns one row per (DFM, Chamber, Phase) with Licks, Events
+    (and the A/B variants for two-well).
     """
     rows: list[dict[str, Any]] = []
     chamber_to_treatment: dict[tuple[int, int], str] = {}
@@ -419,10 +439,14 @@ _SUPPORTED_SWEEP_PARAMS = {
 _SENSITIVITY_METRICS = ("Licks", "Events", "MedDuration")
 
 
-def _resolve_metric_col(
-    df: pd.DataFrame, metric: str, chamber_size: int,
-) -> pd.Series:
-    """Return per-row values for *metric*, summing A+B for two-well Licks/Events."""
+def _resolve_metric_col(df: pd.DataFrame, metric: str) -> pd.Series:
+    """Return per-row values for *metric*.
+
+    For single-well DataFrames the column is used directly.  For two-well
+    DataFrames (where ``Licks`` is split into ``LicksA`` / ``LicksB``):
+    - Licks and Events are summed across wells (A+B).
+    - MedDuration uses well A only (summing medians is not meaningful).
+    """
     if metric in df.columns:
         return df[metric]
     a_col, b_col = f"{metric}A", f"{metric}B"
@@ -462,7 +486,6 @@ def parameter_sensitivity(
 
     rows: list[dict[str, Any]] = []
     base_dfms = dict(experiment.dfms)
-    chamber_size = next(iter(base_dfms.values())).params.chamber_size if base_dfms else 2
 
     for v in values:
         new_dfms: dict[int, DFM] = {}
@@ -488,7 +511,7 @@ def parameter_sensitivity(
                 "n_chambers": int(len(sub)),
             }
             for m in _SENSITIVITY_METRICS:
-                vals = _resolve_metric_col(sub, m, chamber_size).dropna().to_numpy(dtype=float)
+                vals = _resolve_metric_col(sub, m).dropna().to_numpy(dtype=float)
                 n = vals.size
                 row[f"mean_{m}"] = float(vals.mean()) if n else float("nan")
                 row[f"sem_{m}"] = float(vals.std(ddof=1) / np.sqrt(n)) if n > 1 else float("nan")
@@ -507,9 +530,14 @@ def parameter_sensitivity(
 
 def bout_transition_matrix(experiment: Experiment) -> pd.DataFrame:
     """
-    For two-well experiments, count **A→A, A→B, B→A, B→B** consecutive bout
-    transitions per chamber.  Returns a long DataFrame with columns:
-    ``DFM, Chamber, Treatment, FromWell, ToWell, Count``.
+    For two-well experiments, count consecutive bout transitions per chamber.
+
+    Transitions counted: A->A, A->B, B->A, B->B.  Returns a long
+    DataFrame with columns: ``DFM, Chamber, Treatment, FromWell, ToWell, Count``.
+
+    Bout starts from both wells are sorted by sample index.  When two
+    bouts start at the same sample (simultaneous feeding), well A is
+    ordered before well B by convention.
     """
     if not isinstance(experiment, TwoWellExperiment):
         raise ValueError("bout_transition_matrix requires a TwoWellExperiment")
@@ -598,8 +626,9 @@ def _compare_two_experiments(
     transform_licks: bool,
     range_minutes: Sequence[float],
 ) -> pd.DataFrame:
-    df_a = exp_a.feeding_summary(range_minutes=range_minutes, transform_licks=transform_licks)
-    df_b = exp_b.feeding_summary(range_minutes=range_minutes, transform_licks=transform_licks)
+    # Copy to avoid mutating the cached feeding summary DataFrames.
+    df_a = exp_a.feeding_summary(range_minutes=range_minutes, transform_licks=transform_licks).copy()
+    df_b = exp_b.feeding_summary(range_minutes=range_minutes, transform_licks=transform_licks).copy()
     if df_a.empty or df_b.empty:
         return pd.DataFrame()
 
@@ -608,20 +637,8 @@ def _compare_two_experiments(
 
     rows: list[dict[str, Any]] = []
     for metric in metrics:
-        for df, label, gcol in ((df_a, "a", gcol_a), (df_b, "b", gcol_b)):
-            if metric in df.columns:
-                df[f"_{metric}"] = df[metric]
-            else:
-                a_col, b_col = f"{metric}A", f"{metric}B"
-                if a_col in df.columns and b_col in df.columns:
-                    if two_well_mode == "total":
-                        df[f"_{metric}"] = df[a_col] + df[b_col]
-                    elif two_well_mode == "A":
-                        df[f"_{metric}"] = df[a_col]
-                    elif two_well_mode == "B":
-                        df[f"_{metric}"] = df[b_col]
-                    elif two_well_mode == "diff":
-                        df[f"_{metric}"] = df[a_col] - df[b_col]
+        for df in (df_a, df_b):
+            df[f"_{metric}"] = _resolve_metric_col(df, metric)
 
         groups = sorted(set(df_a[gcol_a]) | set(df_b[gcol_b]))
         for grp in groups:

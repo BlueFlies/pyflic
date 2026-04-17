@@ -22,6 +22,9 @@ import pandas as pd
 
 
 _CACHE_DIR_NAME = ".pyflic_cache"
+# Bump this when feeding-summary computation logic changes so stale caches
+# from prior releases are automatically invalidated.
+_CACHE_VERSION = "1"
 
 
 def _hash_bytes(b: bytes) -> str:
@@ -54,6 +57,7 @@ def feeding_summary_key(
 ) -> str:
     a, b = float(range_minutes[0]), float(range_minutes[1])
     parts = [
+        f"v{_CACHE_VERSION}",
         _config_hash(project_dir),
         _data_hash(project_dir),
         f"r{a:g}_{b:g}",

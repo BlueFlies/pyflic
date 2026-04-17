@@ -8,18 +8,22 @@ Source code: [https://github.com/PletcherLab/pyflic](https://github.com/Pletcher
 
 1. [What pyflic does](#1-what-pyflic-does)
 2. [Project directory layout](#2-project-directory-layout)
-3. [Configuration file (`flic_config.yaml`)](#3-configuration-file-flic_configyaml)
-4. [Scripts — automated hub pipelines (`scripts:`)](#4-scripts--automated-hub-pipelines-scripts)
-5. [Command-line tools](#5-command-line-tools)
-6. [Python API](#6-python-api)
-7. [Typical workflows](#7-typical-workflows)
-8. [Jupyter notebooks](#8-jupyter-notebooks)
+3. [How licks and events are calculated](#3-how-licks-and-events-are-calculated)
+4. [Configuration file (`flic_config.yaml`)](#4-configuration-file-flic_configyaml)
+5. [Scripts -- automated hub pipelines (`scripts:`)](#5-scripts----automated-hub-pipelines-scripts)
+6. [Command-line tools](#6-command-line-tools)
+7. [Graphical tools](#7-graphical-tools)
+8. [Python API](#8-python-api)
+9. [Advanced analytics](#9-advanced-analytics)
+10. [Performance and caching](#10-performance-and-caching)
+11. [Typical workflows](#11-typical-workflows)
+12. [Jupyter notebooks](#12-jupyter-notebooks)
 
 ---
 
 ## 1. What pyflic does
 
-pyflic analyzes data from **FLIC (Fly Liquid-food Interaction Counter)** experiments, which measure licking behavior in fruit flies using electrical signal data. It detects feeding and tasting bouts, generates quality-control reports, and produces publication-ready plots and summary tables.
+pyflic analyzes data from **FLIC (Fly Liquid-food Interaction Counter)** experiments, which measure licking behavior in fruit flies using electrical signal data. It detects feeding and tasting bouts, generates quality-control reports, and produces publication-ready plots, summary tables, and statistical comparisons.
 
 The main objects in pyflic map to the physical hardware:
 
@@ -35,17 +39,111 @@ pyflic expects one directory per experiment with the following structure:
 
 ```
 project_dir/
-  flic_config.yaml        ← required; defines experiment structure and parameters
-  data/                   ← DFM CSV files (one per DFM, named by device ID)
-  qc/                     ← written by pyflic after running QC (do not create manually)
-  analysis/               ← written by pyflic after running analysis (do not create manually)
+  flic_config.yaml        <-- required; defines experiment structure and parameters
+  data/                   <-- DFM CSV files (one per DFM, named by device ID)
+  qc/                     <-- written by pyflic after running QC (do not create manually)
+  analysis/               <-- written by pyflic after running analysis (do not create manually)
+  .pyflic_cache/          <-- auto-managed disk cache for feeding summaries (safe to delete)
 ```
+
+Data files must live in the `data/` subdirectory and follow one of these naming conventions:
+
+- **v3 format:** `DFM{id}_{segment}.csv` (e.g. `DFM1_0.csv`, `DFM1_1.csv`)
+- **v2 format:** `DFM_{id}.csv` or `DFM_{id}_{segment}.csv`
+
+Multi-segment experiments are stitched together automatically in filename order.
 
 ---
 
-## 3. Configuration file (`flic_config.yaml`)
+## 3. How licks and events are calculated
 
-The YAML config is the entry point for every experiment. It defines the experiment type, algorithm parameters, and how chambers are assigned to treatments. The easiest way to create one is with the `pyflic-config` GUI (see [Command-line tools](#4-command-line-tools)).
+When a DFM is loaded, pyflic runs the following signal processing pipeline automatically for every well. Understanding this pipeline is essential for choosing good parameter values and interpreting the output correctly.
+
+### Step 1: Load raw data
+
+Raw CSV files are read and concatenated if the experiment spans multiple segments. A `Minutes` column is computed from the elapsed time (using `Date`/`Time`/`MSec` columns or a pre-computed `Seconds` column).
+
+### Step 2: Baseline subtraction
+
+A **running median** is applied to each well's raw signal with a centered window defined by `baseline_window_minutes` (default 3 minutes, which equals 900 samples at 5 Hz). The baseline assumption is that feeding interactions in any given 3-minute window are sufficiently rare that the median of the signal over that window represents the background. The **baselined signal** is the raw signal minus this running median.
+
+This step corrects for:
+- Inter-DFM signal variation (different hardware, different food levels)
+- Slow signal drifts over time (e.g. food evaporation, well depletion)
+
+### Step 3: Compute per-well thresholds
+
+For each well, threshold values are derived from `feeding_threshold`, `feeding_minimum`, `tasting_minimum`, and `tasting_maximum`. When `feeding_threshold` is negative, it is interpreted as a fraction of the well's maximum baselined signal (adaptive thresholding). When positive, thresholds are fixed constants.
+
+### Step 4: Identify feeding licks and events
+
+This is the core detection pipeline, applied independently to each well:
+
+1. **Threshold crossing.** Each sample is compared against two thresholds:
+   - `feeding_minimum` (the lower threshold) -- marks a sample as a *candidate lick*
+   - `feeding_threshold` (the upper threshold) -- marks a sample as a *confirmed lick*
+
+2. **Surviving events.** Contiguous runs of candidate licks are identified. A run is retained as a **surviving event** only if at least one sample within it also crosses the upper `feeding_threshold`. This two-threshold approach prevents weak noise from being counted as feeding while still capturing the full duration of real feeding bouts (which may dip below `feeding_threshold` momentarily mid-bout).
+
+3. **Minimum event length.** Surviving events shorter than `feeding_minevents` samples are discarded. At 5 Hz, the default of 1 means even single-sample contacts are kept.
+
+4. **Event linking (the link gap).** After the initial event detection, short gaps *between* events are bridged. If two events are separated by a FALSE (non-lick) run of `feeding_event_link_gap` or fewer samples, the gap is filled in and the two events merge into one. At the default of 5 samples (1 second at 5 Hz), brief interruptions mid-meal are ignored. Gaps at the very start or end of the recording are never bridged -- only interior gaps between two existing events are linked.
+
+5. **Final event extraction.** After linking, the merged boolean lick vector is scanned to produce the final event vector: each event is recorded as its start position and duration (in samples).
+
+The link gap parameter has a substantial effect on the number and duration of detected events. A larger gap merges more events, producing fewer but longer bouts. A smaller gap preserves short interruptions as separate events.
+
+### Step 5: Well A / Well B assignment (two-well experiments)
+
+The `pi_direction` parameter maps physical well positions to logical Well A / Well B labels. `pi_direction="left"` makes the left well (odd-numbered: W1, W3, W5, ...) Well A. `pi_direction="right"` reverses this, making the right well (even-numbered: W2, W4, W6, ...) Well A.
+
+Swapping `pi_direction` across DFMs while counterbalancing food positions ensures that a positive PI always indicates preference for Well A regardless of its physical location.
+
+### Step 6: Dual-feeding correction (two-well, optional)
+
+When `correct_for_dual_feeding` is enabled, pyflic detects samples where *both* wells in a chamber register feeding licks simultaneously. The baseline of the non-preferred well is adjusted to reduce the signal contributed by crosstalk, and the feeding detection pipeline is re-run on the corrected signal.
+
+### Step 7: Identify tasting licks
+
+Signals that fall between `tasting_minimum` and `tasting_maximum` and were *not* already classified as feeding licks are labelled tasting licks. Contiguous runs are grouped into tasting events subject to `tasting_minevents`.
+
+### Step 8: Compute PI (two-well experiments)
+
+The **Preference Index (PI)** is computed as:
+
+```
+PI = (LicksA - LicksB) / (LicksA + LicksB)
+```
+
+PI ranges from -1 (strong preference for Well B) to +1 (strong preference for Well A). An **Event PI** is computed similarly using event counts instead of lick counts.
+
+### Step 9: Compute durations and intervals
+
+For each feeding event, the following metrics are computed:
+- **Duration** (seconds): event length / `samples_per_second`
+- **Total intensity**: sum of baselined signal values within the event
+- **Average intensity**: mean signal within the event
+- **Max / min intensity**: peak and trough signal within the event
+
+Inter-event intervals (the time between consecutive events) are also computed and stored.
+
+### Step 10: Light state
+
+If the DFM CSV contains `OptoCol1` (and optionally `OptoCol2`) columns, the per-well light-on/off state is decoded from the bit-encoded values and stored in `lights_df`. This is used for light-on markers on cumulative lick plots and for the light-phase summary analysis.
+
+---
+
+## 4. Configuration file (`flic_config.yaml`)
+
+The YAML config is the entry point for every experiment. It defines the experiment type, algorithm parameters, and how chambers are assigned to treatments. The easiest way to create one is with the `pyflic config` GUI (see [Command-line tools](#6-command-line-tools)).
+
+You can validate a config file at any time:
+
+```bash
+pyflic lint /path/to/project_dir
+```
+
+The linter reports errors and warnings with line numbers when possible.
 
 ### Top-level structure
 
@@ -66,12 +164,14 @@ dfms:
   2:
     ...
 
-scripts:                                 # optional — see Section 4
+scripts:                                 # optional -- see Section 5
   - name: "My Pipeline"
     steps:
       - action: load
       - action: basic_analysis
 ```
+
+> **Note:** The `data_dir` key is no longer used. Data is always read from `project_dir/data/`. If an old config contains `data_dir`, the linter will flag it for removal.
 
 ---
 
@@ -102,31 +202,31 @@ Hard limits used during data validation. Chambers that exceed these thresholds a
 
 ### `global.params`
 
-Algorithm parameters used for bout detection. These are global defaults; any DFM-level `params` block overrides them for that device only.
+Algorithm parameters used for bout detection. These are global defaults; any DFM-level `params` block overrides them for that device only. See [Section 3](#3-how-licks-and-events-are-calculated) for how each parameter affects the detection pipeline.
 
 **Timing**
 
 | Key | Default | Description |
 |---|---|---|
-| `baseline_window_minutes` | `3` | Duration (minutes) of the rolling window used to compute baseline signal |
+| `baseline_window_minutes` | `3` | Duration (minutes) of the rolling median window for baseline subtraction |
 | `samples_per_second` | `5` | Hardware sampling rate in Hz |
 
 **Feeding detection**
 
 | Key | Default | Description |
 |---|---|---|
-| `feeding_threshold` | `10` | Signal rate threshold (counts/s) above which a sample is considered feeding |
-| `feeding_minimum` | `10` | Minimum duration (seconds) for a detected bout to be counted as feeding |
-| `feeding_minevents` | `1` | Minimum number of raw events within a bout window |
-| `feeding_event_link_gap` | `5` | Maximum gap (in samples) between events that can be bridged into one bout (~1 s at 5 Hz) |
+| `feeding_threshold` | `10` | Upper threshold: at least one sample in a candidate event must exceed this to be retained |
+| `feeding_minimum` | `10` | Lower threshold: samples above this are candidate licks |
+| `feeding_minevents` | `1` | Minimum event length in samples; shorter events are discarded |
+| `feeding_event_link_gap` | `5` | Maximum gap (in samples) between events that are bridged into one bout (~1 s at 5 Hz) |
 
 **Tasting detection**
 
 | Key | Default | Description |
 |---|---|---|
-| `tasting_minimum` | `0` | Minimum duration (seconds) for a taste bout |
-| `tasting_maximum` | `10` | Maximum duration (seconds); contacts longer than this are not counted as tasting |
-| `tasting_minevents` | `1` | Minimum raw events per taste bout |
+| `tasting_minimum` | `0` | Lower threshold for tasting licks |
+| `tasting_maximum` | `10` | Upper threshold; contacts above this are feeding, not tasting |
+| `tasting_minevents` | `1` | Minimum samples per tasting event |
 
 **Hardware / experiment design**
 
@@ -163,11 +263,6 @@ Human-readable labels for the wells within each chamber, used in plots and repor
 well_names:
   A: Sucrose
   B: Yeast
-
-# Single-well (chamber_size: 1)
-well_names:
-  1: Water
-  2: 10 mM Sucrose
 ```
 
 ---
@@ -182,8 +277,9 @@ dfms:
     params:
       pi_direction: left      # override global param for this DFM only
     chambers:
-      1: Paired,WCS           # chamber 1 → Paired genotype WCS
-      2: Unpaired,WCS         # chamber 2 → Unpaired genotype WCS
+      1: Paired,WCS           # chamber 1: Paired genotype WCS
+      2: Unpaired,WCS         # chamber 2: Unpaired genotype WCS
+    excluded_chambers: [3]     # optional: exclude chamber 3 from analysis
   2:
     params: {}                # no overrides; inherits all global params
     chambers:
@@ -193,6 +289,7 @@ dfms:
 
 - The `params` block accepts the same keys as `global.params` and takes precedence over global defaults for that DFM.
 - The `chambers` block maps chamber index to treatment name (or comma-separated factor levels if `experimental_design_factors` is defined).
+- `excluded_chambers` is an optional list of chamber indices to exclude. This is typically managed via the QC viewer GUI, which writes the exclusion state back to the YAML file automatically.
 
 ---
 
@@ -242,100 +339,11 @@ dfms:
 
 ---
 
-## 4. Scripts — automated hub pipelines (`scripts:`)
+## 5. Scripts -- automated hub pipelines (`scripts:`)
 
-The optional `scripts:` key in `flic_config.yaml` lets you define named analysis pipelines that run in a single click from the **pyflic-hub** GUI. When at least one script is defined, a dropdown and **Run Script** button appear in the Load group of the hub.
+The optional `scripts:` key in `flic_config.yaml` lets you define named analysis pipelines that run in a single click from the **pyflic hub** GUI. When at least one script is defined, a dropdown and **Run Script** button appear in the Load group of the hub.
 
 ### Structure
-
-```yaml
-scripts:
-  - name: "Standard Analysis"       # label shown in the hub dropdown
-    start: 0                        # optional — default start minute for all steps
-    end: 0                          # optional — 0 means end of recording
-    steps:
-      - action: load
-      - action: basic_analysis
-      - action: feeding_csv
-      - action: binned_csv
-        binsize: 30
-      - action: plot_feeding_summary
-      - action: plot_binned
-        metric: Licks
-        mode: total
-        binsize: 30
-      - action: plot_dot
-        metric: PI
-
-  - name: "Quick Plots"
-    steps:
-      - action: load
-      - action: plot_feeding_summary
-      - action: plot_dot
-        metric: Licks
-      - action: plot_dot
-        metric: PI
-```
-
-Each script is a named list of **steps**. Every step has an `action:` key plus optional parameters. Steps execute in order; they all share the experiment loaded by the first `load` step (or auto-loaded on first use if no `load` step appears).
-
----
-
-### Parameter resolution order
-
-For each step, parameter values are resolved in this order:
-
-1. **Per-step value** — set directly on the step (e.g. `binsize: 30`)
-2. **Script-level default** — `start:` / `end:` set at the script level
-3. **UI value** — the spinbox / control value currently shown in the hub
-
----
-
-### Supported actions
-
-| `action:` | Parameters | Experiment type |
-|---|---|---|
-| `load` | `start`, `end`, `parallel` | all |
-| `basic_analysis` | `start`, `end` | all |
-| `feeding_csv` | `start`, `end` | all |
-| `binned_csv` | `start`, `end`, `binsize` | all |
-| `weighted_duration` | `start`, `end` | hedonic only |
-| `plot_feeding_summary` | `start`, `end` | all |
-| `plot_binned` | `metric`, `mode`, `binsize`, `start`, `end` | all |
-| `plot_dot` | `metric`, `mode`, `start`, `end` | all |
-| `plot_well_comparison` | `metric`, `start`, `end` | two-well only |
-| `plot_hedonic` | `start`, `end` | hedonic only |
-| `plot_breaking_point` | `config` (1–4), `start`, `end` | progressive_ratio only |
-
-Actions that require a specific experiment type (e.g. `plot_hedonic` on a two-well experiment) are skipped with a log message rather than raising an error. Unknown action names are also skipped.
-
----
-
-### `plot_binned` and `plot_dot` — `metric` and `mode`
-
-`metric` names for **two-well** experiments:
-`Licks`, `PI`, `EventPI`, `LicksA`, `LicksB`, `Events`, `MedDuration`, `MedDurationA`, `MedDurationB`, `MeanDuration`, `MedTimeBtw`
-
-`metric` names for **single-well** experiments:
-`Licks`, `Events`, `MedDuration`, `MeanDuration`, `MedTimeBtw`, `MeanInt`, `MedianInt`
-
-`mode` is optional. When omitted, a sensible default is chosen automatically:
-- Metrics ending in `A` → `A`
-- Metrics ending in `B` → `B`
-- Duration / interval metrics without a suffix → `mean_ab`
-- `Licks`, `Events`, `PI` without a suffix → `total`
-
-Valid `mode` values: `total`, `mean_ab`, `A`, `B`
-
----
-
-### `plot_well_comparison` — `metric`
-
-Valid `metric` names: `MedDuration`, `MeanDuration`, `Licks`, `MedTimeBtw`, `MeanTimeBtw`, `MeanInt`, `MedianInt`
-
----
-
-### Example
 
 ```yaml
 scripts:
@@ -353,69 +361,221 @@ scripts:
         metric: Licks
         mode: total
         binsize: 30
-      - action: plot_binned
-        metric: PI
       - action: plot_dot
-        metric: MedDuration
-      - action: plot_well_comparison
-        metric: MedDuration
+        metric: PI
+      - action: pdf_report
 ```
 
-After this script runs, all CSVs and PNG files are written to the `analysis/` subdirectory and each plot opens in its own window.
+Each script is a named list of **steps**. Every step has an `action:` key plus optional parameters. Steps execute in order; they all share the experiment loaded by the first `load` step (or auto-loaded on first use if no `load` step appears).
 
 ---
 
-## 5. Command-line tools
+### Parameter resolution order
 
-Three tools are installed with pyflic.
+For each step, parameter values are resolved in this order:
 
-### `pyflic-hub`
-
-Opens the graphical Analysis Hub (PyQt6) — the primary interactive interface for running analyses and generating plots without writing Python. Accepts an optional project directory as an argument.
-
-```bash
-pyflic-hub /path/to/project_dir
-```
-
-The hub automatically reads `flic_config.yaml` from the selected project directory and shows the appropriate controls for the experiment type. If a `scripts:` section is present in the config, a dropdown and **Run Script** button appear in the Load group (see [Section 4](#4-scripts--automated-hub-pipelines-scripts)).
-
-### `pyflic`
-
-Prints a summary of available commands and the Python API. Takes no arguments.
-
-```bash
-pyflic
-```
-
-### `pyflic-config`
-
-Opens a graphical configuration editor (PyQt6) for creating and editing `flic_config.yaml`. Automatically loads an existing config if one is present in the current directory.
-
-```bash
-pyflic-config
-```
-
-Use this before running any analysis to set up experiment structure, chamber assignments, and parameter values without editing YAML by hand.
-
-### `pyflic-qc`
-
-Opens an interactive QC viewer (PyQt6) for a project that has already had QC reports computed. Displays one tab per DFM with:
-
-- **Integrity report** — per-chamber validation results
-- **Data breaks** — detected time gaps in the raw signal
-- **Simultaneous feeding matrix** — which wells are licked at the same time (two-well only)
-- **Bleeding check** — cross-well signal contamination
-- **Signal plots** — raw, baselined, and cumulative lick plots
-
-```bash
-pyflic-qc /path/to/project_dir
-```
-
-> QC reports must be computed first (via `exp.write_qc_reports()` in Python or `execute_basic_analysis()`). The viewer reads pre-computed files from `project_dir/qc/` and does not reload raw data.
+1. **Per-step value** -- set directly on the step (e.g. `binsize: 30`)
+2. **Script-level default** -- `start:` / `end:` set at the script level
+3. **UI value** -- the spinbox / control value currently shown in the hub
 
 ---
 
-## 6. Python API
+### Supported actions
+
+#### Core actions
+
+| `action:` | Parameters | Experiment type |
+|---|---|---|
+| `load` | `start`, `end`, `parallel` | all |
+| `basic_analysis` | `start`, `end` | all |
+| `feeding_csv` | `start`, `end` | all |
+| `binned_csv` | `start`, `end`, `binsize` | all |
+| `weighted_duration` | `start`, `end` | hedonic only |
+| `plot_feeding_summary` | `start`, `end` | all |
+| `plot_binned` | `metric`, `mode`, `binsize`, `start`, `end` | all |
+| `plot_dot` | `metric`, `mode`, `start`, `end` | all |
+| `plot_well_comparison` | `metric`, `start`, `end` | two-well only |
+| `plot_hedonic` | `start`, `end` | hedonic only |
+| `plot_breaking_point` | `config` (1--4), `start`, `end` | progressive_ratio only |
+
+#### Advanced analytics actions
+
+| `action:` | Parameters | Description |
+|---|---|---|
+| `tidy_export` | `kind` (`feeding` or `tasting`) | Write a long-format CSV with one row per bout |
+| `bootstrap` | `metric`, `mode`, `n_boot`, `ci`, `seed` | Write bootstrap confidence intervals per treatment |
+| `compare` | `metric`, `mode`, `model` (`aov` or `lmm`), `factors` | Run ANOVA or linear mixed model with optional Tukey HSD posthoc |
+| `light_phase_summary` | | Write per-chamber feeding stats split by light/dark phase |
+| `param_sensitivity` | `parameter`, `values` | Sweep a parameter and report Licks, Events, MedDuration per treatment |
+| `transition_matrix` | | Write A/B bout transition counts per chamber (two-well only) |
+| `pdf_report` | `metrics`, `binsize` | Generate a PDF combining summary, plots, and statistics |
+
+Actions that require a specific experiment type are skipped with a log message rather than raising an error.
+
+---
+
+### `plot_binned` and `plot_dot` -- `metric` and `mode`
+
+`metric` names for **two-well** experiments:
+`Licks`, `PI`, `EventPI`, `LicksA`, `LicksB`, `Events`, `MedDuration`, `MedDurationA`, `MedDurationB`, `MeanDuration`, `MedTimeBtw`
+
+`metric` names for **single-well** experiments:
+`Licks`, `Events`, `MedDuration`, `MeanDuration`, `MedTimeBtw`, `MeanInt`, `MedianInt`
+
+`mode` is optional. When omitted, a sensible default is chosen automatically. Valid `mode` values: `total`, `mean_ab`, `A`, `B`
+
+---
+
+### Example with advanced analytics
+
+```yaml
+scripts:
+  - name: "Full Pipeline with Stats"
+    steps:
+      - action: load
+      - action: basic_analysis
+      - action: feeding_csv
+      - action: tidy_export
+      - action: compare
+        metric: MedDuration
+        model: aov
+      - action: bootstrap
+        metric: PI
+        n_boot: 5000
+        ci: 0.95
+      - action: light_phase_summary
+      - action: param_sensitivity
+        parameter: feeding_event_link_gap
+        values: [0, 2, 5, 10, 15, 20]
+      - action: transition_matrix
+      - action: pdf_report
+```
+
+---
+
+## 6. Command-line tools
+
+pyflic installs a unified `pyflic` command with subcommands, plus standalone entry points for backward compatibility.
+
+| Command | Standalone | Description |
+|---|---|---|
+| `pyflic config` | `pyflic-config` | Launch the config editor GUI |
+| `pyflic qc <project>` | `pyflic-qc <project>` | Launch the QC viewer |
+| `pyflic hub [project]` | `pyflic-hub [project]` | Launch the analysis hub GUI |
+| `pyflic lint <path>` | `pyflic-lint <path>` | Validate a `flic_config.yaml` against the schema |
+| `pyflic report <project>` | | Generate a PDF experiment report |
+| `pyflic clear-cache <project>` | | Remove disk-cached feeding summaries |
+| `pyflic version` | | Print the installed version |
+
+### `pyflic lint`
+
+Schema-validates `flic_config.yaml` and reports issues with line numbers when possible. Checks for unknown keys, invalid `pi_direction` values, mismatched factor levels, missing `chamber_size`, duplicate DFM IDs, and deprecated `data_dir` usage.
+
+```bash
+pyflic lint /path/to/project
+# output:
+# flic_config.yaml:12 error: DFM 3: pi_direction must be 'left' or 'right', got 'sideways'
+# 1 error(s), 0 warning(s)
+```
+
+### `pyflic report`
+
+Generates a multi-page PDF report at `project_dir/analysis/experiment_report.pdf` containing the experiment summary, a feeding summary table (key metrics only), binned time-course plots for Licks, Events, and MedDuration, and an ANOVA comparison with Tukey HSD posthoc.
+
+```bash
+pyflic report /path/to/project
+```
+
+### `pyflic clear-cache`
+
+Removes all files in `.pyflic_cache/` for a project. Safe to run at any time -- the cache is automatically rebuilt on the next load.
+
+```bash
+pyflic clear-cache /path/to/project
+```
+
+---
+
+## 7. Graphical tools
+
+### Config Editor (`pyflic config`)
+
+Creates and edits `flic_config.yaml` without hand-editing YAML. The editor provides:
+
+- **Experiment settings** -- chamber size, experiment type, well names
+- **Global parameters** -- all detection parameters with labeled fields
+- **Experimental design factors** -- define factorial designs with factor names and levels
+- **Per-DFM tabs** -- parameter overrides, chamber-to-treatment assignments, chamber exclusions
+- **Constants** -- QC cutoff values
+
+Automatically loads `flic_config.yaml` from the current directory on startup. Saves directly to YAML.
+
+### Analysis Hub (`pyflic hub`)
+
+The primary GUI for running analyses. The hub is organized into three columns:
+
+**Load group:**
+- Load experiment (with time range and parallelism options)
+- Run Script dropdown (when `scripts:` is defined in the config)
+- Edit Config and QC Viewer launcher buttons
+
+**Analyze group -- core:**
+- Run full basic analysis
+- Write feeding summary CSV
+- Write binned feeding summary CSV
+- Write weighted duration summary (hedonic only)
+
+**Analyze group -- advanced:**
+- **Tidy events CSV** -- one row per bout, long format suitable for downstream tools
+- **Bootstrap CIs** -- prompts for a metric name and iteration count, then writes per-treatment bootstrap confidence intervals
+- **Compare treatments (ANOVA / LMM)** -- prompts for a metric and model type, runs the statistical test, writes results and posthoc tables
+- **Light-phase summary CSV** -- per-chamber feeding stats split by light vs dark phase using OptoCol1
+- **Parameter sensitivity sweep** -- prompts for a parameter and values to sweep, then writes Licks/Events/MedDuration mean and SEM per treatment for each value
+- **Bout transition matrix** -- A-to-A, A-to-B, B-to-A, B-to-B counts per chamber (two-well only)
+- **Write PDF report** -- generates the full experiment report
+
+**Analyze group -- tools:**
+- **Lint flic_config.yaml** -- validate config schema without leaving the hub
+- **Compare two configs** -- select a second project directory and compare per-treatment metric means
+- **Clear disk cache** -- remove `.pyflic_cache/` for the current project
+
+**Plots group:**
+- Feeding summary plot
+- Binned time-course with metric/mode selector
+- Dot plot with metric/mode selector
+- Well A vs B comparison (two-well only)
+- Hedonic feeding plot (hedonic only)
+- Breaking-point plots (progressive ratio only)
+
+All outputs (CSVs, PNGs, PDFs) are written to `project_dir/analysis/`.
+
+### QC Viewer (`pyflic qc`)
+
+Interactive dashboard for inspecting QC results and managing chamber exclusions.
+
+**Load tab:**
+- Project directory, time range, and parallelism options
+- Load, Edit Config, and Reload Config buttons
+
+**Feeding Summary tab:**
+- Table of all chambers with per-chamber metrics
+- Exclusion checkboxes per chamber (bidirectionally synced with DFM tabs)
+- Auto-filter button (applies `constants`-based cutoffs)
+
+**Params tab (live recompute):**
+- Spinboxes for `baseline_window_minutes`, `feeding_threshold`, `feeding_minimum`, `tasting_minimum`, `tasting_maximum`, `feeding_event_link_gap`, and `feeding_minevents`
+- **Recompute** button that re-runs the feeding/tasting detection pipeline on all loaded DFMs without re-reading data files, then refreshes the Feeding Summary tab
+- Changes are *not* written to `flic_config.yaml` -- this is for interactive exploration only
+
+**DFM tabs** (one per loaded DFM):
+- Sub-tabs: Integrity, Data Breaks, Simultaneous Feeding, Bleeding, Raw Signal, Baselined Signal, Cumulative Licks
+- Per-well exclusion checkboxes (synced with Feeding Summary)
+
+Exclusion checkboxes are persisted to `flic_config.yaml` as `excluded_chambers:` entries under each DFM.
+
+---
+
+## 8. Python API
 
 ### Loading an experiment
 
@@ -424,19 +584,14 @@ from pyflic import load_experiment_yaml
 
 exp = load_experiment_yaml(
     "/path/to/project_dir",
-    range_minutes=(0, 0),   # (start, end) in minutes; (0, 0) means the full recording
-    parallel=True,           # load DFMs concurrently
+    range_minutes=(0, 0),       # (start, end); (0, 0) = full recording
+    parallel=True,              # load DFMs concurrently
+    eager=True,                 # pre-compute feeding summary on load (set False to skip)
+    use_disk_cache=True,        # read/write .pyflic_cache/ for feeding summaries
 )
 ```
 
 `load_experiment_yaml` reads `flic_config.yaml` and returns the appropriate subclass (`SingleWellExperiment`, `TwoWellExperiment`, `HedonicFeedingExperiment`, or `ProgressiveRatioExperiment`).
-
-You can also load a specific subclass explicitly:
-
-```python
-from pyflic import HedonicFeedingExperiment
-exp = HedonicFeedingExperiment.load("/path/to/project_dir")
-```
 
 ---
 
@@ -444,10 +599,10 @@ exp = HedonicFeedingExperiment.load("/path/to/project_dir")
 
 ```
 Experiment (base)
-├── SingleWellExperiment        # chamber_size=1; 12 independent wells per DFM
-└── TwoWellExperiment           # chamber_size=2; two-well choice
-    ├── HedonicFeedingExperiment
-    └── ProgressiveRatioExperiment
++-- SingleWellExperiment        # chamber_size=1; 12 independent wells per DFM
++-- TwoWellExperiment           # chamber_size=2; two-well choice
+    +-- HedonicFeedingExperiment
+    +-- ProgressiveRatioExperiment
 ```
 
 All subclasses share the same core API. Specialized methods (breakpoint analysis, hedonic metrics) are added in the subclasses.
@@ -467,161 +622,300 @@ exp.design                      # ExperimentDesign (structure, treatments, facto
 **Running QC**
 
 ```python
-# Compute and write QC reports to project_dir/qc/
-exp.write_qc_reports()
-
-# Or just get results as Python dicts without writing files
-results = exp.compute_qc_results()
+exp.write_qc_reports()          # write to project_dir/qc/
+results = exp.compute_qc_results()  # get results as Python dicts
 ```
 
 **Feeding summary**
 
 ```python
-# Full-experiment feeding summary (returns a DataFrame)
 df = exp.feeding_summary()
-# Columns: Chamber, Treatment, DFM, Licks, Events, MeanDuration, MedDuration, ...
-
-# Restrict to a time window
 df = exp.feeding_summary(range_minutes=(30, 90))
-
-# Time-binned summary (30-minute bins)
 binned = exp.binned_feeding_summary(binsize_min=30)
-# Extra columns: Interval, Minutes (bin midpoint)
 ```
 
 **Plotting**
 
 ```python
-# Faceted jitter + boxplot for all feeding metrics grouped by treatment
 fig = exp.plot_feeding_summary()
-exp.write_feeding_summary_plot()           # saves to project_dir/analysis/
-
-# Cumulative licks for one chamber
+fig = exp.plot_binned_metric_by_treatment(metric="Licks", binsize_min=30)
+fig = exp.plot_dot_metric_by_treatment(metric="MedDuration")
 fig = exp.plot_cumulative_licks_chamber(dfm_id=1, chamber=1)
-
-# Binned time-series metrics
-fig = exp.plot_binned_metric_by_treatment(binned, metric="Licks")
-fig = exp.plot_binned_licks_by_treatment(binned)
 ```
 
-**Full pipeline in one call**
+**Full pipeline**
 
 ```python
 results = exp.execute_basic_analysis()
-# Runs: write_qc_reports → write_summary → write_feeding_summary → write_feeding_summary_plot
-# Returns a dict with paths to all output files
 ```
 
-**Text summary**
+**Text summary and PDF report**
 
 ```python
-print(exp.summary_text())          # prints to console
-exp.write_summary()                # saves to project_dir/analysis/summary.txt
+print(exp.summary_text())
+exp.write_summary()
+
+from pyflic import write_experiment_report
+write_experiment_report(exp)    # writes to project_dir/analysis/experiment_report.pdf
 ```
 
 ---
 
 ### DFM objects
 
-Individual DFM objects expose the raw and processed data:
-
 ```python
 dfm = exp.get_dfm(1)
 
-dfm.raw_df                         # raw CSV as a DataFrame
-dfm.baseline_df                    # baseline-subtracted signal
-dfm.feeding_summary()              # per-chamber feeding metrics for this DFM
+dfm.raw_df                     # raw CSV as a DataFrame
+dfm.baseline_df                # baseline-subtracted signal
+dfm.lick_df                    # boolean lick matrix (True = feeding lick)
+dfm.event_df                   # integer event matrix (run length at each event start)
+dfm.tasting_df                 # boolean tasting lick matrix
+dfm.lights_df                  # per-well light state (from OptoCol1/OptoCol2)
+dfm.durations                  # dict of per-well bout duration DataFrames
+dfm.intervals                  # dict of per-well inter-bout interval DataFrames
 
-dfm.plot_raw()                     # raw signal plot
-dfm.plot_baselined()               # baseline-subtracted signal plot
-dfm.plot_cumulative_licks()        # cumulative lick count plot
+dfm.feeding_summary()          # per-chamber feeding metrics for this DFM
+dfm.plot_raw()                 # raw signal plot
+dfm.plot_baselined()           # baseline-subtracted signal with threshold lines
+dfm.plot_cumulative_licks()    # cumulative lick count plot
 ```
 
 ---
 
-## 7. Typical workflows
+## 9. Advanced analytics
 
-### Workflow A — One-click analysis with a script
+All advanced analytics are available as Python functions, as GUI buttons in the Analysis Hub, and as YAML script actions. They operate on a loaded `Experiment` object.
 
-The fastest path once your config is set up:
+### Tidy events export
 
-1. Add a `scripts:` section to `flic_config.yaml` (see [Section 4](#4-scripts--automated-hub-pipelines-scripts)).
-2. Open the hub:
-   ```bash
-   pyflic-hub /path/to/project_dir
-   ```
-3. Select the script from the dropdown in the **Load** group.
-4. Click **Run Script** — the hub loads the experiment, runs all analysis steps, writes outputs to `analysis/`, and opens each plot in its own window.
+One row per feeding (or tasting) bout with columns: DFM, Chamber, Well, WellLabel, WellName, Treatment, factor columns, StartMin, Licks, Duration, AvgIntensity, MaxIntensity.
+
+```python
+from pyflic import tidy_events
+
+df = tidy_events(exp, kind="feeding")
+df.to_csv("tidy_feeding_events.csv", index=False)
+```
+
+### Bootstrap confidence intervals
+
+Nonparametric percentile CIs computed by resampling at the chamber level (chambers are independent biological units). Useful for PI and other bounded/skewed metrics where parametric SEs are misleading.
+
+```python
+from pyflic import bootstrap_metric
+
+res = bootstrap_metric(exp, metric="PI", n_boot=5000, ci=0.95, seed=42)
+print(res.summary)   # columns: group, n, mean, sem, ci_low, ci_high
+```
+
+### Treatment comparison (ANOVA / LMM)
+
+ANOVA (Type II) or linear mixed model (with DFM as a random intercept) comparing a metric across treatment groups, with optional Tukey HSD posthoc.
+
+```python
+from pyflic import compare_treatments
+
+res = compare_treatments(exp, metric="MedDuration", model="aov", posthoc="tukey")
+print(res.table)     # ANOVA table
+print(res.posthoc)   # pairwise comparisons
+```
+
+### Light-phase summary
+
+Per-chamber feeding metrics split by light vs dark phase, derived from the `OptoCol1` column in the DFM data.
+
+```python
+from pyflic import light_phase_summary
+
+df = light_phase_summary(exp)
+# columns: DFM, Chamber, Treatment, Phase (light/dark), PhaseSeconds, Licks, Events, ...
+```
+
+### Parameter sensitivity sweep
+
+Sweep a detection parameter across a grid of values and report how Licks, Events, and MedDuration change per treatment. Each grid point re-runs the full feeding/tasting pipeline.
+
+```python
+from pyflic import parameter_sensitivity
+
+res = parameter_sensitivity(
+    exp,
+    parameter="feeding_event_link_gap",
+    values=[0, 2, 5, 10, 15, 20],
+)
+print(res.grid)
+# columns: feeding_event_link_gap, Group, n_chambers,
+#          mean_Licks, sem_Licks, mean_Events, sem_Events,
+#          mean_MedDuration, sem_MedDuration
+```
+
+### Bout transition matrix (two-well)
+
+Counts consecutive bout transitions (A-to-A, A-to-B, B-to-A, B-to-B) per chamber. Reveals whether flies alternate between wells or persist on one.
+
+```python
+from pyflic import bout_transition_matrix
+
+df = bout_transition_matrix(exp)
+# columns: DFM, Chamber, Treatment, FromWell, ToWell, Count
+```
+
+### Config comparison
+
+Load two project directories and compare per-treatment metric means between them.
+
+```python
+from pyflic import compare_configs
+
+df = compare_configs(
+    "project_a/", "project_b/",
+    metrics=("Licks", "Events", "MedDuration"),
+)
+# columns: Group, Metric, mean_a, mean_b, delta, pct_change
+```
+
+### YAML linting
+
+Validate a config file programmatically:
+
+```python
+from pyflic import lint_flic_config
+
+issues = lint_flic_config("project/flic_config.yaml")
+for i in issues:
+    print(i.format())
+```
 
 ---
 
-### Workflow B — Full analysis from scratch
+## 10. Performance and caching
+
+### Disk cache
+
+When `use_disk_cache=True` (the default), `load_experiment_yaml` caches the pre-computed feeding summary in `project_dir/.pyflic_cache/`. The cache key is derived from the SHA-256 hash of `flic_config.yaml` and the modification times + sizes of all DFM CSV files. If either changes, the cache is invalidated automatically.
+
+To clear the cache manually:
+
+```bash
+pyflic clear-cache /path/to/project
+```
+
+Or from Python:
+
+```python
+from pyflic.base import cache
+cache.clear(Path("/path/to/project"))
+```
+
+### Lazy loading
+
+Pass `eager=False` to skip the feeding summary pre-computation on load. This is useful when you only need the QC viewer or want to inspect raw data:
+
+```python
+exp = load_experiment_yaml("/path/to/project", eager=False)
+```
+
+---
+
+## 11. Typical workflows
+
+### Workflow A -- One-click analysis with a script
+
+1. Add a `scripts:` section to `flic_config.yaml` (see [Section 5](#5-scripts----automated-hub-pipelines-scripts)).
+2. Open the hub:
+   ```bash
+   pyflic hub /path/to/project
+   ```
+3. Select the script from the dropdown in the **Load** group.
+4. Click **Run Script**.
+
+---
+
+### Workflow B -- Full analysis from scratch
 
 ```bash
 # 1. Create the config file with the GUI
-pyflic-config
+pyflic config
 
-# 2. Run analysis in Python (or in a Jupyter notebook)
+# 2. Validate it
+pyflic lint /path/to/project
+
+# 3. Run analysis in Python
 ```
 
 ```python
 from pyflic import load_experiment_yaml
-
-exp = load_experiment_yaml("/path/to/project_dir")
+exp = load_experiment_yaml("/path/to/project")
 exp.execute_basic_analysis()
 ```
 
 ```bash
-# 3. Inspect QC results interactively
-pyflic-qc /path/to/project_dir
+# 4. Inspect QC results interactively
+pyflic qc /path/to/project
 ```
 
 ---
 
-### Workflow C — Custom analysis in a notebook
+### Workflow C -- Custom analysis in a notebook
 
 ```python
-from pyflic import load_experiment_yaml
+from pyflic import load_experiment_yaml, bootstrap_metric, compare_treatments
 
-exp = load_experiment_yaml("/path/to/project_dir")
+exp = load_experiment_yaml("/path/to/project")
 
-# Explore structure
+# Explore
 print(exp.summary_text())
-
-# Get feeding metrics
 df = exp.feeding_summary()
-display(df)
 
-# Filter to a treatment group
-sucrose = df[df["Treatment"].str.contains("Sucrose")]
+# Statistical comparison
+res = compare_treatments(exp, metric="MedDuration", model="aov")
+print(res.table)
 
-# Custom jitter plot
-fig = exp.plot_jitter_summary(sucrose, x_col="Treatment", y_col="Licks")
-fig.show()
+# Bootstrap CIs on PI
+boot = bootstrap_metric(exp, metric="PI", n_boot=5000)
+print(boot.summary)
 
-# Time-binned analysis (60-minute bins, first 4 hours)
-binned = exp.binned_feeding_summary(binsize_min=60)
-fig = exp.plot_binned_licks_by_treatment(binned)
+# Generate a full PDF report
+from pyflic import write_experiment_report
+write_experiment_report(exp)
 ```
 
 ---
 
-### Workflow D — QC only
+### Workflow D -- Parameter tuning
 
-If you want to inspect data quality before running a full analysis:
+Use the QC viewer's **Params tab** to interactively adjust detection parameters and see their effect on the feeding summary without reloading data. When you find good values, update `flic_config.yaml` and re-run the analysis.
+
+Or use the parameter sensitivity sweep to systematically evaluate a range of values:
 
 ```python
-exp = load_experiment_yaml("/path/to/project_dir")
+from pyflic import parameter_sensitivity
+
+res = parameter_sensitivity(
+    exp,
+    parameter="feeding_event_link_gap",
+    values=[0, 2, 5, 10, 15, 20],
+)
+print(res.grid)
+```
+
+---
+
+### Workflow E -- QC only
+
+```python
+exp = load_experiment_yaml("/path/to/project")
 exp.write_qc_reports()
 ```
 
 ```bash
-pyflic-qc /path/to/project_dir
+pyflic qc /path/to/project
 ```
 
 ---
 
-## 8. Jupyter notebooks
+## 12. Jupyter notebooks
 
 The `doc/` directory contains a series of tutorial notebooks. Work through them in order for a complete introduction, or jump to the one that matches your experiment type.
 
@@ -630,6 +924,7 @@ The `doc/` directory contains a series of tutorial notebooks. Work through them 
 **Start here.** Covers:
 - The Experiment class hierarchy and when to use each subclass
 - Loading an experiment from a project directory
+- How licks and events are calculated (signal processing pipeline)
 - Accessing DFMs and printing experiment summaries
 - Basic CLI tool overview
 
@@ -650,7 +945,7 @@ For **two-well choice experiments**:
 ### `doc/HedonicFeeding.ipynb`
 
 For **hedonic feeding experiments**:
-- Multi-level factorial designs (e.g., concentration × genotype)
+- Multi-level factorial designs (e.g., concentration x genotype)
 - Hedonic-specific QC and filtering
 - Weighted duration summaries and specialized plots
 - End-to-end example with a real dataset
@@ -666,5 +961,5 @@ For **progressive-ratio experiments**:
 
 The `notebooks/` directory contains additional working examples:
 
-- **`notebooks/load_experiment.ipynb`** — detailed walkthrough of loading a project directory, inspecting raw DFM objects, and manually overriding parameters
-- **`notebooks/run_flic_config_6h.ipynb`** — complete 6-hour experiment pipeline: config setup → QC → full analysis → advanced plotting
+- **`notebooks/load_experiment.ipynb`** -- detailed walkthrough of loading a project directory, inspecting raw DFM objects, and manually overriding parameters
+- **`notebooks/run_flic_config_6h.ipynb`** -- complete 6-hour experiment pipeline: config setup, QC, full analysis, advanced plotting

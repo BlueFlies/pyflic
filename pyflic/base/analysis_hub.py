@@ -1169,7 +1169,8 @@ class AnalysisHubWindow(QMainWindow):
             self, "Parameter sensitivity",
             "Parameter to sweep:",
             ["feeding_event_link_gap", "feeding_threshold", "feeding_minimum",
-             "tasting_minimum", "tasting_maximum", "feeding_minevents"],
+             "tasting_minimum", "tasting_maximum", "feeding_minevents",
+             "tasting_minevents", "baseline_window_minutes", "samples_per_second"],
             0, False,
         )
         if not ok:
