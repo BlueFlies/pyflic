@@ -13,7 +13,7 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from PyQt6.QtCore import QSize, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QPalette, QPixmap
+from PyQt6.QtGui import QColor, QPalette, QPixmap, QTextCursor
 from PyQt6.QtWidgets import (
     QButtonGroup,
     QFrame,
@@ -292,8 +292,8 @@ class OutputLog(QPlainTextEdit):
 
     def append_line(self, text: str) -> None:
         self.appendPlainText(text.rstrip())
-        sb = self.verticalScrollBar()
-        sb.setValue(sb.maximum())
+        self.moveCursor(QTextCursor.MoveOperation.End)
+        self.ensureCursorVisible()
 
 
 # ---------------------------------------------------------------------------

@@ -302,6 +302,8 @@ class AnalysisWorker(QObject):
 # ---------------------------------------------------------------------------
 
 class AnalysisHubWindow(QMainWindow):
+    _range_updated = pyqtSignal(float, float)   # emitted from script thread after load
+
     def __init__(self, project_dir: str | Path | None = None) -> None:
         super().__init__()
         self.setWindowTitle("pyflic — Analysis Hub")
@@ -435,6 +437,7 @@ class AnalysisHubWindow(QMainWindow):
         self._path_edit.editingFinished.connect(self._refresh_meta)
         self._spin_start.valueChanged.connect(self._invalidate_exp_cache)
         self._spin_end.valueChanged.connect(self._invalidate_exp_cache)
+        self._range_updated.connect(self._on_range_updated)
 
         start_dir = self._initial_dir or Path.cwd()
         self._path_edit.setText(str(start_dir))
@@ -552,13 +555,25 @@ class AnalysisHubWindow(QMainWindow):
 
         card.add_body(opt_form)
 
-        # Action row: Load Experiment + launchers for companion apps.
+        # Action row: Load Experiment + Remove chambers.
         actions = QHBoxLayout()
         btn_load = ActionButton("Load experiment", category=Category.LOAD,
                                 icon_name="load", primary=True)
         btn_load.clicked.connect(self._action_load_experiment)
         actions.addWidget(btn_load)
         self._load_buttons.append(btn_load)
+
+        self._btn_remove_chambers = ActionButton(
+            "Remove chambers", category=Category.LOAD, icon_name="remove"
+        )
+        self._btn_remove_chambers.setToolTip(
+            "Remove chambers listed in remove_chambers.csv (group 'general') "
+            "from the loaded experiment."
+        )
+        self._btn_remove_chambers.clicked.connect(self._action_remove_chambers)
+        actions.addWidget(self._btn_remove_chambers)
+        self._data_buttons.append(self._btn_remove_chambers)
+
         actions.addStretch(1)
         card.add_body(actions)
 
@@ -616,9 +631,17 @@ class AnalysisHubWindow(QMainWindow):
         lay.addWidget(self._btn_run_script)
         self._load_buttons.append(self._btn_run_script)
 
+        self._btn_run_all_scripts = ActionButton("Run All Scripts", category=Category.SCRIPTS,
+                                                 icon_name="run")
+        self._btn_run_all_scripts.setToolTip("Run every script in the active YAML in sequence.")
+        self._btn_run_all_scripts.clicked.connect(self._action_run_all_scripts)
+        lay.addWidget(self._btn_run_all_scripts)
+        self._load_buttons.append(self._btn_run_all_scripts)
+
         # Hidden until the active YAML has scripts (or batch mode is on).
         self._cmb_script.setVisible(False)
         self._btn_run_script.setVisible(False)
+        self._btn_run_all_scripts.setVisible(False)
 
     # ------------------------------------------------------------------
     # Dynamic group box rebuilding (Analyze / Plots)
@@ -722,6 +745,7 @@ class AnalysisHubWindow(QMainWindow):
         has = bool(names)
         self._cmb_script.setVisible(has)
         self._btn_run_script.setVisible(has)
+        self._btn_run_all_scripts.setVisible(len(names) > 1)
         # Empty-state hint lives next to the widgets in the Scripts card.
         empty_lbl = getattr(self, "_script_empty_lbl", None)
         if empty_lbl is not None:
@@ -1162,16 +1186,17 @@ class AnalysisHubWindow(QMainWindow):
             self._path_edit.setText(d)
             self._refresh_meta()
 
-    def _exp_cache_key(self) -> tuple:
+    def _exp_cache_key(self, exclusion_group: str | None = None) -> tuple:
         return (
             str(self._project_dir()),
             self._active_config,
             self._range_minutes(),
             self._chk_parallel.isChecked(),
+            exclusion_group,
         )
 
-    def _load_exp(self):
-        key = self._exp_cache_key()
+    def _load_exp(self, exclusion_group: str | None = None):
+        key = self._exp_cache_key(exclusion_group)
         if self._cached_exp is not None and self._cached_exp_key == key:
             print("Using cached experiment (same project / options).", flush=True)
             return self._cached_exp
@@ -1183,6 +1208,7 @@ class AnalysisHubWindow(QMainWindow):
             config_name=self._active_config,
             range_minutes=self._range_minutes(),
             parallel=self._chk_parallel.isChecked(),
+            exclusion_group=exclusion_group,
         )
         self._cached_exp = exp
         self._cached_exp_key = key
@@ -1193,6 +1219,26 @@ class AnalysisHubWindow(QMainWindow):
         self._cached_exp_key = None
         self._exp_loaded = False
         self._update_data_buttons()
+
+    def _try_write_summary(self, exp) -> None:
+        """Write summary.txt to the analysis dir; silent on failure."""
+        try:
+            p = exp.write_summary()
+            print(f"Summary: {p}", flush=True)
+        except Exception as exc:
+            print(f"  (summary.txt not written: {exc})", flush=True)
+
+    def _on_range_updated(self, start: float, end: float) -> None:
+        """Update the start/end spinboxes to reflect the range actually loaded by a script.
+
+        Blocks the spinboxes' valueChanged signals so the exp cache is not invalidated.
+        """
+        self._spin_start.blockSignals(True)
+        self._spin_end.blockSignals(True)
+        self._spin_start.setValue(start)
+        self._spin_end.setValue(end)
+        self._spin_start.blockSignals(False)
+        self._spin_end.blockSignals(False)
 
     def _launch_config_editor(self) -> None:
         p = self._project_dir()
@@ -1270,20 +1316,6 @@ class AnalysisHubWindow(QMainWindow):
     def _action_load_experiment(self) -> None:
         def task() -> None:
             exp = self._load_exp()
-
-            yaml_excl = exp.yaml_excluded_chambers
-            print("Chambers excluded in YAML", flush=True)
-            print("-------------------------", flush=True)
-            if yaml_excl:
-                total = 0
-                for dfm_id, chambers in sorted(yaml_excl.items()):
-                    print(f"  DFM {dfm_id}: chamber(s) {chambers}", flush=True)
-                    total += len(chambers)
-                print(f"  Total: {total} chamber(s).", flush=True)
-            else:
-                print("  (none)", flush=True)
-
-            print(flush=True)
             print(exp.summary_text(include_qc=False), flush=True)
 
         self._start_worker(task)
@@ -1294,6 +1326,38 @@ class AnalysisHubWindow(QMainWindow):
         if self._cached_exp is not None:
             self._exp_loaded = True
             self._update_data_buttons()
+
+    def _action_remove_chambers(self) -> None:
+        """Apply the 'general' exclusion group from remove_chambers.csv in-place."""
+        project_dir = self._project_dir()
+
+        def task() -> None:
+            from .exclusions import read_exclusions
+            exp = self._load_exp()
+            all_excl = read_exclusions(project_dir)
+            group_excl = all_excl.get("general", {})
+            if not group_excl:
+                print(
+                    "No chambers listed for group 'general' in remove_chambers.csv.",
+                    flush=True,
+                )
+                return
+            remove_set = {
+                (dfm_id, ch)
+                for dfm_id, chambers in group_excl.items()
+                for ch in chambers
+            }
+            exp._remove_chambers_from_design(remove_set)
+            total = len(remove_set)
+            print("Chambers removed (group 'general'):", flush=True)
+            for dfm_id, chambers in sorted(group_excl.items()):
+                print(f"  DFM {dfm_id}: chamber(s) {sorted(chambers)}", flush=True)
+            print(f"  Total: {total} chamber(s) removed.", flush=True)
+            exp.excluded_chambers = {k: sorted(v) for k, v in group_excl.items()}
+            exp.exclusion_group = "general"
+            self._try_write_summary(exp)
+
+        self._start_worker(task)
 
     def _action_basic_full(self) -> None:
         rm = self._range_minutes()
@@ -1312,6 +1376,7 @@ class AnalysisHubWindow(QMainWindow):
 
         def task() -> None:
             exp = self._load_exp()
+            self._try_write_summary(exp)
             p = exp.write_feeding_summary(range_minutes=rm)
             print(f"Wrote: {p}", flush=True)
 
@@ -1323,6 +1388,7 @@ class AnalysisHubWindow(QMainWindow):
 
         def task() -> None:
             exp = self._load_exp()
+            self._try_write_summary(exp)
             p = exp.binned_feeding_summary(binsize_min=bs, range_minutes=rm, save=True)
             print(f"Binned rows: {len(p)}", flush=True)
 
@@ -1340,6 +1406,7 @@ class AnalysisHubWindow(QMainWindow):
                     "Set experiment_type: hedonic in flic_config.yaml. "
                     f"Got {type(exp).__name__}."
                 )
+            self._try_write_summary(exp)
             p = exp.weighted_duration_summary(save=True, range_minutes=rm)
             print(f"Wrote: {p}", flush=True)
 
@@ -1725,6 +1792,38 @@ class AnalysisHubWindow(QMainWindow):
         if 0 <= idx < len(self._scripts):
             self._run_script(self._scripts[idx])
 
+    def _action_run_all_scripts(self) -> None:
+        """Run every script in the active YAML in sequence as a single worker task."""
+        scripts = self._scripts
+        if not scripts:
+            return
+        ui_binsize = float(self._spin_binsize.value())
+        ui_parallel = self._chk_parallel.isChecked()
+        project_dir = self._project_dir()
+        # Build each script's task closure on the main thread so UI values are captured.
+        named_tasks = [
+            (str(s.get("name", f"Script {i + 1}")),
+             self._build_script_task(s, project_dir, ui_binsize, ui_parallel))
+            for i, s in enumerate(scripts)
+        ]
+        total = len(named_tasks)
+
+        def combined_task() -> list[tuple[str, bytes]]:
+            all_figures: list[tuple[str, bytes]] = []
+            for i, (name, task) in enumerate(named_tasks):
+                print(f"\n{'=' * 50}", flush=True)
+                print(f"Running script {i + 1}/{total}: {name}", flush=True)
+                print(f"{'=' * 50}", flush=True)
+                figs = task()
+                if figs:
+                    all_figures.extend(figs)
+            print(f"\nAll {total} script(s) complete.", flush=True)
+            return all_figures
+
+        self._start_worker(combined_task)
+        if self._worker is not None:
+            self._worker.finished.connect(self._on_load_finished)
+
     def _collect_scripts_by_yaml(self, configs: list[str]) -> dict[str, dict[str, dict]]:
         """Return ``{yaml_filename: {script_name: script_dict}}`` for *configs*."""
         p = self._project_dir()
@@ -1828,6 +1927,7 @@ class AnalysisHubWindow(QMainWindow):
         per-yaml batch wrapper can swap configs between iterations.
         """
         steps = script.get("steps") or []
+        script_name = str(script.get("name") or "general")
         ui_start, ui_end = self._range_minutes()
         script_start = float(script.get("start", ui_start))
         script_end = float(script.get("end", ui_end))
@@ -1843,7 +1943,7 @@ class AnalysisHubWindow(QMainWindow):
                 )
 
             def _make_cache_key(rm, parallel):
-                return (str(project_dir), self._active_config, rm, parallel)
+                return (str(project_dir), self._active_config, rm, parallel, script_name)
 
             def _ensure_exp(rm):
                 nonlocal exp
@@ -1858,6 +1958,7 @@ class AnalysisHubWindow(QMainWindow):
                     exp = load_experiment_yaml(
                         project_dir, config_name=self._active_config,
                         range_minutes=rm, parallel=ui_parallel,
+                        exclusion_group=None,
                     )
                     self._cached_exp = exp
                     self._cached_exp_key = cache_key
@@ -1880,10 +1981,46 @@ class AnalysisHubWindow(QMainWindow):
                         exp = load_experiment_yaml(
                             project_dir, config_name=self._active_config,
                             range_minutes=rm, parallel=parallel,
+                            exclusion_group=None,
                         )
                         self._cached_exp = exp
                         self._cached_exp_key = cache_key
                         print("Loaded.", flush=True)
+                    self._range_updated.emit(rm[0], rm[1])
+
+                elif action == "remove_chambers":
+                    from .exclusions import read_exclusions
+                    e = _ensure_exp(rm)
+                    group = str(step.get("group", script_name))
+                    all_excl = read_exclusions(project_dir)
+                    group_excl = all_excl.get(group, {})
+                    if not group_excl:
+                        print(
+                            f"  No chambers listed for group '{group}' in remove_chambers.csv.",
+                            flush=True,
+                        )
+                    else:
+                        remove_set = {
+                            (dfm_id, ch)
+                            for dfm_id, chambers in group_excl.items()
+                            for ch in chambers
+                        }
+                        e._remove_chambers_from_design(remove_set)
+                        total = len(remove_set)
+                        for dfm_id, chambers in sorted(group_excl.items()):
+                            print(
+                                f"  DFM {dfm_id}: removed chamber(s) {sorted(chambers)}",
+                                flush=True,
+                            )
+                        print(
+                            f"  Total: {total} chamber(s) removed (group '{group}').",
+                            flush=True,
+                        )
+                        e.excluded_chambers = {
+                            k: sorted(v) for k, v in group_excl.items()
+                        }
+                        e.exclusion_group = group
+                    self._try_write_summary(e)
 
                 elif action == "basic_analysis":
                     e = _ensure_exp(rm)
@@ -2090,6 +2227,10 @@ class AnalysisHubWindow(QMainWindow):
                         range_minutes=rm,
                     )
                     print(f"Wrote: {p}", flush=True)
+
+                elif action == "write_summary":
+                    e = _ensure_exp(rm)
+                    self._try_write_summary(e)
 
                 else:
                     print(f"[Skip] Unknown action: {action!r}", flush=True)

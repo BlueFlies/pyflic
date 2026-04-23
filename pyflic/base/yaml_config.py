@@ -185,6 +185,7 @@ def load_experiment_yaml(
     executor: Literal["threads", "processes"] = "threads",
     eager: bool = True,
     use_disk_cache: bool = True,
+    exclusion_group: str | None = "general",
 ) -> Experiment:
     """
     Load an experiment from a project directory.
@@ -275,9 +276,21 @@ def load_experiment_yaml(
 
     design = ExperimentDesign(experiment_type=experiment_type)
 
+    # Read file-based exclusions once before the DFM loop.
+    from .exclusions import read_exclusions as _read_exclusions
+    file_excl_for_group: dict[int, list[int]] = {}
+    if exclusion_group is not None:
+        _all_file_excl = _read_exclusions(resolved_project_dir)
+        file_excl_for_group = _all_file_excl.get(exclusion_group, {})
+        if file_excl_for_group:
+            print(
+                f"\nApplying exclusion group '{exclusion_group}' from remove_chambers.csv:",
+                flush=True,
+            )
+
     # First pass: compute parameters and capture chamber assignments, but don't load data yet.
     dfm_specs: list[tuple[int, Parameters, dict[int, str], dict[str, str], dict[int, dict[str, str]]]] = []
-    yaml_excluded_by_dfm: dict[int, list[int]] = {}
+    excluded_by_dfm: dict[int, list[int]] = {}
     for node in dfm_nodes:
         if not isinstance(node, Mapping):
             raise ValueError("Each dfms[] entry must be an object/mapping.")
@@ -315,15 +328,23 @@ def load_experiment_yaml(
             chamber_assignments = _parse_chamber_assignments(chambers_raw)
             chamber_factor_levels = {}
 
-        # Apply excluded_chambers: remove listed indices from assignments before design build.
-        excluded_raw = node.get("excluded_chambers") or []
-        if excluded_raw:
-            excluded_set = {int(x) for x in excluded_raw}
-            chamber_assignments = {k: v for k, v in chamber_assignments.items() if k not in excluded_set}
-            chamber_factor_levels = {k: v for k, v in chamber_factor_levels.items() if k not in excluded_set}
-            yaml_excluded_by_dfm[dfm_id] = sorted(excluded_set)
+        # Warn about stale excluded_chambers in YAML (no longer applied).
+        if node.get("excluded_chambers"):
             print(
-                f"  DFM {dfm_id}: excluding chamber(s) {sorted(excluded_set)} (from excluded_chambers in YAML)",
+                f"  WARNING: DFM {dfm_id} has 'excluded_chambers' in flic_config.yaml — "
+                f"this key is no longer used. Migrate exclusions to remove_chambers.csv.",
+                flush=True,
+            )
+
+        # Apply file-based exclusions for this DFM.
+        excl_set = set(file_excl_for_group.get(dfm_id, []))
+        if excl_set:
+            chamber_assignments = {k: v for k, v in chamber_assignments.items() if k not in excl_set}
+            chamber_factor_levels = {k: v for k, v in chamber_factor_levels.items() if k not in excl_set}
+            excluded_by_dfm[dfm_id] = sorted(excl_set)
+            print(
+                f"  DFM {dfm_id}: excluding chamber(s) {sorted(excl_set)} "
+                f"(group '{exclusion_group}')",
                 flush=True,
             )
 
@@ -482,15 +503,16 @@ def load_experiment_yaml(
         chamber_factors=chamber_factors_map or None,
         config_path=path,
         project_dir=resolved_project_dir,
-        output_subdir=Path(config_name).stem,
+        output_subdir=Path(config_name).stem + "_results",
         range_minutes=(float(range_minutes[0]), float(range_minutes[1])),
         parallel=bool(parallel),
         executor=executor,
         max_workers=max_workers,
     )
 
-    if yaml_excluded_by_dfm:
-        exp.yaml_excluded_chambers = yaml_excluded_by_dfm
+    if excluded_by_dfm:
+        exp.excluded_chambers = excluded_by_dfm
+    exp.exclusion_group = exclusion_group
 
     if not eager:
         print("Skipping feeding-summary pre-compute (eager=False).", flush=True)

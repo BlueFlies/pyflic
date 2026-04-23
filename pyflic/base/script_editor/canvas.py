@@ -16,8 +16,6 @@ from typing import Any
 
 from PyQt6.QtCore import QSize, Qt, pyqtSignal
 from PyQt6.QtWidgets import (
-    QCheckBox,
-    QDoubleSpinBox,
     QFormLayout,
     QFrame,
     QHBoxLayout,
@@ -192,7 +190,7 @@ class Canvas(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(8)
 
-        # Script-level header (name + start/end with inherit checkboxes)
+        # Script-level header (name)
         self._header = QFrame(self)
         self._header.setObjectName("ScriptHeader")
         self._header.setFrameShape(QFrame.Shape.NoFrame)
@@ -208,33 +206,6 @@ class Canvas(QWidget):
         self._name_edit.setPlaceholderText("script name (e.g. quick_overview)")
         self._name_edit.textChanged.connect(self._on_name_changed)
         header_lay.addRow("Name:", self._name_edit)
-
-        # Start with inherit checkbox
-        start_row = QHBoxLayout()
-        self._start_inherit = QCheckBox("inherit from UI")
-        self._start_inherit.setChecked(True)
-        self._start_spin = QDoubleSpinBox()
-        self._start_spin.setRange(0, 1_000_000)
-        self._start_spin.setSuffix(" min")
-        self._start_spin.setEnabled(False)
-        self._start_inherit.toggled.connect(self._on_start_inherit_toggled)
-        self._start_spin.valueChanged.connect(self._emit_changed)
-        start_row.addWidget(self._start_spin)
-        start_row.addWidget(self._start_inherit)
-        header_lay.addRow("Start:", start_row)
-
-        end_row = QHBoxLayout()
-        self._end_inherit = QCheckBox("inherit from UI")
-        self._end_inherit.setChecked(True)
-        self._end_spin = QDoubleSpinBox()
-        self._end_spin.setRange(0, 1_000_000)
-        self._end_spin.setSuffix(" min")
-        self._end_spin.setEnabled(False)
-        self._end_inherit.toggled.connect(self._on_end_inherit_toggled)
-        self._end_spin.valueChanged.connect(self._emit_changed)
-        end_row.addWidget(self._end_spin)
-        end_row.addWidget(self._end_inherit)
-        header_lay.addRow("End:", end_row)
 
         outer.addWidget(self._header)
 
@@ -291,7 +262,6 @@ class Canvas(QWidget):
             self._name_edit.blockSignals(True)
             self._name_edit.setText("")
             self._name_edit.blockSignals(False)
-            self._set_range_from_script({})
             self._list.blockSignals(False)
             self._update_empty_hint()
             self.stepSelected.emit(-1)
@@ -299,7 +269,6 @@ class Canvas(QWidget):
         self._name_edit.blockSignals(True)
         self._name_edit.setText(str(script.get("name", "")))
         self._name_edit.blockSignals(False)
-        self._set_range_from_script(script)
         for step in (script.get("steps") or []):
             if isinstance(step, dict):
                 self._append_item(dict(step))
@@ -312,13 +281,10 @@ class Canvas(QWidget):
 
     def current_script(self) -> dict[str, Any]:
         """Return the current in-memory script dict (fresh copy)."""
-        out: dict[str, Any] = {"name": self._name_edit.text().strip()}
-        if not self._start_inherit.isChecked():
-            out["start"] = float(self._start_spin.value())
-        if not self._end_inherit.isChecked():
-            out["end"] = float(self._end_spin.value())
-        out["steps"] = [self._step_at(i) for i in range(self._list.count())]
-        return out
+        return {
+            "name": self._name_edit.text().strip(),
+            "steps": [self._step_at(i) for i in range(self._list.count())],
+        }
 
     def selected_index(self) -> int:
         row = self._list.currentRow()
@@ -448,35 +414,6 @@ class Canvas(QWidget):
 
     def _on_name_changed(self, _text: str) -> None:
         self._emit_changed()
-
-    def _on_start_inherit_toggled(self, inherited: bool) -> None:
-        self._start_spin.setEnabled(not inherited)
-        self._emit_changed()
-
-    def _on_end_inherit_toggled(self, inherited: bool) -> None:
-        self._end_spin.setEnabled(not inherited)
-        self._emit_changed()
-
-    def _set_range_from_script(self, script: dict[str, Any]) -> None:
-        for key, inherit_cb, spin in (
-            ("start", self._start_inherit, self._start_spin),
-            ("end", self._end_inherit, self._end_spin),
-        ):
-            inherit_cb.blockSignals(True)
-            spin.blockSignals(True)
-            if key in script and script[key] is not None:
-                inherit_cb.setChecked(False)
-                try:
-                    spin.setValue(float(script[key]))
-                except (TypeError, ValueError):
-                    spin.setValue(0)
-                spin.setEnabled(True)
-            else:
-                inherit_cb.setChecked(True)
-                spin.setValue(0)
-                spin.setEnabled(False)
-            inherit_cb.blockSignals(False)
-            spin.blockSignals(False)
 
     def _emit_changed(self) -> None:
         self.stepsChanged.emit()

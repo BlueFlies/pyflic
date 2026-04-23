@@ -302,10 +302,6 @@ class ScriptEditorWindow(QMainWindow):
             out["name"] = name.strip()
         else:
             out["name"] = "(unnamed)"
-        if script.get("start") is not None:
-            out["start"] = script["start"]
-        if script.get("end") is not None:
-            out["end"] = script["end"]
         steps_raw = script.get("steps") or []
         out["steps"] = [
             ScriptEditorWindow._clean_step(s) for s in steps_raw

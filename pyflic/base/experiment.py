@@ -46,7 +46,8 @@ class Experiment:
     _feeding_summary_cache: dict = field(default_factory=dict)
     filtered_chambers: pd.DataFrame | None = None
     filter_criteria_summary: str = field(default="")
-    yaml_excluded_chambers: dict[int, list[int]] = field(default_factory=dict)
+    excluded_chambers: dict[int, list[int]] = field(default_factory=dict)
+    exclusion_group: str | None = None
 
     def get_dfm(self, dfm_id: int) -> DFM | None:
         """Return the DFM with the given id, or None if it does not exist."""
@@ -529,14 +530,17 @@ class Experiment:
             buf.write(design_df.to_string(index=False))
             buf.write("\n\n")
 
-        if self.yaml_excluded_chambers:
-            buf.write("Chambers excluded in YAML\n")
-            buf.write("-------------------------\n")
+        group_label = f"'{self.exclusion_group}'" if self.exclusion_group else "file"
+        buf.write(f"Chambers excluded (group {group_label})\n")
+        buf.write("-" * 40 + "\n")
+        if self.excluded_chambers:
             total = 0
-            for dfm_id, chambers in sorted(self.yaml_excluded_chambers.items()):
+            for dfm_id, chambers in sorted(self.excluded_chambers.items()):
                 buf.write(f"  DFM {dfm_id}: chamber(s) {chambers}\n")
                 total += len(chambers)
             buf.write(f"  Total: {total} chamber(s).\n\n")
+        else:
+            buf.write("  (none)\n\n")
 
         if self.filtered_chambers is not None and not self.filtered_chambers.empty:
             buf.write("Chambers removed by auto_remove_chambers\n")
@@ -1738,12 +1742,12 @@ class Experiment:
         print(f"  DFMs    : {sorted(self.dfms.keys())}", flush=True)
         print("=" * 50, flush=True)
 
-        print("\nChambers excluded in YAML", flush=True)
-        print("-------------------------", flush=True)
-        yaml_excl = self.yaml_excluded_chambers
-        if yaml_excl:
+        group_label = f"'{self.exclusion_group}'" if self.exclusion_group else "file"
+        print(f"\nChambers excluded (group {group_label})", flush=True)
+        print("-" * 40, flush=True)
+        if self.excluded_chambers:
             total = 0
-            for dfm_id, chambers in sorted(yaml_excl.items()):
+            for dfm_id, chambers in sorted(self.excluded_chambers.items()):
                 print(f"  DFM {dfm_id}: chamber(s) {chambers}", flush=True)
                 total += len(chambers)
             print(f"  Total: {total} chamber(s).", flush=True)

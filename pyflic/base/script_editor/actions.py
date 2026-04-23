@@ -134,6 +134,31 @@ ACTIONS: list[Action] = [
             _START, _END,
         ],
     ),
+    Action(
+        action="write_summary",
+        label="Write summary",
+        blurb="Write summary.txt capturing excluded chambers and experiment metadata.",
+        icon="csv", category=Category.LOAD, produces="csv",
+        notes="Writes project_dir/analysis/summary.txt with experiment metadata, "
+              "design table, and any excluded chambers. Safe to call at any point "
+              "in the script — e.g. right after remove_chambers.",
+    ),
+    Action(
+        action="remove_chambers",
+        label="Remove chambers",
+        blurb="Apply chamber exclusions from remove_chambers.csv.",
+        icon="remove", category=Category.LOAD, produces="none",
+        params=[
+            Param(key="group", label="Exclusion group", type="string",
+                  note="Named exclusion group in remove_chambers.csv. "
+                       "Defaults to the script name when left blank.",
+                  default=None),
+        ],
+        notes="Reads remove_chambers.csv in the project directory and removes "
+              "the chambers listed under the named group from the loaded "
+              "experiment design.  Leave 'group' blank to use the script's "
+              "own name as the group key.",
+    ),
 
     # ── ANALYZE ──────────────────────────────────────────────────────────
     Action(

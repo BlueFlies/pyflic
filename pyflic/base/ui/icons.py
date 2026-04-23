@@ -27,6 +27,7 @@ _GLYPHS: dict[str, tuple[str, Category | None]] = {
     "theme_light":("fa5s.sun",                 Category.NEUTRAL),
     # Actions
     "load":       ("fa5s.download",            Category.LOAD),
+    "remove":     ("fa5s.minus-circle",        Category.LOAD),
     "script":     ("fa5s.play",                Category.SCRIPTS),
     "basic":      ("fa5s.chart-area",          Category.ANALYZE),
     "csv":        ("fa5s.file-csv",            Category.ANALYZE),

@@ -339,6 +339,7 @@ class _LoadWorker(QtCore.QObject):
                     self._project_dir,
                     range_minutes=self._range_minutes,
                     parallel=self._parallel,
+                    exclusion_group=None,
                 )
                 print("Writing QC reports...", flush=True)
                 exp.write_qc_reports()
@@ -583,6 +584,7 @@ class FeedingSummaryTab(QtWidgets.QWidget):
     exclusion_changed      = pyqtSignal(int, int, bool)  # dfm_id, chamber, excluded
     auto_filter_requested  = pyqtSignal()
     view_criteria_requested = pyqtSignal()
+    save_requested         = pyqtSignal()
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
@@ -641,11 +643,17 @@ class FeedingSummaryTab(QtWidgets.QWidget):
         criteria_btn.clicked.connect(self.view_criteria_requested)
         export_btn = QtWidgets.QPushButton("Export Included to CSV…")
         export_btn.clicked.connect(self._export_included)
+        save_btn = QtWidgets.QPushButton("Save removed chambers…")
+        save_btn.setToolTip(
+            "Save the current exclusion state to remove_chambers.csv under a named group."
+        )
+        save_btn.clicked.connect(self.save_requested)
         btn_bar.addWidget(mark_all_btn)
         btn_bar.addWidget(clear_all_btn)
         btn_bar.addWidget(auto_filter_btn)
         btn_bar.addWidget(criteria_btn)
         btn_bar.addWidget(export_btn)
+        btn_bar.addWidget(save_btn)
         btn_bar.addStretch()
 
         self._root.addLayout(btn_bar)
@@ -1016,12 +1024,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self._params_tab: ParamsTab | None = None
         self._active_subtab_idx: int = 0
 
-        # Auto-save timer: coalesces rapid changes (e.g. "Mark All") into one write
-        self._autosave_timer = QtCore.QTimer(self)
-        self._autosave_timer.setSingleShot(True)
-        self._autosave_timer.setInterval(150)        # ms — wait for burst to settle
-        self._autosave_timer.timeout.connect(self._save_exclusions_to_yaml)
-
         central = QtWidgets.QWidget()
         self.setCentralWidget(central)
         root_layout = QtWidgets.QVBoxLayout(central)
@@ -1059,8 +1061,8 @@ class MainWindow(QtWidgets.QMainWindow):
         for dfm_id, dfm in exp.dfms.items():
             self._dfm_chamber_sizes[dfm_id] = int(dfm.params.chamber_size)
 
-        # Read excluded_chambers from YAML (chamber numbers)
-        excluded_by_dfm = self._read_excluded_from_yaml()
+        # Read 'general' exclusion group from remove_chambers.csv (chamber numbers)
+        excluded_by_dfm = self._read_excluded_from_file()
 
         # Feeding summary tab
         try:
@@ -1074,6 +1076,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._feeding_tab.exclusion_changed.connect(self._on_feeding_exclusion_changed)
         self._feeding_tab.auto_filter_requested.connect(self._on_auto_filter)
         self._feeding_tab.view_criteria_requested.connect(self._on_view_filter_criteria)
+        self._feeding_tab.save_requested.connect(self._on_save_exclusions)
         self._tabs.addTab(self._feeding_tab, "Feeding Summary")
 
         # Params tab (live recompute)
@@ -1155,7 +1158,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.statusBar().showMessage(f"Could not refresh feeding summary: {exc}")
             return
 
-        excluded_by_dfm = self._read_excluded_from_yaml()
+        excluded_by_dfm = self._read_excluded_from_file()
         if self._feeding_tab is not None:
             self._feeding_tab.populate(fs, excluded_by_dfm=excluded_by_dfm)
         self.statusBar().showMessage(
@@ -1194,7 +1197,6 @@ class MainWindow(QtWidgets.QMainWindow):
                     tab.set_well_excluded(w, excluded)
         finally:
             self._syncing = False
-        self._autosave_timer.start()
 
     def _on_dfm_exclusion_changed(self, dfm_id: int, well_num: int, excluded: bool) -> None:
         """DFM tab well checkbox toggled → exclude the parent chamber in Feeding Summary
@@ -1215,7 +1217,6 @@ class MainWindow(QtWidgets.QMainWindow):
                         tab.set_well_excluded(w, excluded)
         finally:
             self._syncing = False
-        self._autosave_timer.start()
 
     # ------------------------------------------------------------------
     # Auto filter
@@ -1243,8 +1244,6 @@ class MainWindow(QtWidgets.QMainWindow):
                 if tab is not None:
                     for w in self._wells_for_chamber(dfm_id, chamber):
                         tab.set_well_excluded(w, True)
-
-        self._autosave_timer.start()
 
     def _on_view_filter_criteria(self) -> None:
         """Show the filter criteria summary from the last auto_remove_chambers run."""
@@ -1316,97 +1315,50 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.statusBar().showMessage("Auto filter: all chambers passed — none excluded.")
         else:
             self.statusBar().showMessage(
-                f"Auto filter: {n} chamber(s) excluded and saved to flic_config.yaml."
+                f"Auto filter: {n} chamber(s) marked excluded. "
+                f"Click 'Save removed chambers…' to persist."
             )
 
     # ------------------------------------------------------------------
     # YAML persistence
     # ------------------------------------------------------------------
 
-    def _read_excluded_from_yaml(self) -> dict[int, list[int]]:
-        """Read ``excluded_chambers`` entries from ``flic_config.yaml``."""
-        config_path = self._project_dir / "flic_config.yaml"
-        if not config_path.exists():
-            return {}
-        try:
-            cfg = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-        except Exception as exc:
-            self.statusBar().showMessage(
-                f"Could not parse {config_path.name}: {exc}.  Treating as no exclusions."
-            )
-            return {}
-        if not isinstance(cfg, dict):
-            self.statusBar().showMessage(
-                f"{config_path.name} is not a YAML mapping; treating as no exclusions."
-            )
-            return {}
-        result: dict[int, list[int]] = {}
-        dfm_nodes = cfg.get("dfms", [])
-        if isinstance(dfm_nodes, dict):
-            dfm_nodes = [dict(v, id=int(k)) for k, v in dfm_nodes.items() if isinstance(v, dict)]
-        for dfm_node in dfm_nodes:
-            if not isinstance(dfm_node, dict):
-                continue
-            dfm_id = int(dfm_node.get("id", 0))
-            excl   = dfm_node.get("excluded_chambers") or []
-            if excl:
-                result[dfm_id] = [int(x) for x in excl]
-        return result
+    def _read_excluded_from_file(self) -> dict[int, list[int]]:
+        """Read the ``"general"`` exclusion group from ``remove_chambers.csv``."""
+        from .exclusions import read_exclusions
+        all_excl = read_exclusions(self._project_dir)
+        return all_excl.get("general", {})
 
-    def _save_exclusions_to_yaml(self, *, _quiet: bool = False) -> None:
-        """Write the current exclusion state back to ``flic_config.yaml``."""
-        config_path = self._project_dir / "flic_config.yaml"
-        if not config_path.exists():
-            self.statusBar().showMessage(f"flic_config.yaml not found in {self._project_dir}")
+    def _on_save_exclusions(self) -> None:
+        """Prompt for a group name then write the current exclusion state to the file."""
+        group, ok = QtWidgets.QInputDialog.getText(
+            self,
+            "Save removed chambers",
+            "Save exclusions as group:",
+            text="general",
+        )
+        if not ok or not group.strip():
             return
-        try:
-            cfg = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-        except Exception as exc:
-            self.statusBar().showMessage(f"Could not read YAML: {exc}")
-            return
+        self._save_exclusions_to_file(group=group.strip())
 
-        dfm_nodes_raw = cfg.get("dfms", [])
-        is_mapping_form = isinstance(dfm_nodes_raw, dict)
-        if is_mapping_form:
-            dfm_nodes_iter = [(int(k), v) for k, v in dfm_nodes_raw.items() if isinstance(v, dict)]
-        else:
-            dfm_nodes_iter = [(int(n.get("id", 0)), n) for n in dfm_nodes_raw if isinstance(n, dict)]
-        for dfm_id, dfm_node in dfm_nodes_iter:
-            tab = self._dfm_tab_widgets.get(dfm_id)
-            if tab is None:
-                continue
+    def _save_exclusions_to_file(self, *, group: str = "general") -> None:
+        """Write the current exclusion state to ``remove_chambers.csv`` under *group*."""
+        from .exclusions import write_exclusions
+        excl_by_dfm: dict[int, list[int]] = {}
+        for dfm_id, tab in self._dfm_tab_widgets.items():
             excl_wells = tab.get_excluded_wells()
-            # Convert well numbers back to chamber numbers
             cs = self._dfm_chamber_sizes.get(dfm_id, 1)
             excl_chambers = sorted({(w - 1) // cs + 1 for w in excl_wells})
             if excl_chambers:
-                dfm_node["excluded_chambers"] = excl_chambers
-            else:
-                dfm_node.pop("excluded_chambers", None)
-
+                excl_by_dfm[dfm_id] = excl_chambers
         try:
-            config_path.write_text(
-                yaml.dump(cfg, sort_keys=False, default_flow_style=False),
-                encoding="utf-8",
-            )
-            total_chambers = sum(
-                len({(w - 1) // self._dfm_chamber_sizes.get(dfm_id, 1) + 1
-                     for w in tab.get_excluded_wells()})
-                for dfm_id, tab in self._dfm_tab_widgets.items()
-            )
+            out = write_exclusions(self._project_dir, group, excl_by_dfm)
+            total = sum(len(v) for v in excl_by_dfm.values())
             self.statusBar().showMessage(
-                f"Exclusions saved to {config_path.name}  "
-                f"({total_chambers} chamber(s) excluded)"
+                f"Saved {total} chamber(s) to {out.name}  (group '{group}')"
             )
         except Exception as exc:
-            self.statusBar().showMessage(f"Could not write YAML: {exc}")
-
-    def closeEvent(self, event) -> None:
-        """On close, flush any pending auto-save before exiting."""
-        if self._autosave_timer.isActive():
-            self._autosave_timer.stop()
-            self._save_exclusions_to_yaml()
-        super().closeEvent(event)
+            self.statusBar().showMessage(f"Could not write remove_chambers.csv: {exc}")
 
 
 # ───────────────────────────────────────────────────────────────────────────
