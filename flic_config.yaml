@@ -5,7 +5,7 @@ global:
     feeding_minimum: 10
     tasting_minimum: 5
     tasting_maximum: 20
-    feeding_minevents: 1
+    feeding_minevents: 1 
     tasting_minevents: 1
     samples_per_second: 5
     feeding_event_link_gap: 5
