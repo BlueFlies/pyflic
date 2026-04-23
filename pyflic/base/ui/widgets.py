@@ -229,7 +229,12 @@ class Card(QFrame):
 # ---------------------------------------------------------------------------
 
 class ActionButton(QPushButton):
-    """QPushButton with a category-coloured left accent and themed icon."""
+    """QPushButton with a category-coloured left accent and themed icon.
+
+    The button is willing to shrink below its natural text width — long
+    labels are clipped (the full text remains readable as a tooltip) so it
+    never forces the surrounding card to overflow.
+    """
 
     def __init__(
         self,
@@ -242,6 +247,14 @@ class ActionButton(QPushButton):
     ) -> None:
         super().__init__(text, parent)
         self._category = category
+        # Tooltip echoes the full label so it stays discoverable when the
+        # button is narrower than its text.
+        if not self.toolTip():
+            self.setToolTip(text)
+        # Allow horizontal compression so a long label cannot push the parent
+        # card wider than its column.
+        self.setMinimumWidth(0)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         if icon_name is not None:
             self.setIcon(icon(icon_name, category=category))
             self.setIconSize(QSize(16, 16))

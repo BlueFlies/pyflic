@@ -351,7 +351,10 @@ class AnalysisHubWindow(QMainWindow):
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
         self._scroll.setFrameShape(QFrame.Shape.NoFrame)
+        # Long button labels can't push the cards past the column width.
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         cards_host = QWidget()
+        cards_host.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
         self._cards_lay = QVBoxLayout(cards_host)
         self._cards_lay.setContentsMargins(16, 12, 16, 12)
         self._cards_lay.setSpacing(12)
@@ -389,15 +392,29 @@ class AnalysisHubWindow(QMainWindow):
         outer.setSpacing(0)
         outer.addWidget(self._top_bar)
 
+        # Cards on the left, plot dock on the right (2× wider, full height).
+        # Wrap in a QSplitter so the user can resize the divide.
+        from PyQt6.QtWidgets import QSplitter
+
+        self._main_split = QSplitter(Qt.Orientation.Horizontal)
+        self._main_split.setChildrenCollapsible(False)
+        self._main_split.setHandleWidth(4)
+        self._main_split.addWidget(self._scroll)
+        self._main_split.addWidget(self._plot_dock)
+        # Initial 1:2 ratio (cards : dock); user can drag.
+        self._main_split.setStretchFactor(0, 1)
+        self._main_split.setStretchFactor(1, 2)
+        self._scroll.setMinimumWidth(320)
+        self._plot_dock.setMinimumWidth(420)
+
         body_row = QHBoxLayout()
         body_row.setContentsMargins(0, 0, 0, 0)
         body_row.setSpacing(0)
         body_row.addWidget(self._sidebar)
-        body_row.addWidget(self._scroll, 1)
+        body_row.addWidget(self._main_split, 1)
         body_widget = QWidget()
         body_widget.setLayout(body_row)
-        outer.addWidget(body_widget, 3)
-        outer.addWidget(self._plot_dock, 2)
+        outer.addWidget(body_widget, 1)
 
         # ── Final wiring ──────────────────────────────────────────────────
         self._path_edit.editingFinished.connect(self._refresh_meta)
@@ -407,6 +424,12 @@ class AnalysisHubWindow(QMainWindow):
         start_dir = self._initial_dir or Path.cwd()
         self._path_edit.setText(str(start_dir))
         self._refresh_meta()
+
+        # Apply the 1:2 ratio for the cards/dock split based on the window's
+        # initial width.  Stretch factors alone don't seed initial sizes.
+        avail = max(900, self.width() - 180)  # subtract sidebar
+        cards_w = avail // 3
+        self._main_split.setSizes([cards_w, avail - cards_w])
 
     # ------------------------------------------------------------------
     # Card builders
@@ -421,7 +444,10 @@ class AnalysisHubWindow(QMainWindow):
         path_row = QHBoxLayout()
         path_row.addWidget(QLabel("Folder:"))
         self._path_edit = QLineEdit()
-        self._path_edit.setPlaceholderText("Select a folder containing a YAML config and data/")
+        self._path_edit.setPlaceholderText("Path to project directory")
+        self._path_edit.setMinimumWidth(80)
+        self._path_edit.setSizePolicy(QSizePolicy.Policy.Expanding,
+                                      QSizePolicy.Policy.Fixed)
         path_row.addWidget(self._path_edit, 1)
         browse = QToolButton()
         browse.setIcon(icon("browse"))
@@ -434,7 +460,12 @@ class AnalysisHubWindow(QMainWindow):
         cfg_row = QHBoxLayout()
         cfg_row.addWidget(QLabel("Config:"))
         self._cmb_config = QComboBox()
-        self._cmb_config.setMinimumWidth(220)
+        self._cmb_config.setMinimumWidth(80)
+        self._cmb_config.setSizePolicy(QSizePolicy.Policy.Expanding,
+                                       QSizePolicy.Policy.Fixed)
+        self._cmb_config.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
         self._cmb_config.currentTextChanged.connect(self._on_config_changed)
         cfg_row.addWidget(self._cmb_config, 1)
         self._chk_all_yamls = QCheckBox("Run for every YAML")
@@ -464,28 +495,34 @@ class AnalysisHubWindow(QMainWindow):
                     subtitle="Load the experiment, set time window, run a script.",
                     icon_name="load")
 
-        # Load options form
+        # Load options form — wrap when narrow so labels don't push width.
         opt_form = QFormLayout()
         opt_form.setHorizontalSpacing(10)
         opt_form.setVerticalSpacing(6)
+        opt_form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
 
-        self._spin_start = QDoubleSpinBox()
+        def _shrinky(spin):
+            spin.setMinimumWidth(70)
+            spin.setMaximumWidth(140)
+            return spin
+
+        self._spin_start = _shrinky(QDoubleSpinBox())
         self._spin_start.setRange(0, 1_000_000)
         self._spin_start.setSpecialValueText("0")
         self._spin_start.setValue(0)
-        opt_form.addRow("Start min (0 = beginning):", self._spin_start)
+        opt_form.addRow("Start min:", self._spin_start)
 
-        self._spin_end = QDoubleSpinBox()
+        self._spin_end = _shrinky(QDoubleSpinBox())
         self._spin_end.setRange(0, 1_000_000)
         self._spin_end.setSpecialValueText("0")
         self._spin_end.setValue(0)
-        opt_form.addRow("End min (0 = end of recording):", self._spin_end)
+        opt_form.addRow("End min:", self._spin_end)
 
         self._chk_parallel = QCheckBox("Load DFMs in parallel")
         self._chk_parallel.setChecked(True)
         opt_form.addRow("", self._chk_parallel)
 
-        self._spin_binsize = QSpinBox()
+        self._spin_binsize = _shrinky(QSpinBox())
         self._spin_binsize.setRange(1, 10_000)
         self._spin_binsize.setValue(30)
         opt_form.addRow("Bin size (min):", self._spin_binsize)
@@ -501,7 +538,12 @@ class AnalysisHubWindow(QMainWindow):
         self._load_buttons.append(btn_load)
 
         self._cmb_script = QComboBox()
-        self._cmb_script.setMinimumWidth(180)
+        self._cmb_script.setMinimumWidth(80)
+        self._cmb_script.setSizePolicy(QSizePolicy.Policy.Expanding,
+                                       QSizePolicy.Policy.Fixed)
+        self._cmb_script.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
         actions.addWidget(self._cmb_script, 1)
 
         self._btn_run_script = ActionButton("Run Script", category=Category.SCRIPTS,
@@ -708,10 +750,20 @@ class AnalysisHubWindow(QMainWindow):
                        or exp_type in {"two_well", "hedonic", "progressive_ratio"})
         metrics = _TWO_WELL_BINNED if is_two_well else _SINGLE_WELL_BINNED
 
+        def _shrinky_combo() -> QComboBox:
+            cmb = QComboBox()
+            cmb.setMinimumWidth(80)
+            cmb.setSizePolicy(QSizePolicy.Policy.Expanding,
+                              QSizePolicy.Policy.Fixed)
+            cmb.setSizeAdjustPolicy(
+                QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+            )
+            return cmb
+
         # Binned
         binned_row = QHBoxLayout()
         binned_row.addWidget(QLabel("Binned:"))
-        self._cmb_binned_metric = QComboBox()
+        self._cmb_binned_metric = _shrinky_combo()
         for label, metric, mode in metrics:
             self._cmb_binned_metric.addItem(label, userData=(metric, mode))
         binned_row.addWidget(self._cmb_binned_metric, 1)
@@ -724,7 +776,7 @@ class AnalysisHubWindow(QMainWindow):
         # Dot
         dot_row = QHBoxLayout()
         dot_row.addWidget(QLabel("Dot plot:"))
-        self._cmb_dot_metric = QComboBox()
+        self._cmb_dot_metric = _shrinky_combo()
         for label, metric, mode in metrics:
             self._cmb_dot_metric.addItem(label, userData=(metric, mode))
         dot_row.addWidget(self._cmb_dot_metric, 1)
@@ -738,7 +790,7 @@ class AnalysisHubWindow(QMainWindow):
         if is_two_well:
             cmp_row = QHBoxLayout()
             cmp_row.addWidget(QLabel("Well A vs B:"))
-            self._cmb_well_cmp = QComboBox()
+            self._cmb_well_cmp = _shrinky_combo()
             for m in _WELL_CMP_METRICS:
                 self._cmb_well_cmp.addItem(m)
             cmp_row.addWidget(self._cmb_well_cmp, 1)
