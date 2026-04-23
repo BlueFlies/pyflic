@@ -620,7 +620,7 @@ class DFMWidget(QWidget):
 class FLICConfigEditor(QMainWindow):
     """Main window for the FLIC Config Editor."""
 
-    def __init__(self) -> None:
+    def __init__(self, initial_path: str | Path | None = None) -> None:
         super().__init__()
         self._current_path: Path | None = None
         self._dfm_widgets: list[DFMWidget] = []
@@ -630,7 +630,7 @@ class FLICConfigEditor(QMainWindow):
 
         self._build_menu()
         self._build_ui()
-        self._auto_load()
+        self._auto_load(initial_path)
 
     # ------------------------------------------------------------------
     # Menu
@@ -868,10 +868,25 @@ class FLICConfigEditor(QMainWindow):
                 tab_scroll.setWidget(w)
                 self._dfm_tabs.addTab(tab_scroll, f"DFM {dfm_id}")
 
-    def _auto_load(self) -> None:
-        """Load flic_config.yaml from the cwd automatically on startup, if present."""
-        for name in ("flic_config.yaml", "flic_config.yml"):
-            candidate = Path.cwd() / name
+    def _auto_load(self, initial_path: str | Path | None = None) -> None:
+        """Load a YAML config on startup.
+
+        If *initial_path* is given:
+          • a file → loaded directly;
+          • a directory → search for ``flic_config.yaml`` / ``flic_config.yml``.
+        Otherwise: search the current working directory for the defaults.
+        """
+        candidates: list[Path] = []
+        if initial_path is not None:
+            p = Path(initial_path).expanduser()
+            if p.is_file():
+                candidates.append(p)
+            elif p.is_dir():
+                candidates.extend(p / name for name in ("flic_config.yaml", "flic_config.yml"))
+        if not candidates:
+            candidates.extend(Path.cwd() / name for name in ("flic_config.yaml", "flic_config.yml"))
+
+        for candidate in candidates:
             if candidate.exists():
                 try:
                     cfg = yaml.safe_load(candidate.read_text(encoding="utf-8"))
@@ -1080,7 +1095,10 @@ class FLICConfigEditor(QMainWindow):
         )
         if not path:
             return
-        self._current_path = Path(path)
+        chosen = Path(path)
+        if chosen.suffix.lower() not in (".yaml", ".yml"):
+            chosen = chosen.with_suffix(".yaml")
+        self._current_path = chosen
         self.setWindowTitle(f"FLIC Config Editor — {self._current_path.name}")
         self._write_yaml(self._current_path)
 
@@ -1102,9 +1120,15 @@ class FLICConfigEditor(QMainWindow):
 
 
 def launch() -> None:
-    """Launch the FLIC Config Editor GUI."""
+    """Launch the FLIC Config Editor GUI.
+
+    Optional CLI argument: a YAML config file (or a directory containing
+    ``flic_config.yaml``).  When omitted, looks for ``flic_config.yaml`` in
+    the current working directory.
+    """
     app = QApplication.instance() or QApplication(sys.argv)
-    win = FLICConfigEditor()
+    initial_path = sys.argv[1] if len(sys.argv) > 1 else None
+    win = FLICConfigEditor(initial_path=initial_path)
     win.show()
     sys.exit(app.exec())
 

@@ -36,6 +36,7 @@ class Experiment:
     config_path: Path | None = None
     data_dir: Path | None = None
     project_dir: Path | None = None
+    output_subdir: str | None = None
     range_minutes: tuple[float, float] | None = None
     parallel: bool | None = None
     executor: Literal["threads", "processes"] | None = None
@@ -214,18 +215,29 @@ class Experiment:
         return f"_{_fmt_min(a)}_{_fmt_min(b_eff)}"
 
     @property
-    def analysis_dir(self) -> Path | None:
-        """Return ``project_dir/analysis[_start_end]``, or ``None`` if no ``project_dir`` is set."""
+    def _output_root(self) -> Path | None:
+        """Return ``project_dir/output_subdir`` (or ``project_dir`` if no subdir)."""
         if self.project_dir is None:
             return None
-        return self.project_dir / f"analysis{self._range_suffix()}"
+        if self.output_subdir:
+            return self.project_dir / self.output_subdir
+        return self.project_dir
+
+    @property
+    def analysis_dir(self) -> Path | None:
+        """Return ``project_dir/[output_subdir/]analysis[_start_end]``, or ``None`` if no ``project_dir`` is set."""
+        root = self._output_root
+        if root is None:
+            return None
+        return root / f"analysis{self._range_suffix()}"
 
     @property
     def qc_dir(self) -> Path | None:
-        """Return ``project_dir/qc[_start_end]``, or ``None`` if no ``project_dir`` is set."""
-        if self.project_dir is None:
+        """Return ``project_dir/[output_subdir/]qc[_start_end]``, or ``None`` if no ``project_dir`` is set."""
+        root = self._output_root
+        if root is None:
             return None
-        return self.project_dir / f"qc{self._range_suffix()}"
+        return root / f"qc{self._range_suffix()}"
 
     def _auto_save_fig(self, fig: Any, default_name: str) -> None:
         """Save fig to analysis_dir/default_name when project_dir is set."""
@@ -239,6 +251,7 @@ class Experiment:
         cls,
         project_dir: str | Path,
         *,
+        config_name: str = "flic_config.yaml",
         range_minutes: Sequence[float] = (0, 0),
         parallel: bool = True,
         max_workers: int | None = None,
@@ -276,6 +289,7 @@ class Experiment:
 
         return load_experiment_yaml(
             project_dir,
+            config_name=config_name,
             range_minutes=range_minutes,
             parallel=parallel,
             max_workers=max_workers,

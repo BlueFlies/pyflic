@@ -178,6 +178,7 @@ def _load_dfm_for_config(
 def load_experiment_yaml(
     project_dir: str | Path,
     *,
+    config_name: str = "flic_config.yaml",
     range_minutes: Sequence[float] = (0, 0),
     parallel: bool = True,
     max_workers: int | None = None,
@@ -188,17 +189,21 @@ def load_experiment_yaml(
     """
     Load an experiment from a project directory.
 
-    Reads ``project_dir/flic_config.yaml`` and loads DFM data from
-    ``project_dir/data``.
+    Reads ``project_dir/<config_name>`` (default ``flic_config.yaml``) and
+    loads DFM data from ``project_dir/data``.
 
     Parameters
     ----------
     project_dir:
-        Project root directory.  Must contain ``flic_config.yaml``.
+        Project root directory.  Must contain the selected config file.
         Data is read from *project_dir/data*.  The returned ``Experiment``
         stores this so that downstream helpers (``write_qc_reports``,
-        ``write_summary``, ``_auto_save_fig``) write to ``project_dir/qc``
-        and ``project_dir/analysis`` automatically.
+        ``write_summary``, ``_auto_save_fig``) write to
+        ``project_dir/<config_stem>/qc`` and
+        ``project_dir/<config_stem>/analysis`` automatically.
+    config_name:
+        Filename of the YAML config inside *project_dir*.  The stem of
+        this name also determines the per-config output subdirectory.
 
     Expected YAML structure::
 
@@ -221,10 +226,10 @@ def load_experiment_yaml(
     from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 
     resolved_project_dir = Path(project_dir).expanduser().resolve()
-    path = resolved_project_dir / "flic_config.yaml"
+    path = resolved_project_dir / config_name
     if not path.exists():
         raise FileNotFoundError(
-            f"flic_config.yaml not found in project directory: {resolved_project_dir}"
+            f"{config_name} not found in project directory: {resolved_project_dir}"
         )
     cfg = yaml.safe_load(path.read_text())
     if not isinstance(cfg, Mapping):
@@ -477,6 +482,7 @@ def load_experiment_yaml(
         chamber_factors=chamber_factors_map or None,
         config_path=path,
         project_dir=resolved_project_dir,
+        output_subdir=Path(config_name).stem,
         range_minutes=(float(range_minutes[0]), float(range_minutes[1])),
         parallel=bool(parallel),
         executor=executor,

@@ -158,11 +158,28 @@ def _norm_et(raw: Any) -> str | None:
     return s or None
 
 
-def read_project_meta(project_dir: Path) -> dict[str, Any]:
-    """Lightweight parse of ``flic_config.yaml`` for status display (no DFM load)."""
-    cfg_path = project_dir / "flic_config.yaml"
+def _list_yaml_configs(project_dir: Path) -> list[str]:
+    """Return sorted list of ``*.yaml`` / ``*.yml`` filenames in *project_dir*.
+
+    ``flic_config.yaml`` is placed first when present.
+    """
+    if not project_dir.is_dir():
+        return []
+    names = sorted(
+        {p.name for p in project_dir.iterdir()
+         if p.is_file() and p.suffix.lower() in (".yaml", ".yml")}
+    )
+    if "flic_config.yaml" in names:
+        names.remove("flic_config.yaml")
+        names.insert(0, "flic_config.yaml")
+    return names
+
+
+def read_project_meta(project_dir: Path, config_name: str = "flic_config.yaml") -> dict[str, Any]:
+    """Lightweight parse of the selected YAML config for status display (no DFM load)."""
+    cfg_path = project_dir / config_name
     if not cfg_path.is_file():
-        return {"ok": False, "error": f"No flic_config.yaml in {project_dir}"}
+        return {"ok": False, "error": f"No {config_name} in {project_dir}"}
     try:
         cfg = _read_yaml(cfg_path)
     except Exception as e:  # noqa: BLE001
@@ -333,6 +350,7 @@ class AnalysisHubWindow(QMainWindow):
         self._data_buttons: list[QPushButton] = []   # enabled only when exp loaded
         self._plot_windows: list[_PlotWindow] = []
         self._scripts: list[dict] = []
+        self._active_config: str = "flic_config.yaml"
 
         root = QWidget()
         self.setCentralWidget(root)
@@ -342,12 +360,32 @@ class AnalysisHubWindow(QMainWindow):
         proj_row = QHBoxLayout()
         proj_row.addWidget(QLabel("Project directory:"))
         self._path_edit = QLineEdit()
-        self._path_edit.setPlaceholderText("Select a folder containing flic_config.yaml and data/")
+        self._path_edit.setPlaceholderText("Select a folder containing a YAML config and data/")
         proj_row.addWidget(self._path_edit, stretch=1)
         browse = QPushButton("Browse…")
         browse.clicked.connect(self._browse_project)
         proj_row.addWidget(browse)
         outer.addLayout(proj_row)
+
+        # ── Config file row ──────────────────────────────────────────────
+        cfg_row = QHBoxLayout()
+        cfg_row.addWidget(QLabel("Config file:"))
+        self._cmb_config = QComboBox()
+        self._cmb_config.setMinimumWidth(240)
+        self._cmb_config.currentTextChanged.connect(self._on_config_changed)
+        cfg_row.addWidget(self._cmb_config, stretch=1)
+        self._chk_all_yamls = QCheckBox("Run action for every YAML config")
+        self._chk_all_yamls.setToolTip(
+            "When checked, the next action button you press runs once for every "
+            "YAML config in the project directory. Each run writes into its own "
+            "subdirectory named after the YAML file's stem.\n\n"
+            "Run Script: the dropdown shows the union of script names across "
+            "all YAMLs; clicking Run Script executes each YAML's own script "
+            "with that name (skipping YAMLs that don't define it)."
+        )
+        self._chk_all_yamls.toggled.connect(self._on_all_yamls_toggled)
+        cfg_row.addWidget(self._chk_all_yamls)
+        outer.addLayout(cfg_row)
 
         # ── Status label ─────────────────────────────────────────────────
         self._status = QLabel("No project loaded.")
@@ -462,10 +500,43 @@ class AnalysisHubWindow(QMainWindow):
             if sub is not None:
                 AnalysisHubWindow._clear_layout(sub)
 
-    def _refresh_meta(self) -> None:
+    def _refresh_config_list(self) -> None:
+        """Repopulate the config-file dropdown from *.yaml in project dir."""
+        p = self._project_dir()
+        names = _list_yaml_configs(p)
+        # Preserve current selection if still present; otherwise prefer
+        # flic_config.yaml, then the first entry.
+        prev = self._cmb_config.currentText()
+        self._cmb_config.blockSignals(True)
+        self._cmb_config.clear()
+        self._cmb_config.addItems(names)
+        if prev in names:
+            self._cmb_config.setCurrentText(prev)
+        elif "flic_config.yaml" in names:
+            self._cmb_config.setCurrentText("flic_config.yaml")
+        elif names:
+            self._cmb_config.setCurrentIndex(0)
+        self._cmb_config.blockSignals(False)
+        self._active_config = self._cmb_config.currentText() or "flic_config.yaml"
+
+    def _on_config_changed(self, name: str) -> None:
+        if not name:
+            return
+        self._active_config = name
+        self._invalidate_exp_cache()
+        self._refresh_meta(refresh_config_list=False)
+
+    def _on_all_yamls_toggled(self, _checked: bool) -> None:
+        # The script dropdown's contents depend on whether we're in batch mode.
+        self._refresh_script_dropdown()
+
+    def _refresh_meta(self, refresh_config_list: bool = True) -> None:
         self._invalidate_exp_cache()
         p = self._project_dir()
-        meta = read_project_meta(p)
+        if refresh_config_list:
+            self._refresh_config_list()
+        cfg_name = self._active_config or "flic_config.yaml"
+        meta = read_project_meta(p, cfg_name)
         if not meta.get("ok"):
             self._status.setText(meta.get("error", "Invalid project."))
             self._rebuild_dynamic_groups(None, None)
@@ -473,7 +544,7 @@ class AnalysisHubWindow(QMainWindow):
         et = meta.get("experiment_type")
         inf = meta.get("inferred_type")
         cs = meta.get("chamber_size")
-        parts = [f"<b>{p}</b>"]
+        parts = [f"<b>{p}</b>", f"config: <code>{cfg_name}</code>"]
         if et:
             parts.append(f"experiment_type: <code>{et}</code>")
         elif inf:
@@ -487,15 +558,35 @@ class AnalysisHubWindow(QMainWindow):
         self._status.setText(" — ".join(parts))
         self._rebuild_dynamic_groups(et or inf, cs)
 
-        # Populate script dropdown from YAML
-        cfg = _read_yaml(p / "flic_config.yaml")
+        # Capture the active YAML's scripts (for single-yaml mode), then
+        # populate the dropdown according to the current batch-mode state.
+        cfg = _read_yaml(p / cfg_name)
         self._scripts = _parse_scripts(cfg)
+        self._refresh_script_dropdown()
+
+    def _refresh_script_dropdown(self) -> None:
+        """Populate the Script dropdown based on the current batch-mode state.
+
+        - Batch mode off: list scripts defined in the active YAML.
+        - Batch mode on: list the union of script names across every YAML in
+          the project directory (deduped, preserving first-seen order).
+        """
+        prev = self._cmb_script.currentText()
+        self._cmb_script.blockSignals(True)
         self._cmb_script.clear()
-        for s in self._scripts:
-            self._cmb_script.addItem(s.get("name", "(unnamed)"))
-        has_scripts = bool(self._scripts)
-        self._cmb_script.setVisible(has_scripts)
-        self._btn_run_script.setVisible(has_scripts)
+        if self._chk_all_yamls.isChecked():
+            configs = _list_yaml_configs(self._project_dir())
+            names = self._union_script_names(configs)
+        else:
+            names = [s.get("name", "(unnamed)") for s in self._scripts]
+        for n in names:
+            self._cmb_script.addItem(n)
+        if prev in names:
+            self._cmb_script.setCurrentText(prev)
+        self._cmb_script.blockSignals(False)
+        has = bool(names)
+        self._cmb_script.setVisible(has)
+        self._btn_run_script.setVisible(has)
 
     def _rebuild_dynamic_groups(self, exp_type: str | None, chamber_size: int | None) -> None:
         self._data_buttons.clear()
@@ -697,7 +788,7 @@ class AnalysisHubWindow(QMainWindow):
         self._thread = None
         self._worker = None
 
-    def _start_worker(self, task: Callable[[], Any]) -> None:
+    def _start_worker(self, task: Callable[[], Any], force_single: bool = False) -> None:
         if self._busy:
             QMessageBox.information(self, "Busy", "An analysis task is already running.")
             return
@@ -705,9 +796,21 @@ class AnalysisHubWindow(QMainWindow):
             QMessageBox.information(self, "Busy", "An analysis task is already running.")
             return
         p = self._project_dir()
-        if not (p / "flic_config.yaml").is_file():
-            QMessageBox.warning(self, "No config", "Select a directory containing flic_config.yaml.")
+        configs = _list_yaml_configs(p)
+        if not configs:
+            QMessageBox.warning(self, "No config", f"No YAML config files found in {p}.")
             return
+        if not (p / self._active_config).is_file():
+            QMessageBox.warning(
+                self, "No config",
+                f"Selected config {self._active_config!r} not found in {p}.",
+            )
+            return
+
+        if (not force_single
+                and self._chk_all_yamls.isChecked()
+                and len(configs) > 1):
+            task = self._wrap_task_for_all_yamls(task, configs)
 
         self._thread = QThread()
         self._worker = AnalysisWorker(task)
@@ -724,6 +827,48 @@ class AnalysisHubWindow(QMainWindow):
 
         self._set_busy(True)
         self._thread.start()
+
+    def _wrap_task_for_all_yamls(
+        self, task: Callable[[], Any], configs: list[str]
+    ) -> Callable[[], list[tuple[str, bytes]]]:
+        """Return a task that runs *task* once for each YAML config.
+
+        Per-iteration: update ``self._active_config``, clear the cached
+        experiment, run the original task, collect any figures, and tag
+        figure titles with the config stem.
+        """
+        def wrapped() -> list[tuple[str, bytes]]:
+            all_figures: list[tuple[str, bytes]] = []
+            original_config = self._active_config
+            try:
+                for cfg in configs:
+                    stem = Path(cfg).stem
+                    print(f"\n=== [{stem}] running action for {cfg} ===", flush=True)
+                    self._active_config = cfg
+                    # Force a fresh load per config since parameters, ranges,
+                    # and excluded chambers differ between YAMLs.
+                    self._cached_exp = None
+                    self._cached_exp_key = None
+                    try:
+                        result = task()
+                    except Exception as e:  # noqa: BLE001
+                        print(f"[{stem}] FAILED: {type(e).__name__}: {e}", flush=True)
+                        continue
+                    if isinstance(result, tuple) and len(result) == 2 \
+                            and isinstance(result[1], (bytes, bytearray)):
+                        all_figures.append((f"[{stem}] {result[0]}", bytes(result[1])))
+                    elif isinstance(result, list):
+                        for item in result:
+                            if (isinstance(item, tuple) and len(item) == 2
+                                    and isinstance(item[1], (bytes, bytearray))):
+                                all_figures.append((f"[{stem}] {item[0]}", bytes(item[1])))
+            finally:
+                self._active_config = original_config
+                self._cached_exp = None
+                self._cached_exp_key = None
+            return all_figures
+
+        return wrapped
 
     def _on_failed(self, msg: str) -> None:
         self._append_log(msg)
@@ -760,7 +905,12 @@ class AnalysisHubWindow(QMainWindow):
             self._refresh_meta()
 
     def _exp_cache_key(self) -> tuple:
-        return (str(self._project_dir()), self._range_minutes(), self._chk_parallel.isChecked())
+        return (
+            str(self._project_dir()),
+            self._active_config,
+            self._range_minutes(),
+            self._chk_parallel.isChecked(),
+        )
 
     def _load_exp(self):
         key = self._exp_cache_key()
@@ -772,6 +922,7 @@ class AnalysisHubWindow(QMainWindow):
 
         exp = load_experiment_yaml(
             self._project_dir(),
+            config_name=self._active_config,
             range_minutes=self._range_minutes(),
             parallel=self._chk_parallel.isChecked(),
         )
@@ -791,14 +942,19 @@ class AnalysisHubWindow(QMainWindow):
             QMessageBox.warning(self, "Invalid path", "Choose a valid project directory.")
             return
         cmd = _resolve_cli("pyflic-config", "pyflic.base.config_editor")
+        # Prefer opening the currently-selected config file directly; fall back
+        # to the project directory so the editor's auto-load can find a default.
+        target = p / self._active_config
+        arg = str(target if target.is_file() else p)
         try:
-            subprocess.Popen(cmd, cwd=str(p))  # noqa: S603
+            subprocess.Popen([*cmd, arg], cwd=str(p))  # noqa: S603
         except OSError as e:
             QMessageBox.critical(self, "Could not start", str(e))
 
     def _qc_dir_for_range(self) -> Path:
         """
-        Resolve the QC output directory for the current range.
+        Resolve the QC output directory for the current range under the active
+        config's output subfolder.
 
         Mirrors ``Experiment._range_suffix``: ``(0, 0)`` → ``qc``; finite
         ``(a, b)`` → ``qc_{int(a)}_{int(b)}``; ``b`` of ``inf`` or ``0`` is
@@ -806,22 +962,24 @@ class AnalysisHubWindow(QMainWindow):
         existing ``qc_{int(a)}_*`` directory on disk.
         """
         p = self._project_dir()
+        stem = Path(self._active_config or "flic_config.yaml").stem
+        base = p / stem
         a, b = self._range_minutes()
         if a == 0.0 and b == 0.0:
-            return p / "qc"
+            return base / "qc"
         a_lbl = str(int(a))
         if b == float("inf") or b == 0.0:
-            exact = p / f"qc_{a_lbl}_end"
+            exact = base / f"qc_{a_lbl}_end"
             if exact.is_dir():
                 return exact
-            matches = sorted(p.glob(f"qc_{a_lbl}_*"))
+            matches = sorted(base.glob(f"qc_{a_lbl}_*"))
             if matches:
                 return matches[0]
-            return p / "qc"
-        ranged = p / f"qc_{a_lbl}_{int(b)}"
+            return base / "qc"
+        ranged = base / f"qc_{a_lbl}_{int(b)}"
         if ranged.is_dir():
             return ranged
-        return p / "qc"
+        return base / "qc"
 
     def _launch_qc_viewer(self) -> None:
         p = self._project_dir()
@@ -1233,9 +1391,9 @@ class AnalysisHubWindow(QMainWindow):
 
     def _action_lint_config(self) -> None:
         from .yaml_lint import lint_flic_config
-        cfg = self._project_dir() / "flic_config.yaml"
+        cfg = self._project_dir() / self._active_config
         if not cfg.is_file():
-            QMessageBox.warning(self, "No config", f"No flic_config.yaml in {self._project_dir()}")
+            QMessageBox.warning(self, "No config", f"No {self._active_config} in {self._project_dir()}")
             return
         issues = lint_flic_config(cfg)
         n_err = sum(1 for i in issues if i.severity == "error")
@@ -1265,6 +1423,8 @@ class AnalysisHubWindow(QMainWindow):
             return
         rm = self._range_minutes()
 
+        stem = Path(self._active_config or "flic_config.yaml").stem
+
         def task() -> list[tuple[str, bytes]]:
             from .analytics import compare_configs
             df = compare_configs(
@@ -1272,7 +1432,7 @@ class AnalysisHubWindow(QMainWindow):
                 metrics=(metric.strip(),), two_well_mode="total",
                 range_minutes=rm,
             )
-            out = self._project_dir() / "analysis" / f"compare_configs_{metric.strip()}.csv"
+            out = self._project_dir() / stem / "analysis" / f"compare_configs_{metric.strip()}.csv"
             out.parent.mkdir(parents=True, exist_ok=True)
             df.to_csv(out, index=False)
             print(f"Wrote: {out}\n{df.to_string(index=False)}", flush=True)
@@ -1291,19 +1451,128 @@ class AnalysisHubWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _action_run_script(self) -> None:
-        idx = self._cmb_script.currentIndex()
-        if idx < 0 or idx >= len(self._scripts):
+        name = self._cmb_script.currentText().strip()
+        if not name:
             return
-        self._run_script(self._scripts[idx])
+        if self._chk_all_yamls.isChecked():
+            self._run_named_script_batch(name)
+            return
+        # Single-yaml mode: find the script by name in the active yaml.
+        for s in self._scripts:
+            if s.get("name") == name:
+                self._run_script(s)
+                return
+        # Fallback by index in case names duplicate within one yaml.
+        idx = self._cmb_script.currentIndex()
+        if 0 <= idx < len(self._scripts):
+            self._run_script(self._scripts[idx])
+
+    def _collect_scripts_by_yaml(self, configs: list[str]) -> dict[str, dict[str, dict]]:
+        """Return ``{yaml_filename: {script_name: script_dict}}`` for *configs*."""
+        p = self._project_dir()
+        out: dict[str, dict[str, dict]] = {}
+        for cfg in configs:
+            try:
+                data = _read_yaml(p / cfg)
+            except Exception:  # noqa: BLE001
+                continue
+            named: dict[str, dict] = {}
+            for s in _parse_scripts(data):
+                n = s.get("name")
+                if n and n not in named:
+                    named[n] = s
+            out[cfg] = named
+        return out
+
+    def _union_script_names(self, configs: list[str]) -> list[str]:
+        names: list[str] = []
+        seen: set[str] = set()
+        per_yaml = self._collect_scripts_by_yaml(configs)
+        for cfg in configs:
+            for n in per_yaml.get(cfg, {}):
+                if n not in seen:
+                    seen.add(n)
+                    names.append(n)
+        return names
+
+    def _run_named_script_batch(self, name: str) -> None:
+        """Run, in one worker, the script named *name* in every yaml that has it."""
+        project_dir = self._project_dir()
+        configs = _list_yaml_configs(project_dir)
+        per_yaml = self._collect_scripts_by_yaml(configs)
+        matches: list[tuple[str, dict]] = [
+            (cfg, per_yaml[cfg][name])
+            for cfg in configs
+            if name in per_yaml.get(cfg, {})
+        ]
+        if not matches:
+            QMessageBox.information(
+                self, "No matches",
+                f"No YAML in {project_dir} defines a script named {name!r}.",
+            )
+            return
+        ui_binsize = float(self._spin_binsize.value())
+        ui_parallel = self._chk_parallel.isChecked()
+
+        def task() -> list[tuple[str, bytes]]:
+            all_figures: list[tuple[str, bytes]] = []
+            original_config = self._active_config
+            try:
+                for cfg, script in matches:
+                    stem = Path(cfg).stem
+                    print(
+                        f"\n=== [{stem}] running script {name!r} from {cfg} "
+                        f"({len(script.get('steps') or [])} step(s)) ===",
+                        flush=True,
+                    )
+                    self._active_config = cfg
+                    self._cached_exp = None
+                    self._cached_exp_key = None
+                    inner = self._build_script_task(
+                        script, project_dir, ui_binsize, ui_parallel,
+                    )
+                    try:
+                        figs = inner() or []
+                    except Exception as e:  # noqa: BLE001
+                        print(f"[{stem}] FAILED: {type(e).__name__}: {e}", flush=True)
+                        continue
+                    for t, b in figs:
+                        all_figures.append((f"[{stem}] {t}", b))
+            finally:
+                self._active_config = original_config
+                self._cached_exp = None
+                self._cached_exp_key = None
+            return all_figures
+
+        self._start_worker(task, force_single=True)
+        if self._worker is not None:
+            self._worker.finished.connect(self._on_load_finished)
 
     def _run_script(self, script: dict) -> None:
+        ui_binsize = float(self._spin_binsize.value())
+        ui_parallel = self._chk_parallel.isChecked()
+        project_dir = self._project_dir()
+        task = self._build_script_task(script, project_dir, ui_binsize, ui_parallel)
+        self._start_worker(task)
+        if self._worker is not None:
+            self._worker.finished.connect(self._on_load_finished)
+
+    def _build_script_task(
+        self,
+        script: dict,
+        project_dir: Path,
+        ui_binsize: float,
+        ui_parallel: bool,
+    ) -> Callable[[], list[tuple[str, bytes]]]:
+        """Build a worker task closure for *script*.
+
+        The closure reads ``self._active_config`` at execution time so the
+        per-yaml batch wrapper can swap configs between iterations.
+        """
         steps = script.get("steps") or []
         ui_start, ui_end = self._range_minutes()
         script_start = float(script.get("start", ui_start))
         script_end = float(script.get("end", ui_end))
-        ui_binsize = float(self._spin_binsize.value())
-        ui_parallel = self._chk_parallel.isChecked()
-        project_dir = self._project_dir()
 
         def task() -> list[tuple[str, bytes]]:
             exp = None
@@ -1316,7 +1585,7 @@ class AnalysisHubWindow(QMainWindow):
                 )
 
             def _make_cache_key(rm, parallel):
-                return (str(project_dir), rm, parallel)
+                return (str(project_dir), self._active_config, rm, parallel)
 
             def _ensure_exp(rm):
                 nonlocal exp
@@ -1329,7 +1598,8 @@ class AnalysisHubWindow(QMainWindow):
                         return exp
                     from pyflic import load_experiment_yaml
                     exp = load_experiment_yaml(
-                        project_dir, range_minutes=rm, parallel=ui_parallel
+                        project_dir, config_name=self._active_config,
+                        range_minutes=rm, parallel=ui_parallel,
                     )
                     self._cached_exp = exp
                     self._cached_exp_key = cache_key
@@ -1350,7 +1620,8 @@ class AnalysisHubWindow(QMainWindow):
                     else:
                         from pyflic import load_experiment_yaml
                         exp = load_experiment_yaml(
-                            project_dir, range_minutes=rm, parallel=parallel
+                            project_dir, config_name=self._active_config,
+                            range_minutes=rm, parallel=parallel,
                         )
                         self._cached_exp = exp
                         self._cached_exp_key = cache_key
@@ -1567,9 +1838,7 @@ class AnalysisHubWindow(QMainWindow):
 
             return figures
 
-        self._start_worker(task)
-        if self._worker is not None:
-            self._worker.finished.connect(self._on_load_finished)
+        return task
 
 
 def main() -> None:

@@ -42,6 +42,7 @@ def main() -> None:
 
     if cmd == "config":
         from pyflic.base.config_editor import launch
+        sys.argv = ["pyflic-config", *rest]
         launch()
         return
 
