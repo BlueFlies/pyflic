@@ -84,7 +84,7 @@ class HedonicFeedingExperiment(TwoWellExperiment):
         save: bool = True,
         path: str | Path | None = None,
         format: str = "png",
-        dpi: int = 150,
+        dpi: int = 200,
     ):
         """
         Jitter + mean + SE plot comparing WellA vs WellB durations faceted by treatment.
@@ -181,8 +181,6 @@ class HedonicFeedingExperiment(TwoWellExperiment):
 
         return p
 
-
-    
     def auto_remove_chambers(
         self,
         *,

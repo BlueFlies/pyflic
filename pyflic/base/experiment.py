@@ -247,13 +247,6 @@ class Experiment:
             return None
         return root / f"qc{self._range_suffix()}"
 
-    def _auto_save_fig(self, fig: Any, default_name: str) -> None:
-        """Save fig to analysis_dir/default_name when project_dir is set."""
-        d = self.analysis_dir
-        if d is not None:
-            d.mkdir(parents=True, exist_ok=True)
-            fig.savefig(d / default_name, bbox_inches="tight")
-
     @classmethod
     def load(
         cls,
@@ -275,8 +268,7 @@ class Experiment:
               flic_config.yaml   ← required; loaded automatically
               data/              ← DFM CSV files
               qc/                ← QC report output (write_qc_reports)
-              analysis/          ← figure and summary output (_auto_save_fig,
-                                    write_summary)
+              analysis/          ← figure and summary output (write_summary)
 
         Parameters
         ----------
@@ -454,15 +446,15 @@ class Experiment:
             # Signal plots
             dfm = self.dfms[dfm_id]
             fig = dfm.plot_raw()
-            fig.savefig(dir_raw / f"DFM{dfm_id}_raw.png", dpi=150, bbox_inches="tight")
+            fig.savefig(dir_raw / f"DFM{dfm_id}_raw.png", dpi=200, bbox_inches="tight")
             plt.close(fig)
 
             fig = dfm.plot_baselined(include_thresholds=True)
-            fig.savefig(dir_baselined / f"DFM{dfm_id}_baselined.png", dpi=150, bbox_inches="tight")
+            fig.savefig(dir_baselined / f"DFM{dfm_id}_baselined.png", dpi=200, bbox_inches="tight")
             plt.close(fig)
 
             fig = dfm.plot_cumulative_licks(transform_licks=True)
-            fig.savefig(dir_cumulative / f"DFM{dfm_id}_cumulative_licks.png", dpi=150, bbox_inches="tight")
+            fig.savefig(dir_cumulative / f"DFM{dfm_id}_cumulative_licks.png", dpi=200, bbox_inches="tight")
             plt.close(fig)
 
         print(f"  QC complete — {n_total} DFM(s) processed.", flush=True)
@@ -1112,23 +1104,34 @@ class Experiment:
         - Uses the chamber→treatment assignments in `Experiment.design`.
         - Uses per-DFM `binned_feeding_summary()` and aggregates across chambers for each treatment.
 
-        Returns a matplotlib Figure.
+        Returns a plotnine ggplot object.
         """
-
-        import matplotlib.pyplot as plt
-        import numpy as np
+        from plotnine import (
+            aes,
+            annotate,
+            element_line,
+            geom_line,
+            geom_ribbon,
+            ggplot,
+            labs,
+            scale_color_manual,
+            scale_fill_manual,
+            theme,
+            theme_classic,
+        )
 
         df = self._binned_licks_table_by_treatment(
             binsize_min=binsize_min, range_minutes=range_minutes, transform_licks=transform_licks
         )
         if df.empty:
-            fig, ax = plt.subplots(figsize=figsize)
-            ax.set_title("Binned metric by treatment (no data)")
-            return fig
+            return (
+                ggplot()
+                + annotate("text", x=0, y=0, label="Binned metric by treatment (no data)")
+                + theme_classic()
+            )
 
         df = df.copy()
         df["MetricValue"] = self._metric_series_from_binned_rows(df, metric=metric, two_well_mode=two_well_mode)
-
         df = df.dropna(subset=["Minutes", "MetricValue"]).copy()
         df["Minutes"] = pd.to_numeric(df["Minutes"], errors="coerce")
         df["MetricValue"] = pd.to_numeric(df["MetricValue"], errors="coerce")
@@ -1136,6 +1139,9 @@ class Experiment:
 
         df, group_col = self._resolve_group_col(df)
         treatments = sorted(df[group_col].unique().tolist())
+        n_t = len(treatments)
+        palette = (_OKABE_ITO * ((n_t // len(_OKABE_ITO)) + 1))[:n_t]
+        color_map = {t: palette[i] for i, t in enumerate(treatments)}
 
         agg = (
             df.groupby([group_col, "Minutes"], as_index=False)["MetricValue"]
@@ -1143,42 +1149,60 @@ class Experiment:
             .rename(columns={"mean": "Mean", "std": "Std", "n": "N"})
         )
         agg["SEM"] = agg["Std"] / np.sqrt(agg["N"].clip(lower=1))
+        agg["Lower"] = agg["Mean"] - agg["SEM"]
+        agg["Upper"] = agg["Mean"] + agg["SEM"]
 
-        fig, ax = plt.subplots(figsize=figsize)
-        colors = [plt.cm.tab10(i % 10) for i in range(len(treatments))]
+        # Annotate group labels with sample size
+        max_n = agg.groupby(group_col)["N"].transform("max")
+        agg["_Label"] = agg[group_col] + " (n=" + max_n.astype(int).astype(str) + ")"
+        label_map = {
+            t: f"{t} (n={int(agg.loc[agg[group_col] == t, 'N'].max())})"
+            for t in treatments
+        }
+        label_palette = {label_map[t]: color_map[t] for t in treatments}
 
-        if show_individual_chambers:
-            for i, trt in enumerate(treatments):
-                tmp = df[df[group_col] == trt]
-                for (_, _), g in tmp.groupby(["DFM", "Chamber"]):
-                    g = g.sort_values("Minutes")
-                    ax.plot(
-                        g["Minutes"],
-                        g["MetricValue"],
-                        color=colors[i],
-                        alpha=0.18,
-                        linewidth=0.8,
-                    )
-
-        for i, trt in enumerate(treatments):
-            tmp = agg[agg[group_col] == trt].sort_values("Minutes")
-            x = tmp["Minutes"].to_numpy(dtype=float)
-            y = tmp["Mean"].to_numpy(dtype=float)
-            e = tmp["SEM"].to_numpy(dtype=float)
-
-            ax.plot(x, y, color=colors[i], linewidth=2.0, label=f"{trt} (n={int(tmp['N'].max())})")
-            if show_sem:
-                ax.fill_between(x, y - e, y + e, color=colors[i], alpha=0.2, linewidth=0)
-
-        ax.set_xlabel("Minutes")
         ylabel = metric
         if metric in ("Licks", "Events") and two_well_mode == "total":
             ylabel = f"{metric} (total)"
-        ax.set_ylabel(("Transformed " if transform_licks and metric == "Licks" else "") + ylabel)
-        ax.set_title(f"Binned {metric} by treatment (mean ± SEM)")
-        ax.legend(fontsize=8, ncol=2)
-        fig.tight_layout()
-        return fig
+        if transform_licks and metric == "Licks":
+            ylabel = f"Transformed {ylabel}"
+
+        p = ggplot(agg, aes(x="Minutes", y="Mean", color="_Label", fill="_Label"))
+
+        if show_individual_chambers:
+            df_ind = df.copy()
+            df_ind["_ChamberKey"] = df_ind["DFM"].astype(str) + "_" + df_ind["Chamber"].astype(str)
+            df_ind["_Label"] = df_ind[group_col].map(label_map)
+            p = p + geom_line(
+                data=df_ind,
+                mapping=aes(x="Minutes", y="MetricValue", group="_ChamberKey", color="_Label"),
+                alpha=0.18,
+                size=0.6,
+                show_legend=False,
+            )
+
+        p = p + geom_line(size=1.2)
+        if show_sem:
+            p = p + geom_ribbon(aes(ymin="Lower", ymax="Upper"), alpha=0.2, color=None)
+
+        p = (
+            p
+            + scale_color_manual(values=label_palette)
+            + scale_fill_manual(values=label_palette)
+            + labs(
+                title=f"Binned {metric} by treatment (mean ± SEM)",
+                x="Minutes",
+                y=ylabel,
+                color="",
+                fill="",
+            )
+            + theme_classic(base_size=11)
+            + theme(
+                axis_line=element_line(color="black", size=0.7),
+                figure_size=figsize,
+            )
+        )
+        return p
 
     def plot_dot_metric_by_treatment(
         self,
@@ -1251,92 +1275,155 @@ class Experiment:
         figsize: tuple[float, float] | None = None,
     ) -> Any:
         """
-        Plot multiple binned treatment timecourses (mean ± SEM), one subplot per metric.
-        """
+        Plot multiple binned treatment timecourses (mean ± SEM), one panel per metric.
 
+        Returns a plotnine ggplot object with ``facet_wrap`` over metrics.
+        """
         import math
 
-        import matplotlib.pyplot as plt
-        import numpy as np
+        from plotnine import (
+            aes,
+            annotate,
+            element_line,
+            element_text,
+            facet_wrap,
+            geom_line,
+            geom_ribbon,
+            ggplot,
+            labs,
+            scale_color_manual,
+            scale_fill_manual,
+            theme,
+            theme_classic,
+        )
 
-        metrics = [str(m).strip() for m in metrics if str(m).strip()]
-        if not metrics:
-            fig, ax = plt.subplots(figsize=(6, 3))
-            ax.set_title("No metrics specified")
-            return fig
+        metrics_list = [str(m).strip() for m in metrics if str(m).strip()]
+        if not metrics_list:
+            return (
+                ggplot()
+                + annotate("text", x=0, y=0, label="No metrics specified")
+                + theme_classic()
+            )
 
         df = self._binned_licks_table_by_treatment(
             binsize_min=binsize_min, range_minutes=range_minutes, transform_licks=transform_licks
         )
         if df.empty:
-            fig, ax = plt.subplots(figsize=(6, 3))
-            ax.set_title("Binned metrics by treatment (no data)")
-            return fig
+            return (
+                ggplot()
+                + annotate("text", x=0, y=0, label="Binned metrics by treatment (no data)")
+                + theme_classic()
+            )
 
         df = df.copy()
         df["Minutes"] = pd.to_numeric(df["Minutes"], errors="coerce")
         df = df.dropna(subset=["Minutes"])
         df, group_col = self._resolve_group_col(df)
         treatments = sorted(df[group_col].unique().tolist())
-        colors = [plt.cm.tab10(i % 10) for i in range(len(treatments))]
+        n_t = len(treatments)
+        palette = (_OKABE_ITO * ((n_t // len(_OKABE_ITO)) + 1))[:n_t]
+        color_map = {t: palette[i] for i, t in enumerate(treatments)}
 
-        nrows = math.ceil(len(metrics) / int(ncols))
-        if figsize is None:
-            figsize = (ncols * 6, nrows * 3.8)
-        fig, axes = plt.subplots(nrows, ncols, figsize=figsize, sharex=True)
-        axes_flat = np.array(axes).flatten()
+        # Build per-metric labels (including transform prefix)
+        def _ylabel(m: str) -> str:
+            lbl = m
+            if m in ("Licks", "Events") and two_well_mode == "total":
+                lbl = f"{m} (total)"
+            if transform_licks and m == "Licks":
+                lbl = f"Transformed {lbl}"
+            return lbl
 
-        for i, metric in enumerate(metrics):
-            ax = axes_flat[i]
+        agg_parts: list[pd.DataFrame] = []
+        ind_parts: list[pd.DataFrame] = []
+        metric_order: list[str] = []
+
+        for metric in metrics_list:
             tmp = df.copy()
-            tmp["MetricValue"] = self._metric_series_from_binned_rows(
-                tmp, metric=metric, two_well_mode=two_well_mode
-            )
+            try:
+                tmp["MetricValue"] = self._metric_series_from_binned_rows(
+                    tmp, metric=metric, two_well_mode=two_well_mode
+                )
+            except ValueError:
+                continue
             tmp["MetricValue"] = pd.to_numeric(tmp["MetricValue"], errors="coerce")
             tmp = tmp.dropna(subset=["MetricValue"])
+            if tmp.empty:
+                continue
 
+            lbl = _ylabel(metric)
             agg = (
                 tmp.groupby([group_col, "Minutes"], as_index=False)["MetricValue"]
                 .agg(mean="mean", std="std", n="count")
                 .rename(columns={"mean": "Mean", "std": "Std", "n": "N"})
             )
             agg["SEM"] = agg["Std"] / np.sqrt(agg["N"].clip(lower=1))
+            agg["Lower"] = agg["Mean"] - agg["SEM"]
+            agg["Upper"] = agg["Mean"] + agg["SEM"]
+            agg["Metric"] = lbl
+            agg_parts.append(agg)
+            metric_order.append(lbl)
 
             if show_individual_chambers:
-                for t_i, trt in enumerate(treatments):
-                    chamber_rows = tmp[tmp[group_col] == trt]
-                    for (_dfm_id, _ch), g in chamber_rows.groupby(["DFM", "Chamber"]):
-                        g = g.sort_values("Minutes")
-                        ax.plot(
-                            g["Minutes"],
-                            g["MetricValue"],
-                            color=colors[t_i],
-                            alpha=0.18,
-                            linewidth=0.8,
-                        )
+                tmp_ind = tmp.copy()
+                tmp_ind["_ChamberKey"] = (
+                    tmp_ind["DFM"].astype(str) + "_" + tmp_ind["Chamber"].astype(str)
+                )
+                tmp_ind["Metric"] = lbl
+                ind_parts.append(tmp_ind)
 
-            for t_i, trt in enumerate(treatments):
-                g = agg[agg[group_col] == trt].sort_values("Minutes")
-                x = g["Minutes"].to_numpy(dtype=float)
-                y = g["Mean"].to_numpy(dtype=float)
-                e = g["SEM"].to_numpy(dtype=float)
-                ax.plot(x, y, color=colors[t_i], linewidth=2.0, label=trt)
-                if show_sem:
-                    ax.fill_between(x, y - e, y + e, color=colors[t_i], alpha=0.2, linewidth=0)
+        if not agg_parts:
+            return (
+                ggplot()
+                + annotate("text", x=0, y=0, label="No valid metrics found")
+                + theme_classic()
+            )
 
-            ylabel = metric
-            if metric in ("Licks", "Events") and two_well_mode == "total":
-                ylabel = f"{metric} (total)"
-            ax.set_ylabel(("Transformed " if transform_licks and metric == "Licks" else "") + ylabel)
-            ax.set_title(metric)
-            ax.legend(fontsize=7, ncol=1)
+        df_agg = pd.concat(agg_parts, ignore_index=True)
+        df_agg["Metric"] = pd.Categorical(df_agg["Metric"], categories=metric_order, ordered=True)
 
-        for j in range(len(metrics), len(axes_flat)):
-            axes_flat[j].set_visible(False)
+        nrows = math.ceil(len(metric_order) / ncols)
+        if figsize is None:
+            figsize = (ncols * 5.5, nrows * 3.5)
 
-        fig.suptitle("Binned metrics by treatment (mean ± SEM)", fontsize=12)
-        fig.tight_layout()
-        return fig
+        p = ggplot(df_agg, aes(x="Minutes", y="Mean", color=group_col, fill=group_col))
+
+        if show_individual_chambers and ind_parts:
+            df_ind_all = pd.concat(ind_parts, ignore_index=True)
+            df_ind_all["Metric"] = pd.Categorical(
+                df_ind_all["Metric"], categories=metric_order, ordered=True
+            )
+            p = p + geom_line(
+                data=df_ind_all,
+                mapping=aes(x="Minutes", y="MetricValue", group="_ChamberKey"),
+                alpha=0.18,
+                size=0.5,
+                show_legend=False,
+            )
+
+        p = p + geom_line(size=1.0)
+        if show_sem:
+            p = p + geom_ribbon(aes(ymin="Lower", ymax="Upper"), alpha=0.2, color=None)
+
+        p = (
+            p
+            + facet_wrap("~ Metric", ncol=ncols, scales="free_y")
+            + scale_color_manual(values=color_map)
+            + scale_fill_manual(values=color_map)
+            + labs(
+                title="Binned metrics by treatment (mean ± SEM)",
+                x="Minutes",
+                y="",
+                color="Treatment",
+                fill="Treatment",
+            )
+            + theme_classic(base_size=9)
+            + theme(
+                axis_line=element_line(color="black", size=0.6),
+                strip_text=element_text(size=8, face="bold"),
+                figure_size=figsize,
+            )
+        )
+        return p
 
     def plot_binned_licks_by_treatment(
         self,
@@ -1541,8 +1628,6 @@ class Experiment:
             Write the result to a CSV file (default ``True``).  Set to
             ``False`` to return the DataFrame without touching the filesystem.
         """
-        import numpy as np
-
         if bins is not None and binsize_min is not None:
             raise ValueError("Specify either 'bins' or 'binsize_min', not both.")
         if bins is None and binsize_min is None:
@@ -1768,7 +1853,7 @@ class Experiment:
         transform_licks: bool = True,
         ncols: int | None = None,
         figsize: tuple[float, float] | None = None,
-        dpi: int = 150,
+        dpi: int = 200,
     ) -> Path:
         """
         Save the feeding summary plot to disk and return the resolved output path.
@@ -1804,7 +1889,7 @@ class Experiment:
         range_minutes: Sequence[float] = (0, 0),
         transform_licks: bool = True,
         plot_format: str = "png",
-        dpi: int = 150,
+        dpi: int = 200,
         skip_qc: bool = False,
     ) -> dict[str, Path]:
         """

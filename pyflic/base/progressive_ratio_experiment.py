@@ -243,52 +243,6 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
             for dfm_id, dfm in self.dfms.items()
         }
 
-    def plot_breaking_point_dfm(
-        self,
-        dfm: DFM,
-        configuration: int,
-        *,
-        ylim: tuple[float, float] | None = (0, 500),
-        ncols: int = 4,
-    ):
-        """Plot ``DeltaLicks`` vs ``Minutes`` for every well of *dfm* using matplotlib.
-        Port of the per-well plotting loop at the bottom of ``breaking_point.R``.
-
-        Parameters
-        ----------
-        dfm :
-            The DFM to plot.
-        configuration :
-            Passed directly to :meth:`breaking_point_dfm`.
-        ylim :
-            Y-axis limits.  ``None`` uses matplotlib auto-scaling.
-        ncols :
-            Number of columns in the facet grid.
-        """
-        import matplotlib.pyplot as plt
-
-        data = self.breaking_point_dfm(dfm, configuration)
-        nwells = len(data)
-        nrows = (nwells + ncols - 1) // ncols
-
-        fig, axes = plt.subplots(nrows, ncols, figsize=(ncols * 4, nrows * 3))
-        axes_flat = np.array(axes).flatten()
-
-        for ax, (name, df) in zip(axes_flat, data.items()):
-            if len(df) > 0:
-                ax.plot(df["Minutes"], df["DeltaLicks"], marker="o", linewidth=1)
-            if ylim is not None:
-                ax.set_ylim(ylim)
-            ax.set_title(f"DFM {dfm.id} – {name}")
-            ax.set_xlabel("Minutes")
-            ax.set_ylabel("ΔLicks")
-
-        for ax in axes_flat[nwells:]:
-            ax.set_visible(False)
-
-        fig.tight_layout()
-        return fig
-
     def plot_breaking_point_dfm_gg(
         self,
         dfm: DFM,

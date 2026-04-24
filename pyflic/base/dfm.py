@@ -946,8 +946,6 @@ class DFM:
 
     def cumulative_pi_data(self, *, range_minutes: Sequence[float] = (0, 0)) -> pd.DataFrame:
         """Port of CumulativePI.DFM (data part). Two-well only."""
-        import numpy as np
-
         if self.params.chamber_size != 2:
             raise ValueError("cumulative_pi_data is only defined for two-well chambers")
         licks = self._apply_range(self.lick_df, range_minutes)
@@ -987,8 +985,6 @@ class DFM:
         self, *, events_limit: int | None = None, range_minutes: Sequence[float] = (0, 0)
     ) -> pd.DataFrame:
         """Port of CumulativeEventPI.DFM (data part). Two-well only."""
-        import numpy as np
-
         if self.params.chamber_size != 2:
             raise ValueError("cumulative_event_pi_data is only defined for two-well chambers")
         events = self._apply_range(self.event_df, range_minutes)
@@ -1107,7 +1103,6 @@ class DFM:
 
     def plot_cumulative_licks(self, *, single_plot: bool = False, transform_licks: bool = True):
         import matplotlib.pyplot as plt
-        import numpy as np
 
         first_min = float(self.baseline_df["Minutes"].iloc[0]) if len(self.baseline_df) else 0.0
         last_min = float(self.baseline_df["Minutes"].iloc[-1]) if len(self.baseline_df) else 0.0
@@ -1197,7 +1192,6 @@ class DFM:
         If *treatment* is provided it is included in the plot title.
         """
         import matplotlib.pyplot as plt
-        import numpy as np
 
         ch = self.chambers[chamber - 1]
         baseline_r = self._apply_range(self.baseline_df, range_minutes)

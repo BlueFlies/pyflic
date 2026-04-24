@@ -370,7 +370,7 @@ class PlotDock(QTabWidget):
             import io as _io
 
             buf = _io.BytesIO()
-            figure.savefig(buf, format="png", dpi=120, bbox_inches="tight")
+            figure.savefig(buf, format="png", dpi=150, bbox_inches="tight")
             buf.seek(0)
             pix = QPixmap()
             pix.loadFromData(buf.getvalue())
