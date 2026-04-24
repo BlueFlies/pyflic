@@ -1076,15 +1076,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self._feeding_tab.save_requested.connect(self._on_save_exclusions)
         self._tabs.addTab(self._feeding_tab, icon("feeding", category=Category.PLOTS), "Feeding Summary")
 
-        # Params tab (live recompute)
-        self._params_tab = ParamsTab()
-        # Seed from the first DFM's params (all DFMs share most params in practice)
-        first_dfm = next(iter(exp.dfms.values()), None)
-        if first_dfm is not None:
-            self._params_tab.populate_from_params(first_dfm.params)
-        self._params_tab.recompute_requested.connect(self._on_params_recompute)
-        self._tabs.addTab(self._params_tab, icon("sensitivity", category=Category.ANALYZE), "Params")
-
         # DFM tabs — convert excluded chamber numbers to well numbers
         if self._initial_qc_dir is not None:
             qc_dir = self._initial_qc_dir
@@ -1107,6 +1098,15 @@ class MainWindow(QtWidgets.QMainWindow):
             tab._tabs.currentChanged.connect(self._on_subtab_changed)
             self._dfm_tab_widgets[dfm_id] = tab
             self._tabs.addTab(tab, icon("qc", category=Category.QC), f"DFM {dfm_id}")
+
+        # Params tab (live recompute)
+        self._params_tab = ParamsTab()
+        # Seed from the first DFM's params (all DFMs share most params in practice)
+        first_dfm = next(iter(exp.dfms.values()), None)
+        if first_dfm is not None:
+            self._params_tab.populate_from_params(first_dfm.params)
+        self._params_tab.recompute_requested.connect(self._on_params_recompute)
+        self._tabs.addTab(self._params_tab, icon("sensitivity", category=Category.ANALYZE), "Params")
 
         self._tabs.currentChanged.connect(self._on_top_tab_changed)
 
