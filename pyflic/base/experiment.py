@@ -45,6 +45,7 @@ class Experiment:
     project_dir: Path | None = None
     output_subdir: str | None = None
     range_minutes: tuple[float, float] | None = None
+    transform_licks: bool = True
     parallel: bool | None = None
     executor: Literal["threads", "processes"] | None = None
     max_workers: int | None = None
@@ -649,13 +650,15 @@ class Experiment:
         chamber: int,
         *,
         range_minutes: Sequence[float] = (0, 0),
-        transform_licks: bool = True,
+        transform_licks: bool | None = None,
         single_plot: bool = True,
     ):
         """
         Plot cumulative licks for a single DFM chamber, with the treatment name
         in the title if that chamber is assigned to one.
         """
+        if transform_licks is None:
+            transform_licks = self.transform_licks
         dfm = self.dfms[int(dfm_id)]
         treatment = self.design.treatment_for(dfm_id, chamber)
         return dfm.plot_cumulative_licks_chamber(
@@ -833,7 +836,7 @@ class Experiment:
         self,
         *,
         range_minutes: Sequence[float] = (0, 0),
-        transform_licks: bool = True,
+        transform_licks: bool | None = None,
         ncols: int | None = None,
         figsize: tuple[float, float] | None = None,
     ) -> Any:
@@ -1093,7 +1096,7 @@ class Experiment:
         two_well_mode: Literal["total", "mean_ab", "A", "B"] = "total",
         binsize_min: float = 30.0,
         range_minutes: Sequence[float] = (0, 0),
-        transform_licks: bool = True,
+        transform_licks: bool | None = None,
         show_sem: bool = True,
         show_individual_chambers: bool = False,
         figsize: tuple[float, float] = (10, 4),
@@ -1106,6 +1109,8 @@ class Experiment:
 
         Returns a plotnine ggplot object.
         """
+        if transform_licks is None:
+            transform_licks = self.transform_licks
         from plotnine import (
             aes,
             annotate,
@@ -1210,7 +1215,7 @@ class Experiment:
         metric: str = "Licks",
         two_well_mode: Literal["total", "mean_ab", "A", "B"] = "total",
         range_minutes: Sequence[float] = (0, 0),
-        transform_licks: bool = True,
+        transform_licks: bool | None = None,
     ) -> Any:
         """
         Jitter + mean ± SE dot plot of a single feeding-summary metric by treatment.
@@ -1268,7 +1273,7 @@ class Experiment:
         two_well_mode: Literal["total", "mean_ab", "A", "B"] = "total",
         binsize_min: float = 30.0,
         range_minutes: Sequence[float] = (0, 0),
-        transform_licks: bool = True,
+        transform_licks: bool | None = None,
         show_sem: bool = True,
         show_individual_chambers: bool = False,
         ncols: int = 2,
@@ -1279,6 +1284,8 @@ class Experiment:
 
         Returns a plotnine ggplot object with ``facet_wrap`` over metrics.
         """
+        if transform_licks is None:
+            transform_licks = self.transform_licks
         import math
 
         from plotnine import (
@@ -1430,7 +1437,7 @@ class Experiment:
         *,
         binsize_min: float = 30.0,
         range_minutes: Sequence[float] = (0, 0),
-        transform_licks: bool = True,
+        transform_licks: bool | None = None,
         show_sem: bool = True,
         show_individual_chambers: bool = False,
         figsize: tuple[float, float] = (10, 4),
@@ -1523,7 +1530,7 @@ class Experiment:
         self,
         *,
         range_minutes: Sequence[float] = (0, 0),
-        transform_licks: bool = True,
+        transform_licks: bool | None = None,
     ) -> pd.DataFrame:
         """
         Return the feeding summary for all treatment-assigned DFM chambers as a single DataFrame.
@@ -1532,7 +1539,13 @@ class Experiment:
         calls with identical arguments do not recompute the summary.  The full-
         range summary ``(0, 0)`` is pre-computed when the experiment is first
         loaded.
+
+        When *transform_licks* is ``None`` (the default), the experiment-wide
+        setting from ``self.transform_licks`` is used (driven by
+        ``global.transform_licks`` in ``flic_config.yaml``).
         """
+        if transform_licks is None:
+            transform_licks = self.transform_licks
         key = (float(range_minutes[0]), float(range_minutes[1])), bool(transform_licks)
         if key in self._feeding_summary_cache:
             return self._feeding_summary_cache[key]
@@ -1575,7 +1588,7 @@ class Experiment:
         bins: Sequence[float] | None = None,
         binsize_min: float | None = None,
         range_minutes: Sequence[float] = (0, 0),
-        transform_licks: bool = True,
+        transform_licks: bool | None = None,
         path: str | Path | None = None,
         save: bool = True,
     ) -> pd.DataFrame:
@@ -1617,8 +1630,10 @@ class Experiment:
             ``(start, end)`` window used only with *binsize_min*.
             ``(0, 0)`` means from 0 to the end of the experiment.
         transform_licks:
-            Whether to apply the 0.25-power lick transformation (default
-            ``True``).
+            Whether to apply the 0.25-power lick transformation.  When
+            ``None`` (the default), uses ``self.transform_licks`` from the
+            experiment (driven by ``global.transform_licks`` in
+            ``flic_config.yaml``; defaults to ``True``).
         path:
             Explicit output path for the CSV.  When ``None`` (the default)
             the file is written to
@@ -1628,6 +1643,8 @@ class Experiment:
             Write the result to a CSV file (default ``True``).  Set to
             ``False`` to return the DataFrame without touching the filesystem.
         """
+        if transform_licks is None:
+            transform_licks = self.transform_licks
         if bins is not None and binsize_min is not None:
             raise ValueError("Specify either 'bins' or 'binsize_min', not both.")
         if bins is None and binsize_min is None:
@@ -1730,7 +1747,7 @@ class Experiment:
         path: str | Path | None = None,
         *,
         range_minutes: Sequence[float] = (0, 0),
-        transform_licks: bool = True,
+        transform_licks: bool | None = None,
     ) -> Path:
         """
         Save the feeding summary CSV to disk and return the resolved output path.
@@ -1757,7 +1774,7 @@ class Experiment:
         self,
         breakpoints: Sequence[float],
         *,
-        transform_licks: bool = True,
+        transform_licks: bool | None = None,
     ) -> list[Path]:
         """
         Write one feeding-summary CSV per time segment defined by *breakpoints*.
@@ -1850,7 +1867,7 @@ class Experiment:
         *,
         format: str = "png",
         range_minutes: Sequence[float] = (0, 0),
-        transform_licks: bool = True,
+        transform_licks: bool | None = None,
         ncols: int | None = None,
         figsize: tuple[float, float] | None = None,
         dpi: int = 200,
@@ -1887,7 +1904,7 @@ class Experiment:
         data_breaks_multiplier: float = 4.0,
         bleeding_cutoff: float = 50.0,
         range_minutes: Sequence[float] = (0, 0),
-        transform_licks: bool = True,
+        transform_licks: bool | None = None,
         plot_format: str = "png",
         dpi: int = 200,
         skip_qc: bool = False,

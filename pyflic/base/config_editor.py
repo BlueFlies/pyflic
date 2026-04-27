@@ -785,6 +785,13 @@ class FLICConfigEditor(QMainWindow):
         self._well_b_row = self._exp_form.rowCount()
         self._exp_form.addRow("Well B:", self._well_b_edit)
 
+        # Lick transformation toggle — applies experiment-wide.
+        self._transform_licks_check = QCheckBox(
+            "Apply 0.25-power transform to Licks (uncheck for raw counts)"
+        )
+        self._transform_licks_check.setChecked(True)
+        self._exp_form.addRow("Transform Licks:", self._transform_licks_check)
+
         # Auto-filter thresholds (used by auto_remove_chambers)
         filter_header = QLabel("Auto-filter Thresholds  (used by auto_remove_chambers)")
         filter_header.setObjectName("PyflicSectionDivider")
@@ -978,6 +985,11 @@ class FLICConfigEditor(QMainWindow):
         if et != "(auto)":
             global_section["experiment_type"] = et
 
+        # Lick transformation — only emit the key when it differs from the
+        # historical default (True) to keep YAML output minimal.
+        if not self._transform_licks_check.isChecked():
+            global_section["transform_licks"] = False
+
         # Well names
         if self._chamber_size() == 2:
             wa = self._well_a_edit.text().strip()
@@ -1046,6 +1058,9 @@ class FLICConfigEditor(QMainWindow):
         self._well_a_edit.setText(str(well_names.get("A", "")))
         self._well_b_edit.setText(str(well_names.get("B", "")))
 
+        # Lick transformation toggle
+        self._transform_licks_check.setChecked(bool(global_cfg.get("transform_licks", True)))
+
         # Filter thresholds
         constants = global_cfg.get("constants") or {}
         val = constants.get("min_untransformed_licks_cutoff")
@@ -1102,6 +1117,7 @@ class FLICConfigEditor(QMainWindow):
         self._max_dur_edit.clear()
         self._max_events_edit.clear()
         self._experiment_type_combo.setCurrentIndex(0)
+        self._transform_licks_check.setChecked(True)
 
         self._chamber_size_combo.blockSignals(True)
         self._num_dfms_spin.blockSignals(True)

@@ -1,4 +1,8 @@
 global:
+  # Apply the 0.25-power transformation to lick counts in feeding summaries
+  # and downstream plots/CSVs.  Set to false to keep raw counts.  This is the
+  # experiment-wide default; individual API calls can still override per-call.
+  transform_licks: false
   params:
     baseline_window_minutes: 3
     feeding_threshold: 20

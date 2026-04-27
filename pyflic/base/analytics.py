@@ -117,7 +117,7 @@ def bootstrap_metric(
     n_boot: int = 2000,
     ci: float = 0.95,
     range_minutes: Sequence[float] = (0, 0),
-    transform_licks: bool = True,
+    transform_licks: bool | None = None,
     seed: int | None = 0,
     group_col: str | None = None,
 ) -> BootstrapResult:
@@ -221,7 +221,7 @@ def compare_treatments(
     model: Literal["aov", "lmm"] = "aov",
     posthoc: Literal["tukey", "none"] = "tukey",
     range_minutes: Sequence[float] = (0, 0),
-    transform_licks: bool = True,
+    transform_licks: bool | None = None,
 ) -> ComparisonResult:
     """
     Run an ANOVA (default) or linear mixed model comparing *metric* across treatments.
@@ -344,7 +344,7 @@ def compare_treatments(
 def light_phase_summary(
     experiment: Experiment,
     *,
-    transform_licks: bool = True,
+    transform_licks: bool | None = None,
 ) -> pd.DataFrame:
     """
     Per-chamber feeding metrics split by **light vs dark** phase.
@@ -358,6 +358,8 @@ def light_phase_summary(
     Returns one row per (DFM, Chamber, Phase) with Licks, Events
     (and the A/B variants for two-well).
     """
+    if transform_licks is None:
+        transform_licks = experiment.transform_licks
     rows: list[dict[str, Any]] = []
     chamber_to_treatment: dict[tuple[int, int], str] = {}
     for trt_name, trt in experiment.design.treatments.items():
@@ -463,7 +465,7 @@ def parameter_sensitivity(
     parameter: str,
     values: Sequence[float],
     range_minutes: Sequence[float] = (0, 0),
-    transform_licks: bool = True,
+    transform_licks: bool | None = None,
 ) -> SensitivityResult:
     """
     Sweep *parameter* across *values*, recompute each DFM and report

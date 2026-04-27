@@ -146,7 +146,7 @@ def write_experiment_report(
     metrics: Sequence[str] = ("Licks", "Events", "MedDuration"),
     binsize_min: float = 30.0,
     range_minutes: Sequence[float] = (0, 0),
-    transform_licks: bool = True,
+    transform_licks: bool | None = None,
     include_comparison: bool = True,
 ) -> Path:
     """
@@ -155,6 +155,8 @@ def write_experiment_report(
     If *path* is None and ``experiment.analysis_dir`` is set, the report is
     written there as ``experiment_report.pdf``.
     """
+    if transform_licks is None:
+        transform_licks = experiment.transform_licks
     if path is None:
         out_dir = experiment.analysis_dir
         if out_dir is None:

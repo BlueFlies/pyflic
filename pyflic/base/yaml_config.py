@@ -253,6 +253,11 @@ def load_experiment_yaml(
         str(k): str(v) for k, v in (global_cfg.get("well_names") or {}).items()
     }
 
+    # Experiment-wide lick transformation toggle.  When unset the historical
+    # default (True — apply the 0.25-power transform) is preserved.
+    _tl_raw = global_cfg.get("transform_licks", True)
+    transform_licks_default = bool(_tl_raw)
+
     data_dir = resolved_project_dir / "data"
 
     dfm_nodes = cfg.get("dfms", cfg.get("DFMs", None))
@@ -505,6 +510,7 @@ def load_experiment_yaml(
         project_dir=resolved_project_dir,
         output_subdir=Path(config_name).stem + "_results",
         range_minutes=(float(range_minutes[0]), float(range_minutes[1])),
+        transform_licks=transform_licks_default,
         parallel=bool(parallel),
         executor=executor,
         max_workers=max_workers,
@@ -523,11 +529,11 @@ def load_experiment_yaml(
         cached = _cache.load_feeding_summary(
             resolved_project_dir,
             range_minutes=(float(range_minutes[0]), float(range_minutes[1])),
-            transform_licks=True,
+            transform_licks=transform_licks_default,
         )
         if cached is not None:
             print("Loaded feeding summary from disk cache.", flush=True)
-            key = ((float(range_minutes[0]), float(range_minutes[1])), True)
+            key = ((float(range_minutes[0]), float(range_minutes[1])), transform_licks_default)
             exp._feeding_summary_cache[key] = cached
             return exp
 
@@ -538,7 +544,7 @@ def load_experiment_yaml(
             _cache.save_feeding_summary(
                 df, resolved_project_dir,
                 range_minutes=(float(range_minutes[0]), float(range_minutes[1])),
-                transform_licks=True,
+                transform_licks=transform_licks_default,
             )
         except Exception as e:  # pragma: no cover
             print(f"  (disk cache write skipped: {e})", flush=True)
