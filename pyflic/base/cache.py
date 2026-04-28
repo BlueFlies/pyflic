@@ -24,7 +24,7 @@ import pandas as pd
 _CACHE_DIR_NAME = ".pyflic_cache"
 # Bump this when feeding-summary computation logic changes so stale caches
 # from prior releases are automatically invalidated.
-_CACHE_VERSION = "1"
+_CACHE_VERSION = "2"
 
 
 def _hash_bytes(b: bytes) -> str:
