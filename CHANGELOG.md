@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-04-28
+
+### Internal changes
+
+- **Feeding-summary cache invalidated on upgrade.** The on-disk cache version has been bumped from 1 to 2. Any `.pyflic_cache/` entries written by a prior release will be automatically discarded and recomputed on the first run after upgrading — no manual action is required. This ensures the corrected lick-count values from the lick-gap fix are reflected in all cached feeding summaries.
+
 ## 2026-04-24
 
 ### Breaking changes
