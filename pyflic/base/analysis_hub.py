@@ -188,6 +188,16 @@ def _list_yaml_configs(project_dir: Path) -> list[str]:
     return names
 
 
+def _list_subdir_projects(project_dir: Path, config_name: str) -> list[Path]:
+    """Return immediate subdirectories of *project_dir* that contain *config_name*."""
+    if not project_dir.is_dir():
+        return []
+    return sorted(
+        d for d in project_dir.iterdir()
+        if d.is_dir() and (d / config_name).is_file()
+    )
+
+
 def read_project_meta(project_dir: Path, config_name: str = "flic_config.yaml") -> dict[str, Any]:
     """Lightweight parse of the selected YAML config for status display (no DFM load)."""
     cfg_path = project_dir / config_name
@@ -501,6 +511,20 @@ class AnalysisHubWindow(QMainWindow):
         self._chk_all_yamls.toggled.connect(self._on_all_yamls_toggled)
         card.add_body(self._chk_all_yamls)
 
+        self._chk_all_subdirs = QCheckBox("Run 'batch' script in every subdirectory")
+        self._chk_all_subdirs.setToolTip(
+            "When checked, the Run Script button walks every immediate "
+            "subdirectory of the project directory and runs the script "
+            "named 'batch' from every YAML in that subdir that defines "
+            "one. Each subdirectory is treated as its own project, so "
+            "outputs land inside that subdir.\n\n"
+            "Subdirs whose YAMLs don't define a 'batch' script are skipped "
+            "with a log message. The Config dropdown and Script picker are "
+            "ignored in this mode."
+        )
+        self._chk_all_subdirs.toggled.connect(self._on_all_subdirs_toggled)
+        card.add_body(self._chk_all_subdirs)
+
         # Status text is stored and revealed in a popup dialog.
         self._status_html = "No project loaded."
         info_row = QHBoxLayout()
@@ -693,9 +717,41 @@ class AnalysisHubWindow(QMainWindow):
         self._invalidate_exp_cache()
         self._refresh_meta(refresh_config_list=False)
 
-    def _on_all_yamls_toggled(self, _checked: bool) -> None:
+    def _on_all_yamls_toggled(self, checked: bool) -> None:
         # The script dropdown's contents depend on whether we're in batch mode.
+        if checked:
+            chk = getattr(self, "_chk_all_subdirs", None)
+            if chk is not None and chk.isChecked():
+                chk.setChecked(False)
         self._refresh_script_dropdown()
+
+    def _on_all_subdirs_toggled(self, checked: bool) -> None:
+        if checked and self._chk_all_yamls.isChecked():
+            self._chk_all_yamls.setChecked(False)
+        # Switching modes changes what counts as a valid Config and meta:
+        # rebuild both so the dropdown lists subdir YAMLs (or parent YAMLs
+        # again when leaving subdir mode) and the status bar reflects the
+        # batch summary.
+        self._refresh_meta(refresh_config_list=True)
+        self._apply_subdir_mode_visibility()
+
+    def _apply_subdir_mode_visibility(self) -> None:
+        """Hide single-project UI when subdir-batch mode is on.
+
+        Subdir-batch mode runs Run Script across each child folder, so the
+        parent itself has no data to load. Hide the Load / Analyze / Plots /
+        Tools cards and the 'Run All Scripts' button so the only enabled
+        action is the per-subdir Run Script.
+        """
+        chk = getattr(self, "_chk_all_subdirs", None)
+        on = bool(chk is not None and chk.isChecked())
+        for key in ("load", "analyze", "plots", "tools"):
+            card = self._cards.get(key)
+            if card is not None:
+                card.setVisible(not on)
+        btn = getattr(self, "_btn_run_all_scripts", None)
+        if btn is not None and on:
+            btn.setVisible(False)
 
     def _refresh_meta(self, refresh_config_list: bool = True) -> None:
         self._invalidate_exp_cache()
@@ -703,6 +759,20 @@ class AnalysisHubWindow(QMainWindow):
         if refresh_config_list:
             self._refresh_config_list()
         cfg_name = self._active_config or "flic_config.yaml"
+        subdirs_mode = (getattr(self, "_chk_all_subdirs", None) is not None
+                        and self._chk_all_subdirs.isChecked())
+        if subdirs_mode:
+            matches = self._collect_batch_scripts_per_subdir(p)
+            n_subs = len({m[0] for m in matches})
+            self._status_html = (
+                f"<b>{p}</b> — subdir batch: "
+                f"<code>{n_subs}</code> subdir(s) with a "
+                f"<code>batch</code> script"
+            )
+            self._rebuild_dynamic_groups(None, None)
+            self._scripts = []
+            self._refresh_script_dropdown()
+            return
         meta = read_project_meta(p, cfg_name)
         if not meta.get("ok"):
             self._status_html = meta.get("error", "Invalid project.")
@@ -734,10 +804,46 @@ class AnalysisHubWindow(QMainWindow):
     def _refresh_script_dropdown(self) -> None:
         """Populate the Script dropdown based on the current batch-mode state.
 
-        - Batch mode off: list scripts defined in the active YAML.
-        - Batch mode on: list the union of script names across every YAML in
-          the project directory (deduped, preserving first-seen order).
+        - Both batch modes off: list scripts defined in the active YAML.
+        - YAML batch mode on: list the union of script names across every
+          YAML in the project directory (deduped, preserving first-seen
+          order).
+        - Subdir batch mode on: hide the dropdown entirely; the Run Script
+          button always executes the script named ``batch`` in every YAML
+          across every subdirectory.
         """
+        subdirs_mode = (getattr(self, "_chk_all_subdirs", None) is not None
+                        and self._chk_all_subdirs.isChecked())
+
+        if subdirs_mode:
+            self._cmb_script.blockSignals(True)
+            self._cmb_script.clear()
+            self._cmb_script.blockSignals(False)
+            self._cmb_script.setVisible(False)
+            matches = self._collect_batch_scripts_per_subdir(self._project_dir())
+            n = len({m[0] for m in matches})
+            self._btn_run_script.setText(
+                f"Run 'batch' in subdirs ({n})" if n else "Run 'batch' in subdirs"
+            )
+            self._btn_run_script.setVisible(True)
+            self._btn_run_script.setEnabled(n > 0)
+            self._btn_run_all_scripts.setVisible(False)
+            empty_lbl = getattr(self, "_script_empty_lbl", None)
+            if empty_lbl is not None:
+                if n == 0:
+                    empty_lbl.setText(
+                        "No subdirectory contains a YAML with a script named "
+                        "<code>batch</code>. Add one to enable the run."
+                    )
+                    empty_lbl.setVisible(True)
+                else:
+                    empty_lbl.setVisible(False)
+            return
+
+        # Reset Run Script label any time we leave subdir mode.
+        self._btn_run_script.setText("Run Script")
+        self._btn_run_script.setEnabled(True)
+
         prev = self._cmb_script.currentText()
         self._cmb_script.blockSignals(True)
         self._cmb_script.clear()
@@ -950,21 +1056,26 @@ class AnalysisHubWindow(QMainWindow):
             QMessageBox.information(self, "Busy", "An analysis task is already running.")
             return
         p = self._project_dir()
-        configs = _list_yaml_configs(p)
-        if not configs:
-            QMessageBox.warning(self, "No config", f"No YAML config files found in {p}.")
-            return
-        if not (p / self._active_config).is_file():
-            QMessageBox.warning(
-                self, "No config",
-                f"Selected config {self._active_config!r} not found in {p}.",
-            )
-            return
+        subdirs_mode = (getattr(self, "_chk_all_subdirs", None) is not None
+                        and self._chk_all_subdirs.isChecked())
+        # In subdir-batch mode the parent dir intentionally holds no YAML —
+        # configs live one level down. Skip the parent-config validation.
+        if not subdirs_mode:
+            configs = _list_yaml_configs(p)
+            if not configs:
+                QMessageBox.warning(self, "No config", f"No YAML config files found in {p}.")
+                return
+            if not (p / self._active_config).is_file():
+                QMessageBox.warning(
+                    self, "No config",
+                    f"Selected config {self._active_config!r} not found in {p}.",
+                )
+                return
 
-        if (not force_single
-                and self._chk_all_yamls.isChecked()
-                and len(configs) > 1):
-            task = self._wrap_task_for_all_yamls(task, configs)
+            if (not force_single
+                    and self._chk_all_yamls.isChecked()
+                    and len(configs) > 1):
+                task = self._wrap_task_for_all_yamls(task, configs)
 
         self._thread = QThread()
         self._worker = AnalysisWorker(task)
@@ -1787,6 +1898,10 @@ class AnalysisHubWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _action_run_script(self) -> None:
+        if (getattr(self, "_chk_all_subdirs", None) is not None
+                and self._chk_all_subdirs.isChecked()):
+            self._run_batch_in_subdirs()
+            return
         name = self._cmb_script.currentText().strip()
         if not name:
             return
@@ -1906,6 +2021,100 @@ class AnalysisHubWindow(QMainWindow):
                         continue
                     for t, b in figs:
                         all_figures.append((f"[{stem}] {t}", b))
+            finally:
+                self._active_config = original_config
+                self._cached_exp = None
+                self._cached_exp_key = None
+            return all_figures
+
+        self._start_worker(task, force_single=True)
+        if self._worker is not None:
+            self._worker.finished.connect(self._on_load_finished)
+
+    def _collect_batch_scripts_per_subdir(
+        self, parent: Path,
+    ) -> list[tuple[Path, str, dict]]:
+        """Find every ``batch`` script across every YAML in every subdir.
+
+        Returns a list of ``(subdir, yaml_name, script_dict)`` for each
+        immediate subdir of *parent* whose YAML defines a script named
+        ``batch``.  Subdirs with no YAMLs (or no ``batch`` script in any
+        of them) are omitted.
+        """
+        if not parent.is_dir():
+            return []
+        out: list[tuple[Path, str, dict]] = []
+        for sub in sorted(d for d in parent.iterdir() if d.is_dir()):
+            yamls = sorted(
+                f for f in sub.iterdir()
+                if f.is_file() and f.suffix.lower() in (".yaml", ".yml")
+            )
+            for ypath in yamls:
+                try:
+                    data = _read_yaml(ypath)
+                except Exception:  # noqa: BLE001
+                    continue
+                for s in _parse_scripts(data):
+                    if str(s.get("name", "")).strip().lower() == "batch":
+                        out.append((sub, ypath.name, s))
+                        break  # one batch script per YAML
+        return out
+
+    def _run_batch_in_subdirs(self) -> None:
+        """Walk every subdir × every YAML in it; run the script named
+        ``batch`` from each YAML that defines one. Each subdirectory is
+        treated as its own project, so script output lands inside that
+        subdir."""
+        parent = self._project_dir()
+        matches = self._collect_batch_scripts_per_subdir(parent)
+        if not matches:
+            QMessageBox.information(
+                self, "No 'batch' scripts found",
+                f"No YAML under any subdirectory of {parent} defines a "
+                f"script named 'batch'.",
+            )
+            return
+        ui_binsize = float(self._spin_binsize.value())
+        ui_parallel = self._chk_parallel.isChecked()
+
+        all_subs = sorted({m[0] for m in matches}, key=lambda p: p.name)
+        skipped = sorted(
+            d.name for d in parent.iterdir()
+            if d.is_dir() and d not in set(all_subs)
+        )
+
+        def task() -> list[tuple[str, bytes]]:
+            all_figures: list[tuple[str, bytes]] = []
+            if skipped:
+                print(
+                    f"Skipping {len(skipped)} subdir(s) without a 'batch' "
+                    f"script in any YAML: {', '.join(skipped)}",
+                    flush=True,
+                )
+            original_config = self._active_config
+            try:
+                for sub, yaml_name, script in matches:
+                    label = f"{sub.name}/{yaml_name}"
+                    print(
+                        f"\n=== [{label}] running 'batch' "
+                        f"({len(script.get('steps') or [])} step(s)) ===",
+                        flush=True,
+                    )
+                    # _build_script_task reads self._active_config inside the
+                    # closure; swap it to the per-subdir YAML for the run.
+                    self._active_config = yaml_name
+                    self._cached_exp = None
+                    self._cached_exp_key = None
+                    inner = self._build_script_task(
+                        script, sub, ui_binsize, ui_parallel,
+                    )
+                    try:
+                        figs = inner() or []
+                    except Exception as e:  # noqa: BLE001
+                        print(f"[{label}] FAILED: {type(e).__name__}: {e}", flush=True)
+                        continue
+                    for t, b in figs:
+                        all_figures.append((f"[{label}] {t}", b))
             finally:
                 self._active_config = original_config
                 self._cached_exp = None
