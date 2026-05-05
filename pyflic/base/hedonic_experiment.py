@@ -340,10 +340,30 @@ class HedonicFeedingExperiment(TwoWellExperiment):
 
         return combined
 
-    def execute_basic_analysis(self) -> None:
-        TwoWellExperiment.execute_basic_analysis(self)
-        self.hedonic_feeding_plot(save=True)
-        self.weighted_duration_summary(save=True)
+    def execute_basic_analysis(
+        self,
+        *,
+        data_breaks_multiplier: float = 4.0,
+        bleeding_cutoff: float = 50.0,
+        range_minutes: Sequence[float] = (0, 0),
+        transform_licks: bool | None = None,
+        plot_format: str = "png",
+        dpi: int = 200,
+        skip_qc: bool = False,
+    ) -> dict[str, Path]:
+        result = TwoWellExperiment.execute_basic_analysis(
+            self,
+            data_breaks_multiplier=data_breaks_multiplier,
+            bleeding_cutoff=bleeding_cutoff,
+            range_minutes=range_minutes,
+            transform_licks=transform_licks,
+            plot_format=plot_format,
+            dpi=dpi,
+            skip_qc=skip_qc,
+        )
+        self.hedonic_feeding_plot(save=True, range_minutes=range_minutes)
+        self.weighted_duration_summary(save=True, range_minutes=range_minutes)
+        return result
 
     def weighted_duration_summary(
         self,
