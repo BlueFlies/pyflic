@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-05-04
+
+### New features
+
+- **Subdir batch mode in the Analysis Hub.** A new **"Run 'batch' script in every subdirectory"** checkbox appears in the Project card. When enabled, clicking **Run Script** walks every immediate subdirectory of the project directory, finds YAMLs in each one, and runs the script named `batch` from every YAML that defines it. Each subdirectory is treated as its own independent project, so outputs land inside that subdir. Subdirectories whose YAMLs do not define a `batch` script are skipped with a log message. The Config dropdown, Script picker, and single-project cards (Load, Analyze, Plots, Tools) are hidden in this mode. The two batch modes ("Run action for every YAML config" and "Run 'batch' script in every subdirectory") are mutually exclusive.
+
 ## 2026-04-28
 
 ### Internal changes

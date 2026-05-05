@@ -431,15 +431,57 @@ The YAML preview shows the exact YAML that will be written to `flic_config.yaml`
 
 Once scripts are saved in `flic_config.yaml`, they appear in the **Scripts** panel of the hub.
 
-- **Script dropdown** — select which script to run.
-- **Run Script** — execute the selected script. Output is streamed to the hub's output panel in real time.
-- **Run All Scripts** — run every script in the YAML in sequence. Useful for generating a complete set of outputs in one click.
+- **Script dropdown** — select which script to run. Hidden in subdir batch mode (see below).
+- **Run Script** — execute the selected script. Output is streamed to the hub's output panel in real time. In subdir batch mode the label changes to **Run 'batch' in subdirs (N)**.
+- **Run All Scripts** — run every script in the YAML in sequence. Useful for generating a complete set of outputs in one click. Hidden in subdir batch mode.
 
 The hub also shows the Script Editor button (or use **Load → Open Script Editor**) to jump directly into editing.
+
+### Subdir batch mode
+
+The Project card has a **"Run 'batch' script in every subdirectory"** toggle. When enabled, clicking **Run Script** walks every immediate subdirectory of the project directory and runs the script named exactly `batch` from every YAML in each subdir that defines one. Each subdirectory is treated as its own independent project, so output files land inside that subdir's results folder.
+
+- Subdirs whose YAMLs do not define a `batch` script are skipped with a log message.
+- The single-project Load, Analyze, Plots, and Tools cards are hidden while this mode is active.
+- This mode is mutually exclusive with the **"Run action for every YAML config"** toggle; enabling one disables the other.
+
+To use this mode, give your pipeline script the name `batch` in each project YAML:
+
+```yaml
+scripts:
+  - name: "batch"
+    steps:
+      - action: load
+        start: 0
+        end: 0
+        parallel: true
+      - action: basic_analysis
+      - action: feeding_csv
+      - action: pdf_report
+```
 
 ---
 
 ## 6. Tips and patterns
+
+### Name your multi-project pipeline script `batch`
+
+If you run the same analysis across many experiment directories that live as siblings under a parent folder, name the pipeline script `batch` in each project's YAML. The hub's **"Run 'batch' script in every subdirectory"** mode (Project card) then lets you trigger all of them in a single click from the parent directory, without opening each project individually.
+
+```yaml
+scripts:
+  - name: "batch"          # this exact name activates subdir batch mode
+    steps:
+      - action: load
+        start: 0
+        end: 0
+        parallel: true
+      - action: basic_analysis
+      - action: feeding_csv
+      - action: pdf_report
+```
+
+---
 
 ### Always start with `load`
 

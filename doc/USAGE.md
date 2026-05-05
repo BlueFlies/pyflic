@@ -543,7 +543,8 @@ The primary GUI for running analyses. The hub is organized as cards (Project, Lo
 
 **Project card:**
 - Project folder + config selector (`*.yaml` in the directory)
-- **Run action for every YAML config** toggle (batch mode)
+- **Run action for every YAML config** toggle (YAML batch mode): run the selected script against every YAML in the project directory
+- **Run 'batch' script in every subdirectory** toggle (subdir batch mode): walk every immediate subdirectory and run the script named `batch` from each YAML that defines one; each subdir is treated as its own project so outputs land inside it. Subdirs without a `batch` script are skipped with a log message. The two batch modes are mutually exclusive.
 - **YAML info...** popup summarizing type/chamber size/scripts/exclusions per YAML
 - **Edit config…** -- launch the Config Editor for the active YAML
 - **QC viewer…** -- open the QC Viewer for the current project
@@ -554,9 +555,9 @@ The primary GUI for running analyses. The hub is organized as cards (Project, Lo
 - **Remove chambers** (applies `general` group from `remove_chambers.csv`)
 
 **Scripts card:**
-- Script dropdown (single-yaml mode) or union of script names (batch mode)
-- **Run Script**
-- **Run All Scripts** (all scripts in the active YAML)
+- Script dropdown (single-YAML mode) or union of script names (YAML batch mode); hidden in subdir batch mode
+- **Run Script** — in subdir batch mode the button label changes to **Run 'batch' in subdirs (N)** showing the count of subdirs that have a `batch` script
+- **Run All Scripts** (all scripts in the active YAML; hidden in subdir batch mode)
 
 **Analyze card -- core:**
 - Run full basic analysis
