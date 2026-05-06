@@ -7,6 +7,7 @@ QC viewer in separate processes. Runs analysis in a background thread.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -121,6 +122,15 @@ def _is_child_of(widget, parent) -> bool:
     except RuntimeError:
         return True
     return False
+
+
+# Directory names pruned during the recursive batch-target walk, in addition
+# to any name starting with ``.``. Output trees pyflic creates inside a
+# project (`analysis/`, `plots/`, `qc/`) plus common tooling clutter never
+# contain valid batch YAMLs and would only slow the walk and pollute logs.
+_BATCH_SKIP_DIR_NAMES = frozenset({
+    "__pycache__", "node_modules", "analysis", "plots", "qc",
+})
 
 
 def _parse_scripts(cfg: dict) -> list[dict]:
@@ -511,16 +521,23 @@ class AnalysisHubWindow(QMainWindow):
         self._chk_all_yamls.toggled.connect(self._on_all_yamls_toggled)
         card.add_body(self._chk_all_yamls)
 
-        self._chk_all_subdirs = QCheckBox("Run 'batch' script in every subdirectory")
+        self._chk_all_subdirs = QCheckBox(
+            "Run 'batch' script in every directory under here"
+        )
         self._chk_all_subdirs.setToolTip(
-            "When checked, the Run Script button walks every immediate "
-            "subdirectory of the project directory and runs the script "
-            "named 'batch' from every YAML in that subdir that defines "
-            "one. Each subdirectory is treated as its own project, so "
-            "outputs land inside that subdir.\n\n"
-            "Subdirs whose YAMLs don't define a 'batch' script are skipped "
-            "with a log message. The Config dropdown and Script picker are "
-            "ignored in this mode."
+            "When checked, the Run Script button walks the project "
+            "directory recursively (root included, arbitrary depth) and "
+            "runs the script named 'batch' from every YAML that defines "
+            "one. Each batch target is treated as its own project, so "
+            "outputs land inside that target. Outputs are always "
+            "overwritten.\n\n"
+            "Directories with no YAMLs are silent; directories with "
+            "YAMLs but no 'batch' script are logged as near-miss skips. "
+            "Hidden dirs (starting with '.') and known output/tooling "
+            "dirs (analysis, plots, qc, __pycache__, node_modules) are "
+            "pruned from the walk; symlinks are not followed.\n\n"
+            "The Config dropdown and Script picker are ignored in this "
+            "mode."
         )
         self._chk_all_subdirs.toggled.connect(self._on_all_subdirs_toggled)
         card.add_body(self._chk_all_subdirs)
@@ -738,10 +755,12 @@ class AnalysisHubWindow(QMainWindow):
     def _apply_subdir_mode_visibility(self) -> None:
         """Hide single-project UI when subdir-batch mode is on.
 
-        Subdir-batch mode runs Run Script across each child folder, so the
-        parent itself has no data to load. Hide the Load / Analyze / Plots /
-        Tools cards and the 'Run All Scripts' button so the only enabled
-        action is the per-subdir Run Script.
+        Subdir-batch mode walks the tree under the project root and runs
+        the 'batch' script in every batch target it finds, so the only
+        enabled action is the tree-wide Run Script. Hide the Load /
+        Analyze / Plots / Tools cards and the 'Run All Scripts' button.
+        (The root may itself be a batch target — see ADR-0001 — but
+        single-project UI is still hidden in this mode.)
         """
         chk = getattr(self, "_chk_all_subdirs", None)
         on = bool(chk is not None and chk.isChecked())
@@ -762,12 +781,12 @@ class AnalysisHubWindow(QMainWindow):
         subdirs_mode = (getattr(self, "_chk_all_subdirs", None) is not None
                         and self._chk_all_subdirs.isChecked())
         if subdirs_mode:
-            matches = self._collect_batch_scripts_per_subdir(p)
-            n_subs = len({m[0] for m in matches})
+            targets, _near = self._collect_batch_targets(p)
+            n_targets = len({t[0] for t in targets})
             self._status_html = (
                 f"<b>{p}</b> — subdir batch: "
-                f"<code>{n_subs}</code> subdir(s) with a "
-                f"<code>batch</code> script"
+                f"<code>{n_targets}</code> batch target(s) "
+                f"under tree"
             )
             self._rebuild_dynamic_groups(None, None)
             self._scripts = []
@@ -809,8 +828,8 @@ class AnalysisHubWindow(QMainWindow):
           YAML in the project directory (deduped, preserving first-seen
           order).
         - Subdir batch mode on: hide the dropdown entirely; the Run Script
-          button always executes the script named ``batch`` in every YAML
-          across every subdirectory.
+          button executes the script named ``batch`` in every batch target
+          found under the project root (recursive walk, root included).
         """
         subdirs_mode = (getattr(self, "_chk_all_subdirs", None) is not None
                         and self._chk_all_subdirs.isChecked())
@@ -820,10 +839,11 @@ class AnalysisHubWindow(QMainWindow):
             self._cmb_script.clear()
             self._cmb_script.blockSignals(False)
             self._cmb_script.setVisible(False)
-            matches = self._collect_batch_scripts_per_subdir(self._project_dir())
-            n = len({m[0] for m in matches})
+            targets, _near = self._collect_batch_targets(self._project_dir())
+            n = len({t[0] for t in targets})
             self._btn_run_script.setText(
-                f"Run 'batch' in subdirs ({n})" if n else "Run 'batch' in subdirs"
+                f"Run 'batch' ({n} target{'s' if n != 1 else ''})"
+                if n else "Run 'batch' (no targets)"
             )
             self._btn_run_script.setVisible(True)
             self._btn_run_script.setEnabled(n > 0)
@@ -832,8 +852,9 @@ class AnalysisHubWindow(QMainWindow):
             if empty_lbl is not None:
                 if n == 0:
                     empty_lbl.setText(
-                        "No subdirectory contains a YAML with a script named "
-                        "<code>batch</code>. Add one to enable the run."
+                        "No directory under this root contains a YAML with a "
+                        "script named <code>batch</code>. Add one to enable "
+                        "the run."
                     )
                     empty_lbl.setVisible(True)
                 else:
@@ -1058,8 +1079,9 @@ class AnalysisHubWindow(QMainWindow):
         p = self._project_dir()
         subdirs_mode = (getattr(self, "_chk_all_subdirs", None) is not None
                         and self._chk_all_subdirs.isChecked())
-        # In subdir-batch mode the parent dir intentionally holds no YAML —
-        # configs live one level down. Skip the parent-config validation.
+        # In subdir-batch mode the root needn't itself be a batch target —
+        # any qualifying directory under the tree is enough. Skip the
+        # root-config validation.
         if not subdirs_mode:
             configs = _list_yaml_configs(p)
             if not configs:
@@ -1900,7 +1922,7 @@ class AnalysisHubWindow(QMainWindow):
     def _action_run_script(self) -> None:
         if (getattr(self, "_chk_all_subdirs", None) is not None
                 and self._chk_all_subdirs.isChecked()):
-            self._run_batch_in_subdirs()
+            self._run_batch_targets()
             return
         name = self._cmb_script.currentText().strip()
         if not name:
@@ -2031,82 +2053,113 @@ class AnalysisHubWindow(QMainWindow):
         if self._worker is not None:
             self._worker.finished.connect(self._on_load_finished)
 
-    def _collect_batch_scripts_per_subdir(
-        self, parent: Path,
-    ) -> list[tuple[Path, str, dict]]:
-        """Find every ``batch`` script across every YAML in every subdir.
+    def _collect_batch_targets(
+        self, root: Path,
+    ) -> tuple[list[tuple[Path, str, dict]], list[Path]]:
+        """Walk *root* (root included) and classify every directory.
 
-        Returns a list of ``(subdir, yaml_name, script_dict)`` for each
-        immediate subdir of *parent* whose YAML defines a script named
-        ``batch``.  Subdirs with no YAMLs (or no ``batch`` script in any
-        of them) are omitted.
+        Returns ``(targets, near_misses)`` where:
+
+        * ``targets`` — list of ``(target_dir, yaml_name, script_dict)``
+          for every YAML in every directory under *root* that defines a
+          script named ``batch``. Multiple YAMLs in one directory each
+          contribute one entry.
+        * ``near_misses`` — directories that contain at least one
+          parseable YAML but none defines ``batch``. Used for diagnostic
+          skip logging; directories with no YAMLs at all are silent.
+
+        Skips directory names starting with ``.`` and the entries in
+        ``_BATCH_SKIP_DIR_NAMES``; does not follow symlinks.
         """
-        if not parent.is_dir():
-            return []
-        out: list[tuple[Path, str, dict]] = []
-        for sub in sorted(d for d in parent.iterdir() if d.is_dir()):
-            yamls = sorted(
-                f for f in sub.iterdir()
-                if f.is_file() and f.suffix.lower() in (".yaml", ".yml")
+        if not root.is_dir():
+            return [], []
+        targets: list[tuple[Path, str, dict]] = []
+        near_misses: list[Path] = []
+        for dirpath, dirnames, filenames in os.walk(
+            root, topdown=True, followlinks=False,
+        ):
+            # Prune in-place: dot-dirs and known output/tooling dirs.
+            dirnames[:] = sorted(
+                d for d in dirnames
+                if not d.startswith(".")
+                and d not in _BATCH_SKIP_DIR_NAMES
             )
-            for ypath in yamls:
+            cur = Path(dirpath)
+            yamls = sorted(
+                f for f in filenames
+                if Path(f).suffix.lower() in (".yaml", ".yml")
+            )
+            if not yamls:
+                continue
+            had_yaml_parse = False
+            added_for_dir = False
+            for fname in yamls:
                 try:
-                    data = _read_yaml(ypath)
+                    data = _read_yaml(cur / fname)
                 except Exception:  # noqa: BLE001
                     continue
+                had_yaml_parse = True
                 for s in _parse_scripts(data):
                     if str(s.get("name", "")).strip().lower() == "batch":
-                        out.append((sub, ypath.name, s))
+                        targets.append((cur, fname, s))
+                        added_for_dir = True
                         break  # one batch script per YAML
-        return out
+            if had_yaml_parse and not added_for_dir:
+                near_misses.append(cur)
+        return targets, near_misses
 
-    def _run_batch_in_subdirs(self) -> None:
-        """Walk every subdir × every YAML in it; run the script named
-        ``batch`` from each YAML that defines one. Each subdirectory is
-        treated as its own project, so script output lands inside that
-        subdir."""
-        parent = self._project_dir()
-        matches = self._collect_batch_scripts_per_subdir(parent)
-        if not matches:
+    def _run_batch_targets(self) -> None:
+        """Walk the tree under the chosen root and run the ``batch`` script
+        in every batch target. The root is included as a candidate.
+
+        Each target directory is treated as its own project, so script
+        output lands inside the target. Outputs are always overwritten;
+        no skip-if-results-exist guard.
+        """
+        root = self._project_dir()
+        targets, near_misses = self._collect_batch_targets(root)
+        if not targets:
             QMessageBox.information(
                 self, "No 'batch' scripts found",
-                f"No YAML under any subdirectory of {parent} defines a "
-                f"script named 'batch'.",
+                f"No YAML under {root} defines a script named 'batch'.",
             )
             return
         ui_binsize = float(self._spin_binsize.value())
         ui_parallel = self._chk_parallel.isChecked()
 
-        all_subs = sorted({m[0] for m in matches}, key=lambda p: p.name)
-        skipped = sorted(
-            d.name for d in parent.iterdir()
-            if d.is_dir() and d not in set(all_subs)
-        )
+        def _rel(p: Path) -> str:
+            try:
+                rel = p.relative_to(root).as_posix()
+            except ValueError:
+                return p.as_posix()
+            return rel if rel != "." else "."
 
         def task() -> list[tuple[str, bytes]]:
             all_figures: list[tuple[str, bytes]] = []
-            if skipped:
-                print(
-                    f"Skipping {len(skipped)} subdir(s) without a 'batch' "
-                    f"script in any YAML: {', '.join(skipped)}",
-                    flush=True,
-                )
+            if near_misses:
+                for d in near_misses:
+                    print(
+                        f"Skipped: {_rel(d)} (YAML present but no "
+                        f"'batch' script defined)",
+                        flush=True,
+                    )
             original_config = self._active_config
             try:
-                for sub, yaml_name, script in matches:
-                    label = f"{sub.name}/{yaml_name}"
+                for target_dir, yaml_name, script in targets:
+                    rel = _rel(target_dir)
+                    label = f"./{yaml_name}" if rel == "." else f"{rel}/{yaml_name}"
                     print(
                         f"\n=== [{label}] running 'batch' "
                         f"({len(script.get('steps') or [])} step(s)) ===",
                         flush=True,
                     )
                     # _build_script_task reads self._active_config inside the
-                    # closure; swap it to the per-subdir YAML for the run.
+                    # closure; swap it to the per-target YAML for the run.
                     self._active_config = yaml_name
                     self._cached_exp = None
                     self._cached_exp_key = None
                     inner = self._build_script_task(
-                        script, sub, ui_binsize, ui_parallel,
+                        script, target_dir, ui_binsize, ui_parallel,
                     )
                     try:
                         figs = inner() or []

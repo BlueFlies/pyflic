@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(.venv/Scripts/python.exe -c \"import ast; ast.parse\\(open\\('pyflic/base/analysis_hub.py'\\).read\\(\\)\\); print\\('OK'\\)\")",
+      "Bash(.venv/Scripts/python.exe -c \"from pyflic.base import analysis_hub; print\\('import OK'\\); print\\('has _collect_batch_targets:', hasattr\\(analysis_hub.AnalysisHubWindow, '_collect_batch_targets'\\)\\); print\\('has _run_batch_targets:', hasattr\\(analysis_hub.AnalysisHubWindow, '_run_batch_targets'\\)\\)\")"
+    ]
+  }
+}
