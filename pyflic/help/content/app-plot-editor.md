@@ -26,7 +26,7 @@ all, skipping any whose data is missing.
 **Restore defaults** discards the current plot's saved Spec and starts it over. It is
 content only — Styles are shared, so resetting one figure never repaints the rest.
 
-## One panel, four groups
+## One scrolling panel
 
 Everything that shapes the current figure is on one scrolling panel, because a figure is
 one thing and paging half its knobs behind a tab only asked which half was in force:
@@ -36,6 +36,7 @@ one thing and paging half its knobs behind a tab only asked which half was in fo
 | **Style (shared across plots)** | the named Style and every look decision in it |
 | **This plot** | title, axis labels, y range, and the family-specific rows |
 | **Facets** | which phases the figure panels over (faceted family only) |
+| **Roles** | Progressive Ratio only: which Roles (`paired` / `yoked`) appear as rows |
 | **Treatments** | one row each: shown or not, its printed Label, its Colour |
 
 Sizing can be per **figure** or per **facet**. *Figure (mm)* sets the whole image;
@@ -90,9 +91,14 @@ A Progressive Ratio Project adds **Paired − yoked cumulative licks since train
 first. Its x axis is minutes since each chamber group's training end, zero is drawn as the
 reference line, and the mean is shown only over the range every group covers.
 
-The faceted figures (`faceted_licks`, `faceted_pi`, …) still pool the paired and yoked
-flies of each treatment. For a paired-versus-yoked statement use the Project Report, whose
-Progressive Ratio section plots and tests the within-group differences and the breaking
+The faceted figures (`faceted_licks`, `faceted_pi`, `faceted_events`,
+`faceted_medduration`, …) panel as a **Role × Phase** grid when the Combined Analysis
+carries a `Role` column: rows are `paired` and `yoked`, columns are Training and Test.
+The **Facets** checklist chooses which periods appear (Training only, Test only, or both);
+the **Roles** checklist chooses which Roles appear. Untick one Role to show only paired or
+only yoked sucrose feeding for the periods you kept. For the within-group paired − yoked
+*difference* as the scientific unit, use the Project Report (and
+`<project>_PairedYokedDiff.csv`), which plots and tests those differences and the breaking
 point. See [Progressive Ratio experiments](concepts-progressive-ratio.md) and
 [Reports](reports.md).
 

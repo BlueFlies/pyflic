@@ -248,6 +248,10 @@ class PlotSpec:
     #: Faceted family: facet labels to include, in order; empty = all.
     facets: list | None = None
     facet_labels: dict = field(default_factory=dict)
+    #: Faceted family with a Role column (Progressive Ratio): roles to include
+    #: (``paired`` / ``yoked``), in order; empty = all.  Ignored when the tidy
+    #: frame has no Role — non-PR figures stay phase-only.
+    roles: list | None = None
     #: treatment name -> {"label": display, "show": bool}; dict order = plot order.
     treatments: dict = field(default_factory=dict)
     y_limits: list | None = None
@@ -369,11 +373,14 @@ def _metric_values(df: pd.DataFrame, metric: str) -> pd.Series:
 
 def faceted_data(frame: pd.DataFrame, metric: str,
                  label_order: list[str] | None = None) -> pd.DataFrame:
-    """Tidy per-chamber data for one metric: Treatment, Phase, Value [, Experiment].
+    """Tidy per-chamber data for one metric: Treatment, Phase, Value
+    [, Role, Experiment].
 
     *frame* is a faceted summary (a Member's ``feeding_summary_facet.csv`` or
     a Project's ``_Summary_Facet.csv``).  An unfaceted frame becomes a single
-    "Whole recording" phase, so the same builder serves both.
+    "Whole recording" phase, so the same builder serves both.  A Progressive
+    Ratio frame's ``Role`` column is kept so the figure can panel paired and
+    yoked separately instead of pooling them.
     """
     if frame is None or frame.empty:
         return pd.DataFrame(columns=["Treatment", "Phase", "Value"])
@@ -388,9 +395,18 @@ def faceted_data(frame: pd.DataFrame, metric: str,
         "Phase": pd.Categorical(phase, categories=order, ordered=True),
         "Value": _metric_values(frame, metric),
     })
+    if "Role" in frame.columns:
+        roles = frame["Role"].astype(str).str.strip()
+        role_order = list(dict.fromkeys(
+            r for r in roles if r and r.lower() != "nan"))
+        out["Role"] = pd.Categorical(roles, categories=role_order, ordered=True)
     if "Experiment" in frame.columns:
         out["Experiment"] = frame["Experiment"].astype(str)
     out = out[(out["Treatment"] != "") & out["Value"].notna()]
+    if "Role" in out.columns:
+        out = out[out["Role"].notna()
+                  & (out["Role"].astype(str).str.strip() != "")
+                  & (out["Role"].astype(str).str.lower() != "nan")]
     return out.reset_index(drop=True)
 
 
@@ -453,7 +469,8 @@ def effective_width_mm(style: PlotStyle, n_facets: int | None = None) -> float:
     return float(style.width_mm)
 
 
-def effective_height_mm(style: PlotStyle, spec: PlotSpec | None = None) -> float:
+def effective_height_mm(style: PlotStyle, spec: PlotSpec | None = None,
+                        n_rows: int | None = None) -> float:
     if not (style.facet_height_mm and style.facet_height_mm > 0):
         return float(style.height_mm)
     line_mm = float(style.base_pt) * _PT_TO_MM
@@ -463,7 +480,8 @@ def effective_height_mm(style: PlotStyle, spec: PlotSpec | None = None) -> float
             margin += 1.8 * line_mm
         if (spec.title or "").strip():
             margin += 1.8 * (line_mm + 2 * _PT_TO_MM)
-    return float(style.facet_height_mm) + margin
+    rows = max(int(n_rows or 1), 1)
+    return float(style.facet_height_mm) * rows + margin
 
 
 def _theme_for(style: PlotStyle, n_facets: int | None = None,
@@ -521,8 +539,12 @@ def _apply_treatment_order(data: pd.DataFrame, spec: PlotSpec, style: PlotStyle)
 
 
 def build_faceted(df: pd.DataFrame, spec: PlotSpec, style: PlotStyle):
-    """Per-treatment jittered points with a mean overlay, one panel per Facet."""
-    import numpy as np
+    """Per-treatment jittered points with a mean overlay, one panel per Facet.
+
+    When the tidy frame carries ``Role`` (Progressive Ratio), panels are a
+    ``Role ~ Phase`` grid so paired and yoked are never pooled; ``spec.roles``
+    and ``spec.facets`` independently choose which rows and columns appear.
+    """
     import plotnine as p9
 
     data, labels, colors = _apply_treatment_order(df, spec, style)
@@ -534,10 +556,27 @@ def build_faceted(df: pd.DataFrame, spec: PlotSpec, style: PlotStyle):
         data["Phase"].astype(str).map(lambda p: str(spec.facet_labels.get(p, p))),
         categories=shown, ordered=True)
 
+    by_role = "Role" in data.columns and not data.empty
+    shown_roles: list[str] = []
+    if by_role:
+        if hasattr(data["Role"], "cat"):
+            all_roles = [str(r) for r in data["Role"].cat.categories]
+        else:
+            all_roles = list(dict.fromkeys(data["Role"].astype(str)))
+        shown_roles = [r for r in (spec.roles or all_roles) if r in all_roles]
+        data = data[data["Role"].astype(str).isin(shown_roles)].copy()
+        data["Role"] = pd.Categorical(
+            data["Role"].astype(str), categories=shown_roles, ordered=True)
+        by_role = bool(shown_roles) and not data.empty
+
     mark = bool(spec.mark_experiments) and "Experiment" in data.columns
+    scales = "free_y" if spec.free_y else "fixed"
+    if by_role:
+        facet = p9.facet_grid("Role ~ Phase", scales=scales)
+    else:
+        facet = p9.facet_wrap("~Phase", nrow=1, scales=scales)
     g = (p9.ggplot(data, p9.aes("Treatment", "Value", color="Treatment"))
-         + p9.facet_wrap("~Phase", nrow=1,
-                         scales="free_y" if spec.free_y else "fixed")
+         + facet
          + p9.scale_color_manual(values=colors)
          + p9.labs(title=spec.title or "", x=spec.x_label or "",
                    y=spec.y_label or ""))
@@ -573,7 +612,9 @@ def build_faceted(df: pd.DataFrame, spec: PlotSpec, style: PlotStyle):
         g = g + p9.guides(color="none", fill="none")
 
     if not boxed:
-        stat = data.groupby(["Phase", "Treatment"], observed=True)["Value"].agg(
+        group_cols = (["Phase", "Role", "Treatment"] if by_role
+                      else ["Phase", "Treatment"])
+        stat = data.groupby(group_cols, observed=True)["Value"].agg(
             ["mean", "sem"]).reset_index()
         mult = 1.96 if "95ci" in style.mean_style else 1.0
         stat["ymin"] = stat["mean"] - mult * stat["sem"].fillna(0.0)
@@ -595,8 +636,11 @@ def build_faceted(df: pd.DataFrame, spec: PlotSpec, style: PlotStyle):
 
     if spec.y_limits and not spec.free_y:
         g = g + p9.coord_cartesian(ylim=tuple(float(v) for v in spec.y_limits))
-    return g + _theme_for(style, n_facets=len(shown),
-                          height_mm=effective_height_mm(style, spec),
+    n_cols = max(len(shown), 1)
+    n_rows = max(len(shown_roles), 1) if by_role else 1
+    return g + _theme_for(style, n_facets=n_cols,
+                          height_mm=effective_height_mm(style, spec,
+                                                        n_rows=n_rows),
                           show_legend=mark)
 
 

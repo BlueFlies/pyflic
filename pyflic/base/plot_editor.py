@@ -15,16 +15,18 @@ and a multi-select list said otherwise.  Every plot the Project can draw is
 always part of its figure set; ``plot_specs.yaml`` records how each one is
 drawn, not which ones exist.
 
-Everything that shapes the current figure is on one panel, in four groups —
-the shared Style, this plot, its Facets, its Treatments — the same column
-PyTrackingAnalysis's editor uses.  Tabs hid half the controls behind a click
-and made "which of these does the preview answer to" a question; a figure is
-one thing and its knobs belong in one place, scrolled rather than paged.
+Everything that shapes the current figure is on one scrolling panel — the
+shared Style, this plot, its Facets, its Roles (Progressive Ratio), its
+Treatments — the same column PyTrackingAnalysis's editor uses.  Tabs hid
+half the controls behind a click and made "which of these does the preview
+answer to" a question; a figure is one thing and its knobs belong in one
+place, scrolled rather than paged.
 
 Two spec families share that panel.  The Facets group and the binning row
-swap places depending on which family the selected plot belongs to; the
-Style group is identical for both, because a Plot Style is what makes a
-Project's figures look like one set.
+swap places depending on which family the selected plot belongs to; Roles
+appears only when the facet data carries a Role column.  The Style group is
+identical for both families, because a Plot Style is what makes a Project's
+figures look like one set.
 """
 
 from __future__ import annotations
@@ -189,6 +191,7 @@ class PlotEditorWindow(QMainWindow):
         self._controls_lay.addWidget(self._build_style_group())
         self._controls_lay.addWidget(self._build_plot_group())
         self._controls_lay.addWidget(self._build_facets_group())
+        self._controls_lay.addWidget(self._build_roles_group())
         self._controls_lay.addWidget(self._build_treatments_group())
         self._controls_lay.addStretch(1)
 
@@ -276,7 +279,25 @@ class PlotEditorWindow(QMainWindow):
         self.facet_list.setMaximumHeight(110)
         self.facet_list.itemChanged.connect(self._apply_content)
         self.facets_group.add(self.facet_list)
+        self.facets_group.add_note(
+            "Which phases (e.g. Training / Test) appear as columns. "
+            "Untick to leave a period out.")
         return self.facets_group
+
+    def _build_roles_group(self) -> CardGroup:
+        """Paired vs yoked panels — Progressive Ratio only, when Role is present."""
+        self.roles_group = CardGroup("Roles")
+        _add_help(self.roles_group, "concepts-progressive-ratio",
+                  "Paired and yoked are roles, not treatments")
+        self.role_list = QListWidget()
+        self.role_list.setMaximumHeight(90)
+        self.role_list.itemChanged.connect(self._apply_content)
+        self.roles_group.add(self.role_list)
+        self.roles_group.add_note(
+            "Progressive Ratio: which Roles (paired / yoked) appear as rows. "
+            "Untick to show one Role only; phases above still choose the period.")
+        self.roles_group.setVisible(False)
+        return self.roles_group
 
     def _build_treatments_group(self) -> CardGroup:
         """One row per treatment: shown or not, what it is called, its colour.
@@ -287,7 +308,7 @@ class PlotEditorWindow(QMainWindow):
         marked as shared where it is edited.
         """
         group = CardGroup("Treatments")
-        _add_help(group, "app-plot-editor#one-panel-four-groups", "Labels, colours and which treatments are drawn")
+        _add_help(group, "app-plot-editor#one-scrolling-panel", "Labels, colours and which treatments are drawn")
         self.treatment_table = QTableWidget(0, 3)
         self.treatment_table.setHorizontalHeaderLabels(
             ["Treatment", "Label", "Colour"])
@@ -573,6 +594,10 @@ class PlotEditorWindow(QMainWindow):
 
         data = self._data_for(plot_id)
         self.facet_list.clear()
+        self.role_list.clear()
+        has_roles = (not is_timecourse and data is not None and not data.empty
+                     and "Role" in data.columns)
+        self.roles_group.setVisible(has_roles)
         if not is_timecourse and data is not None and not data.empty:
             phases = list(dict.fromkeys(data["Phase"].astype(str)))
             for phase in phases:
@@ -582,6 +607,15 @@ class PlotEditorWindow(QMainWindow):
                 item.setCheckState(Qt.CheckState.Checked if included
                                    else Qt.CheckState.Unchecked)
                 self.facet_list.addItem(item)
+            if has_roles:
+                roles = list(dict.fromkeys(data["Role"].astype(str)))
+                for role in roles:
+                    item = QListWidgetItem(role)
+                    item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                    included = not spec.roles or role in spec.roles
+                    item.setCheckState(Qt.CheckState.Checked if included
+                                       else Qt.CheckState.Unchecked)
+                    self.role_list.addItem(item)
 
         self._fill_treatment_table(spec, data)
         self._loading = False
@@ -658,6 +692,15 @@ class PlotEditorWindow(QMainWindow):
                   for i in range(self.facet_list.count())
                   if self.facet_list.item(i).checkState() == Qt.CheckState.Checked]
         spec.facets = facets or None
+
+        if self.roles_group.isVisible():
+            roles = [self.role_list.item(i).text()
+                     for i in range(self.role_list.count())
+                     if self.role_list.item(i).checkState()
+                     == Qt.CheckState.Checked]
+            spec.roles = roles or None
+        else:
+            spec.roles = None
 
         treatments = {}
         for row in range(self.treatment_table.rowCount()):

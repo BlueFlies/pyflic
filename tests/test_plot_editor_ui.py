@@ -239,14 +239,18 @@ def test_every_control_is_on_one_scrolling_panel(editor):
     assert not hasattr(editor, "tabs")
     titles = [g.title() for g in editor.controls_scroll.findChildren(CardGroup)]
     assert titles == ["Style (shared across plots)", "This plot",
-                      "Facets", "Treatments"]
+                      "Facets", "Roles", "Treatments"]
+    ## Roles is Progressive Ratio only; a Custom Project keeps it built but hidden.
+    assert editor.roles_group.isHidden()
 
 
 def test_the_facets_group_is_hidden_for_a_time_course(editor, app):
     _select(editor, app, "faceted_pi")
     assert not editor.facets_group.isHidden()
+    assert editor.roles_group.isHidden()
     _select(editor, app, "timecourse_pi")
     assert editor.facets_group.isHidden()
+    assert editor.roles_group.isHidden()
     ## ...and the binning row it makes way for is shown instead.
     assert not editor.binsize.isHidden()
 
@@ -320,3 +324,101 @@ def test_the_toolbar_ends_with_help(app):
         assert "app-plot-editor#spec-and-style" in refs
     finally:
         window.close()
+
+
+# ---------------------------------------------------------------------------
+# Progressive Ratio: Roles checklist
+# ---------------------------------------------------------------------------
+
+def _pr_facet_rows() -> pd.DataFrame:
+    rows = []
+    for experiment in ("rep1", "rep2"):
+        for facet in ("Training", "Test"):
+            for role in ("paired", "yoked"):
+                for treatment, base in (("Ctrl", 10.0), ("Exp", 40.0)):
+                    for index in range(3):
+                        rows.append({
+                            "Experiment": experiment, "Facet": facet,
+                            "Treatment": treatment, "Role": role,
+                            "DFM": 1, "Chamber": index + 1, "Group": 1,
+                            "LicksA": base + index, "LicksB": 5.0,
+                            "EventsA": 2, "EventsB": 1,
+                            "MedDurationA": 1.0, "MedDurationB": 0.5,
+                            "PI": 0.3,
+                        })
+    return pd.DataFrame(rows)
+
+
+@pytest.fixture
+def pr_project_dir(tmp_path: Path) -> Path:
+    """A Progressive Ratio Project with Role on the pooled facet table."""
+    root = tmp_path / "pr_proj"
+    design = {
+        "experiment_type": "ProgressiveRatio",
+        "chamber_layout": "two_well",
+        "well_names": {"A": "Sucrose", "B": "Yeast"},
+    }
+    for name in ("rep1", "rep2"):
+        member = root / name
+        member.mkdir(parents=True)
+        (member / "flic_config.yaml").write_text(
+            yaml.safe_dump({
+                "dfms": [{
+                    "id": 1,
+                    "paired_chambers": [1, 3, 5],
+                    "chambers": {1: "Ctrl", 2: "Ctrl", 3: "Exp",
+                                 4: "Exp", 5: "Ctrl", 6: "Ctrl"},
+                }],
+            }, sort_keys=False), encoding="utf-8")
+    (root / "project.yaml").write_text(
+        yaml.safe_dump({"name": "pr_proj", "design": {"global": design}},
+                       sort_keys=False), encoding="utf-8")
+    analysis = root / "analysis"
+    analysis.mkdir()
+    _pr_facet_rows().to_csv(analysis / "pr_proj_Summary_Facet.csv", index=False)
+    return root
+
+
+@pytest.fixture
+def pr_editor(app, pr_project_dir):
+    window = PlotEditorWindow(str(pr_project_dir))
+    window.show()
+    app.processEvents()
+    yield window
+    window.close()
+
+
+def test_pr_editor_shows_roles_for_faceted_plots(pr_editor, app):
+    _select(pr_editor, app, "faceted_licks")
+    assert not pr_editor.roles_group.isHidden()
+    roles = [pr_editor.role_list.item(i).text()
+             for i in range(pr_editor.role_list.count())]
+    assert roles == ["paired", "yoked"]
+    assert all(pr_editor.role_list.item(i).checkState() == Qt.CheckState.Checked
+               for i in range(pr_editor.role_list.count()))
+
+
+def test_pr_editor_hides_roles_for_time_courses(pr_editor, app):
+    _select(pr_editor, app, "faceted_licks")
+    assert not pr_editor.roles_group.isHidden()
+    _select(pr_editor, app, "timecourse_pr_diff")
+    assert pr_editor.roles_group.isHidden()
+    assert pr_editor.facets_group.isHidden()
+
+
+def test_pr_editor_persists_phase_and_role_filters(pr_editor, app, pr_project_dir):
+    _select(pr_editor, app, "faceted_licks")
+    ## Uncheck Training and yoked — Test × paired only.
+    for i in range(pr_editor.facet_list.count()):
+        item = pr_editor.facet_list.item(i)
+        item.setCheckState(Qt.CheckState.Checked if item.text() == "Test"
+                           else Qt.CheckState.Unchecked)
+    for i in range(pr_editor.role_list.count()):
+        item = pr_editor.role_list.item(i)
+        item.setCheckState(Qt.CheckState.Checked if item.text() == "paired"
+                           else Qt.CheckState.Unchecked)
+    pr_editor._apply_content()
+    pr_editor._save_specs()
+    saved = pubfigures.load_project_specs(str(pr_project_dir))
+    assert saved.plots["faceted_licks"].facets == ["Test"]
+    assert saved.plots["faceted_licks"].roles == ["paired"]

@@ -120,6 +120,83 @@ def test_faceted_data_of_an_unfaceted_frame_is_one_phase():
     assert list(df["Phase"].cat.categories) == ["Whole recording"]
 
 
+def _pr_facet_frame() -> pd.DataFrame:
+    """Progressive Ratio facet summary: Training/Test × paired/yoked."""
+    rows = []
+    for experiment in ("rep1", "rep2"):
+        for facet in ("Training", "Test"):
+            for role in ("paired", "yoked"):
+                for treatment, base in (("Ctrl", 10.0), ("Exp", 40.0)):
+                    for index in range(3):
+                        rows.append({
+                            "Experiment": experiment, "Facet": facet,
+                            "FacetRange": "(0, 30)" if facet == "Training"
+                            else "(30, inf)",
+                            "Treatment": treatment, "Role": role,
+                            "DFM": 1, "Chamber": index + 1,
+                            "Group": 1,
+                            "LicksA": base + index + (5 if role == "paired" else 0),
+                            "LicksB": 5.0,
+                            "EventsA": 2 + index, "EventsB": 1,
+                            "MedDurationA": 1.0 + index * 0.1,
+                            "MedDurationB": 0.5,
+                            "PI": 0.2 if treatment == "Ctrl" else 0.7,
+                        })
+    return pd.DataFrame(rows)
+
+
+def test_faceted_data_keeps_role_for_progressive_ratio():
+    df = pubfigures.faceted_data(_pr_facet_frame(), "Licks")
+    assert "Role" in df.columns
+    assert list(df["Role"].cat.categories) == ["paired", "yoked"]
+    assert set(df["Phase"].astype(str)) == {"Training", "Test"}
+
+
+def test_faceted_data_without_role_stays_phase_only():
+    df = pubfigures.faceted_data(_facet_frame(), "PI")
+    assert "Role" not in df.columns
+
+
+def test_build_faceted_filters_phase_and_role_independently(tmp_path: Path):
+    df = pubfigures.faceted_data(_pr_facet_frame(), "Licks")
+    spec = pubfigures.default_spec("faceted_licks")
+    spec.facets = ["Test"]
+    spec.roles = ["paired"]
+    figure = pubfigures.build_figure("faceted_licks", df, spec,
+                                     pubfigures.PlotStyle())
+    out = pubfigures.save_figure(figure, str(tmp_path / "pr.svg"), "svg")
+    assert Path(out).stat().st_size > 1000
+    ## Filtering happens before draw: only the chosen cells remain.
+    data, _labels, _colors = pubfigures._apply_treatment_order(
+        df, spec, pubfigures.PlotStyle())
+    include_phases = [p for p in (spec.facets or []) if p in data["Phase"].cat.categories]
+    filtered = data[data["Phase"].isin(include_phases)]
+    filtered = filtered[filtered["Role"].astype(str).isin(spec.roles)]
+    assert set(filtered["Phase"].astype(str)) == {"Test"}
+    assert set(filtered["Role"].astype(str)) == {"paired"}
+
+
+def test_roles_round_trip_through_yaml(tmp_path: Path):
+    specs = pubfigures.ProjectSpecs()
+    specs.ensure_default_style()
+    spec = pubfigures.default_spec("faceted_licks")
+    spec.facets = ["Test"]
+    spec.roles = ["paired", "yoked"]
+    specs.plots["faceted_licks"] = spec
+    pubfigures.save_project_specs(tmp_path, specs)
+    loaded = pubfigures.load_project_specs(tmp_path)
+    assert loaded.plots["faceted_licks"].facets == ["Test"]
+    assert loaded.plots["faceted_licks"].roles == ["paired", "yoked"]
+
+
+def test_effective_height_scales_with_role_rows():
+    style = pubfigures.PlotStyle(facet_height_mm=40.0, height_mm=180.0)
+    one = pubfigures.effective_height_mm(style, n_rows=1)
+    two = pubfigures.effective_height_mm(style, n_rows=2)
+    assert two > one
+    assert two - one == pytest.approx(40.0)
+
+
 def test_timecourse_data_keeps_the_time_axis():
     df = pubfigures.timecourse_data(_binned_frame(), "Licks")
     assert set(df["Minutes"]) == {15, 45, 75}
