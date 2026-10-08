@@ -122,10 +122,9 @@ Facets. Give an explicit window and that one window is used for every group inst
 the Facet column reading `Custom`: the Facets are per Chamber Group, so a single shared
 window is a different question rather than a filter on the same one.
 
-The Project-level publication figures (`faceted_pi` and friends in the
-[Plot Editor](app-plot-editor.md)) still pool the two roles; use the pooled
-`<project>_PairedYokedDiff.csv` for a paired-vs-yoked statement across members, or the
-Project Report, which tests it.
+Project-level faceted publication figures in the [Plot Editor](app-plot-editor.md) panel by
+Role when the Combined Analysis carries it. Use the pooled `<project>_PairedYokedDiff.csv`
+or the Project Report for the paired − yoked *difference* statement across members.
 
 ### The type's own figures
 
@@ -135,6 +134,15 @@ minutes since the chamber group's training end, one mean ± SEM curve per treatm
 individual group traces faint behind. The mean runs only as far as the shortest group, so
 every group is in every averaged point and the curve never jumps when one group's recording
 ends; the faint traces run to each group's own end.
+
+**Breaking point vs Test time** (`scatter_pr_breaking_point` in a Project) — one point per
+chamber group from the stacked `pr_breaking_point.csv`: Breaking Point against `BreakMin`
+(minutes since training end of the last counted Test light event), coloured by treatment.
+Open symbols are censored (still responding at the end of the Test window).
+
+**Breaking point by treatment** (`dot_pr_breaking_point` in a Project) — the same rows with
+Treatment on the x axis and Breaking Point on y (no Phase/Role facets). Open symbols are
+censored; mean ± SEM overlays each treatment.
 
 **Training-aligned traces** (`plot_pr_cumulative_licks`) — per DFM, one panel per chamber
 group: paired and yoked cumulative sucrose-well licks since training end, with the bins in

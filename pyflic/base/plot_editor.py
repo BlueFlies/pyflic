@@ -211,7 +211,7 @@ class PlotEditorWindow(QMainWindow):
 
     def _build_plot_group(self) -> CardGroup:
         group = CardGroup("This plot")
-        _add_help(group, "app-plot-editor#two-figure-families", "The two figure families")
+        _add_help(group, "app-plot-editor#figure-families", "The figure families")
         page = QWidget()
         form = QFormLayout(page)
         form.setContentsMargins(0, 0, 0, 0)
@@ -280,8 +280,8 @@ class PlotEditorWindow(QMainWindow):
         self.facet_list.itemChanged.connect(self._apply_content)
         self.facets_group.add(self.facet_list)
         self.facets_group.add_note(
-            "Which phases (e.g. Training / Test) appear as columns. "
-            "Untick to leave a period out.")
+            "Which phases appear as rows on the right (Test above Training "
+            "when both are shown). Untick to leave a period out.")
         return self.facets_group
 
     def _build_roles_group(self) -> CardGroup:
@@ -294,8 +294,9 @@ class PlotEditorWindow(QMainWindow):
         self.role_list.itemChanged.connect(self._apply_content)
         self.roles_group.add(self.role_list)
         self.roles_group.add_note(
-            "Progressive Ratio: which Roles (paired / yoked) appear as rows. "
-            "Untick to show one Role only; phases above still choose the period.")
+            "Progressive Ratio: which Roles (paired / yoked) appear as columns "
+            "along the top. Untick to show one Role only; phases above still "
+            "choose the period.")
         self.roles_group.setVisible(False)
         return self.roles_group
 
@@ -570,6 +571,8 @@ class PlotEditorWindow(QMainWindow):
         self._loading = True
         family = pubfigures.family_of(plot_id)
         is_timecourse = family == pubfigures.FAMILY_TIMECOURSE
+        is_faceted = family == pubfigures.FAMILY_FACETED
+        is_scatter = family == pubfigures.FAMILY_SCATTER
 
         self.title_edit.setText(spec.title)
         self.xlabel_edit.setText(spec.x_label)
@@ -583,22 +586,22 @@ class PlotEditorWindow(QMainWindow):
         self.binsize.setValue(spec.binsize)
         self.ribbon.setChecked(spec.ribbon)
 
-        self.facets_group.setVisible(not is_timecourse)
+        self.facets_group.setVisible(is_faceted)
         for widget in (self.binsize, self.binsize_label, self.ribbon,
                        self.ribbon_label):
             widget.setVisible(is_timecourse)
-        self.free_y.setVisible(not is_timecourse)
+        self.free_y.setVisible(is_faceted)
         ## Member shapes encode a per-point identity; a time course plots
         ## treatment means, so there is no point to give a shape.
-        self.mark_experiments.setVisible(not is_timecourse)
+        self.mark_experiments.setVisible(is_faceted or is_scatter)
 
         data = self._data_for(plot_id)
         self.facet_list.clear()
         self.role_list.clear()
-        has_roles = (not is_timecourse and data is not None and not data.empty
+        has_roles = (is_faceted and data is not None and not data.empty
                      and "Role" in data.columns)
         self.roles_group.setVisible(has_roles)
-        if not is_timecourse and data is not None and not data.empty:
+        if is_faceted and data is not None and not data.empty:
             phases = list(dict.fromkeys(data["Phase"].astype(str)))
             for phase in phases:
                 item = QListWidgetItem(phase)
@@ -608,7 +611,7 @@ class PlotEditorWindow(QMainWindow):
                                    else Qt.CheckState.Unchecked)
                 self.facet_list.addItem(item)
             if has_roles:
-                roles = list(dict.fromkeys(data["Role"].astype(str)))
+                roles = pubfigures.order_roles(data["Role"].astype(str))
                 for role in roles:
                     item = QListWidgetItem(role)
                     item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
@@ -658,12 +661,19 @@ class PlotEditorWindow(QMainWindow):
         if plot_id is None or self.project is None:
             return None
         info = pubfigures.PLOT_TYPES[plot_id]
-        if info["family"] == pubfigures.FAMILY_TIMECOURSE:
+        family = info["family"]
+        if family == pubfigures.FAMILY_TIMECOURSE:
             source = pubfigures.frame_for(plot_id, self._facet_frame,
                                           self._binned_frame, self.project)
             if source is None or source.empty:
                 return None
             return pubfigures.timecourse_data(source, info["metric"])
+        if family == pubfigures.FAMILY_SCATTER:
+            source = pubfigures.frame_for(plot_id, self._facet_frame,
+                                          self._binned_frame, self.project)
+            if source is None or source.empty:
+                return None
+            return pubfigures.breaking_point_data(source)
         source = self._facet_frame
         if source is None or source.empty:
             return None
@@ -698,7 +708,7 @@ class PlotEditorWindow(QMainWindow):
                      for i in range(self.role_list.count())
                      if self.role_list.item(i).checkState()
                      == Qt.CheckState.Checked]
-            spec.roles = roles or None
+            spec.roles = pubfigures.order_roles(roles) or None
         else:
             spec.roles = None
 
@@ -811,14 +821,21 @@ class PlotEditorWindow(QMainWindow):
         data = self._data_for(plot_id)
         if data is None or data.empty:
             source = pubfigures.source_of(plot_id)
-            self._show_preview_message(
-                "No paired − yoked curve data saved yet — run the basic "
-                "analysis (or plot_pr_cumulative_diff) in each member."
-                if source == "pr_diff" else
-                "No binned data saved yet — run a binned CSV in each "
-                "member." if source == "binned"
-                else "No combined analysis yet — build it from the Hub's "
-                     "Project panel.")
+            if source == "pr_diff":
+                message = (
+                    "No paired − yoked curve data saved yet — run the basic "
+                    "analysis (or plot_pr_cumulative_diff) in each member.")
+            elif source == "pr_breaking":
+                message = (
+                    "No breaking point table saved yet — run the breaking "
+                    "point step (or basic analysis) in each member.")
+            elif source == "binned":
+                message = ("No binned data saved yet — run a binned CSV in "
+                           "each member.")
+            else:
+                message = ("No combined analysis yet — build it from the "
+                           "Hub's Project panel.")
+            self._show_preview_message(message)
             return
         try:
             figure = pubfigures.build_figure(

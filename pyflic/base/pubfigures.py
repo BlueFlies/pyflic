@@ -7,7 +7,7 @@ plus a named, reusable :class:`PlotStyle` (look).  Both persist in
 ``<project>/plot_specs.yaml``, written by the Plot Editor; saved figures land in
 ``<project>/figures/``.
 
-pyflic has **two** spec families where PyTrackingAnalysis has one:
+pyflic has **three** spec families where PyTrackingAnalysis has one:
 
 * ``faceted_<metric>`` — x = Treatment, one panel per Facet, jittered points
   with a mean overlay.  Expressible only because a time window is now a column
@@ -15,8 +15,12 @@ pyflic has **two** spec families where PyTrackingAnalysis has one:
 * ``timecourse_<metric>`` — x = time bin, one line per Treatment with an SEM
   ribbon.  The figure that most distinguishes FLIC data, and the reason the
   Editor carries two preview forms.
+* ``scatter_pr_breaking_point`` — Progressive Ratio only: one point per chamber
+  group, Breaking Point against Test-phase minutes (``BreakMin``).
+* ``dot_pr_breaking_point`` — Progressive Ratio only: Breaking Point against
+  Treatment (no Phase/Role facets).
 
-Both share the ``styles:`` block, so a Project has one look.
+All share the ``styles:`` block, so a Project has one look.
 
 SVG output uses ``svg.fonttype='none'`` so labels arrive in Illustrator as live,
 editable text; PDF embeds TrueType (fonttype 42) for the same reason.
@@ -39,6 +43,37 @@ FIGURES_DIRNAME = "figures"
 DEFAULT_PALETTE = ["#2563eb", "#dc2626", "#16a34a", "#d97706",
                    "#7c3aed", "#0891b2", "#64748b", "#be185d"]
 
+#: Progressive Ratio Role columns left-to-right (yoked control, then paired).
+ROLE_ORDER = ("yoked", "paired")
+#: Progressive Ratio Phase rows top-to-bottom when Role is on the columns.
+PHASE_ROW_ORDER = ("Test", "Training")
+
+
+def order_roles(roles) -> list[str]:
+    """Stable Role order for facet columns: yoked, then paired, then any other."""
+    seen = list(dict.fromkeys(str(r) for r in roles
+                              if r and str(r).lower() != "nan"))
+    known = [r for r in ROLE_ORDER if r in seen]
+    other = [r for r in seen if r not in ROLE_ORDER]
+    return known + other
+
+
+def order_phases(phases) -> list[str]:
+    """Stable Phase order for Role-grid rows: Test, then Training, then any other."""
+    seen = list(dict.fromkeys(str(p) for p in phases
+                              if p and str(p).lower() != "nan"))
+    known = [p for p in PHASE_ROW_ORDER if p in seen]
+    other = [p for p in seen if p not in PHASE_ROW_ORDER]
+    return known + other
+
+
+def role_display_label(role: str) -> str:
+    """Strip label for a Role: ``yoked``/``paired`` → ``Yoked``/``Paired``."""
+    text = str(role).strip()
+    if text.lower() in ROLE_ORDER:
+        return text.lower().capitalize()
+    return text
+
 _THEMES = ("classic", "bw", "minimal")
 _MEAN_STYLES = ("point+sem", "bar+sem", "point+95ci", "bar+95ci")
 _GEOMS = ("dots", "box", "box+dots")
@@ -46,6 +81,7 @@ _STRIP_STYLES = ("plain", "boxed")
 
 FAMILY_FACETED = "faceted"
 FAMILY_TIMECOURSE = "timecourse"
+FAMILY_SCATTER = "scatter"
 
 #: Every plot id the Editor and the report set can name.  ``metric`` is
 #: resolved through ``analytics._resolve_metric_col``, so a two-well summary's
@@ -115,11 +151,36 @@ PLOT_TYPES: dict[str, dict] = {
         "layout": "two_well", "experiment_type": "ProgressiveRatio",
         "source": "pr_diff", "common_range": True,
     },
+    ## One point per Chamber Group: the paired fly's Breaking Point against
+    ## the Test-phase minute of its last counted light event (ADR-0014).
+    "scatter_pr_breaking_point": {
+        "family": FAMILY_SCATTER, "metric": "BreakingPoint",
+        "y_label": "Breaking point",
+        "x_label": "Time since training end (min)",
+        "y_limits": None, "ref_line": None,
+        "display": "Breaking point vs Test time",
+        "layout": "two_well", "experiment_type": "ProgressiveRatio",
+        "source": "pr_breaking", "builder": "breaking_time",
+    },
+    ## One point per Chamber Group: Breaking Point by Treatment (no facets).
+    "dot_pr_breaking_point": {
+        "family": FAMILY_SCATTER, "metric": "BreakingPoint",
+        "y_label": "Breaking point",
+        "x_label": "",
+        "y_limits": None, "ref_line": None,
+        "display": "Breaking point by treatment",
+        "layout": "two_well", "experiment_type": "ProgressiveRatio",
+        "source": "pr_breaking", "builder": "breaking_treatment",
+    },
 }
 
-#: Member file behind each non-default time-course source, relative to
-#: ``analysis/``; the default time-course source is ``binned_feeding_summary.csv``.
-SOURCE_FILES: dict[str, str] = {"pr_diff": "pr_cumulative_diff.csv"}
+#: Member file behind each named extra source, relative to ``analysis/``.
+#: The default time-course source is ``binned_feeding_summary.csv``; the
+#: default faceted source is the Combined Analysis facet table.
+SOURCE_FILES: dict[str, str] = {
+    "pr_diff": "pr_cumulative_diff.csv",
+    "pr_breaking": "pr_breaking_point.csv",
+}
 
 
 def family_of(plot_id: str) -> str:
@@ -249,8 +310,8 @@ class PlotSpec:
     facets: list | None = None
     facet_labels: dict = field(default_factory=dict)
     #: Faceted family with a Role column (Progressive Ratio): roles to include
-    #: (``paired`` / ``yoked``), in order; empty = all.  Ignored when the tidy
-    #: frame has no Role — non-PR figures stay phase-only.
+    #: as top columns (``paired`` / ``yoked``), in order; empty = all.  Ignored
+    #: when the tidy frame has no Role — non-PR figures stay phase-only.
     roles: list | None = None
     #: treatment name -> {"label": display, "show": bool}; dict order = plot order.
     treatments: dict = field(default_factory=dict)
@@ -291,13 +352,16 @@ class PlotSpec:
 def default_spec(plot_id: str, well_a: str = "well A") -> PlotSpec:
     info = PLOT_TYPES[plot_id]
     y_limits = info["y_limits"]
+    if info["family"] == FAMILY_FACETED or info.get("builder") == "breaking_treatment":
+        x_label = str(info.get("x_label") or "")
+    else:
+        x_label = str(info.get("x_label") or "Time (min)")
     return PlotSpec(
         y_label=str(info["y_label"]).replace("well A", well_a),
         y_limits=list(y_limits) if y_limits is not None else None,
         ref_line=info["ref_line"],
         free_y=bool(info.get("free_y", False)),
-        x_label=("" if info["family"] == FAMILY_FACETED
-                 else str(info.get("x_label") or "Time (min)")),
+        x_label=x_label,
         common_range=bool(info.get("common_range", False)),
     )
 
@@ -397,8 +461,7 @@ def faceted_data(frame: pd.DataFrame, metric: str,
     })
     if "Role" in frame.columns:
         roles = frame["Role"].astype(str).str.strip()
-        role_order = list(dict.fromkeys(
-            r for r in roles if r and r.lower() != "nan"))
+        role_order = order_roles(roles)
         out["Role"] = pd.Categorical(roles, categories=role_order, ordered=True)
     if "Experiment" in frame.columns:
         out["Experiment"] = frame["Experiment"].astype(str)
@@ -542,14 +605,18 @@ def build_faceted(df: pd.DataFrame, spec: PlotSpec, style: PlotStyle):
     """Per-treatment jittered points with a mean overlay, one panel per Facet.
 
     When the tidy frame carries ``Role`` (Progressive Ratio), panels are a
-    ``Role ~ Phase`` grid so paired and yoked are never pooled; ``spec.roles``
-    and ``spec.facets`` independently choose which rows and columns appear.
+    ``Phase ~ Role`` grid so paired and yoked are never pooled: Roles along
+    the top, phases along the right.  ``spec.roles`` and ``spec.facets``
+    independently choose which columns and rows appear.
     """
     import plotnine as p9
 
     data, labels, colors = _apply_treatment_order(df, spec, style)
     all_phases = list(data["Phase"].cat.categories)
     include = [p for p in (spec.facets or all_phases) if p in all_phases]
+    ## With Role columns, Phase is the row facet: Test above Training.
+    if "Role" in data.columns and not data.empty:
+        include = order_phases(include)
     data = data[data["Phase"].isin(include)].copy()
     shown = [str(spec.facet_labels.get(p, p)) for p in include]
     data["Phase"] = pd.Categorical(
@@ -563,16 +630,21 @@ def build_faceted(df: pd.DataFrame, spec: PlotSpec, style: PlotStyle):
             all_roles = [str(r) for r in data["Role"].cat.categories]
         else:
             all_roles = list(dict.fromkeys(data["Role"].astype(str)))
-        shown_roles = [r for r in (spec.roles or all_roles) if r in all_roles]
+        selected = set(spec.roles) if spec.roles else set(all_roles)
+        shown_roles = order_roles(r for r in all_roles if r in selected)
         data = data[data["Role"].astype(str).isin(shown_roles)].copy()
+        ## Canonical roles stay lowercase in the Spec / CSV; strips print
+        ## Yoked / Paired.
+        role_labels = [role_display_label(r) for r in shown_roles]
         data["Role"] = pd.Categorical(
-            data["Role"].astype(str), categories=shown_roles, ordered=True)
+            data["Role"].astype(str).map(role_display_label),
+            categories=role_labels, ordered=True)
         by_role = bool(shown_roles) and not data.empty
 
     mark = bool(spec.mark_experiments) and "Experiment" in data.columns
     scales = "free_y" if spec.free_y else "fixed"
     if by_role:
-        facet = p9.facet_grid("Role ~ Phase", scales=scales)
+        facet = p9.facet_grid("Phase ~ Role", scales=scales)
     else:
         facet = p9.facet_wrap("~Phase", nrow=1, scales=scales)
     g = (p9.ggplot(data, p9.aes("Treatment", "Value", color="Treatment"))
@@ -636,8 +708,10 @@ def build_faceted(df: pd.DataFrame, spec: PlotSpec, style: PlotStyle):
 
     if spec.y_limits and not spec.free_y:
         g = g + p9.coord_cartesian(ylim=tuple(float(v) for v in spec.y_limits))
-    n_cols = max(len(shown), 1)
-    n_rows = max(len(shown_roles), 1) if by_role else 1
+    ## Width follows columns (Roles when present, else phases); height follows
+    ## rows (phases when Role is present).
+    n_cols = max(len(shown_roles), 1) if by_role else max(len(shown), 1)
+    n_rows = max(len(shown), 1) if by_role else 1
     return g + _theme_for(style, n_facets=n_cols,
                           height_mm=effective_height_mm(style, spec,
                                                         n_rows=n_rows),
@@ -696,11 +770,193 @@ def build_timecourse(df: pd.DataFrame, spec: PlotSpec, style: PlotStyle):
                           show_legend=True)
 
 
+def breaking_point_data(frame: pd.DataFrame) -> pd.DataFrame:
+    """Tidy Breaking Point rows: Treatment, BreakingPoint, Censored
+    [, BreakMin, Experiment].
+
+    *frame* is a stacked ``pr_breaking_point.csv`` (one row per chamber group).
+    ``BreakMin`` is kept when present (time scatter); treatment plots need only
+    Treatment and BreakingPoint.
+    """
+    cols = ["Treatment", "BreakMin", "BreakingPoint", "Censored"]
+    if frame is None or frame.empty:
+        return pd.DataFrame(columns=cols)
+    need = {"Treatment", "BreakingPoint"}
+    if not need.issubset(frame.columns):
+        return pd.DataFrame(columns=cols)
+    out = pd.DataFrame({
+        "Treatment": frame["Treatment"].astype(str).str.strip(),
+        "BreakingPoint": pd.to_numeric(frame["BreakingPoint"], errors="coerce"),
+    })
+    if "BreakMin" in frame.columns:
+        out["BreakMin"] = pd.to_numeric(frame["BreakMin"], errors="coerce")
+    else:
+        out["BreakMin"] = pd.NA
+    if "Censored" in frame.columns:
+        from .analytics import as_bool
+        out["Censored"] = as_bool(frame["Censored"])
+    else:
+        out["Censored"] = False
+    if "Experiment" in frame.columns:
+        out["Experiment"] = frame["Experiment"].astype(str)
+    out = out[(out["Treatment"] != "") & out["BreakingPoint"].notna()]
+    return out.reset_index(drop=True)
+
+
+def build_breaking_point_scatter(df: pd.DataFrame, spec: PlotSpec,
+                                 style: PlotStyle):
+    """One point per chamber group: Breaking Point vs Test-phase minutes.
+
+    Open symbols are censored (still responding at the end of the Test window);
+    filled symbols are observed breaks.
+    """
+    import plotnine as p9
+
+    data, labels, colors = _apply_treatment_order(df, spec, style)
+    if "BreakMin" in data.columns:
+        data = data[data["BreakMin"].notna()].copy()
+    if data.empty:
+        return (p9.ggplot()
+                + p9.labs(title=spec.title or "Breaking point vs Test time",
+                          x=spec.x_label or "", y=spec.y_label or "")
+                + _theme_for(style, n_facets=1,
+                             height_mm=effective_height_mm(style, spec),
+                             show_legend=False))
+
+    if "Censored" in data.columns:
+        censored = data["Censored"].fillna(False).astype(bool)
+    else:
+        censored = pd.Series(False, index=data.index)
+    mark = bool(spec.mark_experiments) and "Experiment" in data.columns
+    point_aes = {"shape": "Experiment"} if mark else {}
+    observed = data.loc[~censored]
+    open_pts = data.loc[censored]
+    g = (p9.ggplot(data, p9.aes("BreakMin", "BreakingPoint", color="Treatment"))
+         + p9.scale_color_manual(values=colors)
+         + p9.labs(title=spec.title or "",
+                   x=spec.x_label or "Time since training end (min)",
+                   y=spec.y_label or "Breaking point",
+                   caption=("Open: censored (still responding at Test end)"
+                            if bool(censored.any()) else None)))
+    if not observed.empty:
+        g = g + p9.geom_point(
+            p9.aes(**point_aes) if point_aes else None, data=observed,
+            size=style.point_size * 1.8, alpha=style.point_alpha)
+    if not open_pts.empty:
+        stroke = max(float(style.point_stroke), 0.9)
+        g = g + p9.geom_point(
+            p9.aes(**point_aes) if point_aes else None, data=open_pts,
+            fill="white", stroke=stroke,
+            size=style.point_size * 1.8, alpha=style.point_alpha)
+    if spec.ref_line is not None:
+        g = g + p9.geom_hline(yintercept=float(spec.ref_line),
+                              linetype="dashed", color="#888888", size=0.3)
+    if spec.y_limits:
+        g = g + p9.coord_cartesian(ylim=tuple(float(v) for v in spec.y_limits))
+    ## Treatment is not on the x axis — the colour legend is required.
+    return g + _theme_for(style, n_facets=1,
+                          height_mm=effective_height_mm(style, spec),
+                          show_legend=True)
+
+
+def build_breaking_point_by_treatment(df: pd.DataFrame, spec: PlotSpec,
+                                      style: PlotStyle):
+    """One point per chamber group: Breaking Point by Treatment (no facets).
+
+    Open symbols are censored; filled symbols are observed.  Mean ± SEM overlays
+    each treatment when the style's mean form is not a box plot.
+    """
+    import plotnine as p9
+
+    data, labels, colors = _apply_treatment_order(df, spec, style)
+    if data.empty:
+        return (p9.ggplot()
+                + p9.labs(title=spec.title or "Breaking point by treatment",
+                          x=spec.x_label or "", y=spec.y_label or "")
+                + _theme_for(style, n_facets=1,
+                             height_mm=effective_height_mm(style, spec),
+                             show_legend=False))
+
+    if "Censored" in data.columns:
+        censored = data["Censored"].fillna(False).astype(bool)
+    else:
+        censored = pd.Series(False, index=data.index)
+    mark = bool(spec.mark_experiments) and "Experiment" in data.columns
+    point_aes = {"shape": "Experiment"} if mark else {}
+    observed = data.loc[~censored]
+    open_pts = data.loc[censored]
+    g = (p9.ggplot(data, p9.aes("Treatment", "BreakingPoint", color="Treatment"))
+         + p9.scale_color_manual(values=colors)
+         + p9.labs(title=spec.title or "",
+                   x=spec.x_label or "",
+                   y=spec.y_label or "Breaking point",
+                   caption=("Open: censored (still responding at Test end)"
+                            if bool(censored.any()) else None)))
+    boxed = style.geom in ("box", "box+dots")
+    if boxed:
+        g = g + p9.geom_boxplot(
+            fill="white", width=0.6, size=style.line_pt * 0.9,
+            outlier_size=0, outlier_alpha=0)
+    if style.geom in ("dots", "box+dots") or not boxed:
+        if not observed.empty:
+            g = g + p9.geom_jitter(
+                p9.aes(**point_aes) if point_aes else None, data=observed,
+                width=style.jitter_width, height=0,
+                size=style.point_size * 1.8, alpha=style.point_alpha,
+                random_state=0)
+        if not open_pts.empty:
+            stroke = max(float(style.point_stroke), 0.9)
+            g = g + p9.geom_jitter(
+                p9.aes(**point_aes) if point_aes else None, data=open_pts,
+                width=style.jitter_width, height=0,
+                fill="white", stroke=stroke,
+                size=style.point_size * 1.8, alpha=style.point_alpha,
+                random_state=1)
+    if mark:
+        g = g + p9.guides(color="none")
+    if not boxed:
+        stat = data.groupby(["Treatment"], observed=True)["BreakingPoint"].agg(
+            ["mean", "sem"]).reset_index()
+        mult = 1.96 if "95ci" in style.mean_style else 1.0
+        stat["ymin"] = stat["mean"] - mult * stat["sem"].fillna(0.0)
+        stat["ymax"] = stat["mean"] + mult * stat["sem"].fillna(0.0)
+        if style.mean_style.startswith("bar"):
+            g = g + p9.geom_col(
+                p9.aes(x="Treatment", y="mean"), data=stat, inherit_aes=False,
+                fill="none", color=style.mean_color, width=0.55,
+                size=style.line_pt)
+        else:
+            g = g + p9.geom_point(
+                p9.aes(x="Treatment", y="mean"), data=stat, inherit_aes=False,
+                color=style.mean_color, size=style.point_size * 1.9,
+                shape="_")
+        g = g + p9.geom_errorbar(
+            p9.aes(x="Treatment", ymin="ymin", ymax="ymax"), data=stat,
+            inherit_aes=False, color=style.mean_color, width=0.22,
+            size=style.line_pt)
+    if spec.ref_line is not None:
+        g = g + p9.geom_hline(yintercept=float(spec.ref_line),
+                              linetype="dashed", color="#888888", size=0.3)
+    if spec.y_limits:
+        g = g + p9.coord_cartesian(ylim=tuple(float(v) for v in spec.y_limits))
+    ## Treatments are named on the x axis — hide the colour legend unless
+    ## member shapes need room beside it.
+    return g + _theme_for(style, n_facets=1,
+                          height_mm=effective_height_mm(style, spec),
+                          show_legend=mark)
+
+
 def build_figure(plot_id: str, df: pd.DataFrame, spec: PlotSpec,
                  style: PlotStyle):
     """Dispatch to the builder for *plot_id*'s family."""
-    if family_of(plot_id) == FAMILY_TIMECOURSE:
+    family = family_of(plot_id)
+    if family == FAMILY_TIMECOURSE:
         return build_timecourse(df, spec, style)
+    if family == FAMILY_SCATTER:
+        builder = PLOT_TYPES.get(plot_id, {}).get("builder", "breaking_time")
+        if builder == "breaking_treatment":
+            return build_breaking_point_by_treatment(df, spec, style)
+        return build_breaking_point_scatter(df, spec, style)
     return build_faceted(df, spec, style)
 
 
@@ -832,8 +1088,12 @@ def render_all(project, fmt: str = "svg", out_dir: str | None = None,
         if source is None or source.empty:
             log(f"    skipped {plot_id}: no {source_of(plot_id)} data")
             continue
-        df = (timecourse_data(source, metric) if family == FAMILY_TIMECOURSE
-              else faceted_data(source, metric, label_order))
+        if family == FAMILY_TIMECOURSE:
+            df = timecourse_data(source, metric)
+        elif family == FAMILY_SCATTER:
+            df = breaking_point_data(source)
+        else:
+            df = faceted_data(source, metric, label_order)
         if df.empty:
             log(f"    skipped {plot_id}: metric '{metric}' not in the data")
             continue

@@ -83,9 +83,12 @@ def build_project_payload(project) -> SummaryPayload:
         source = pubfigures.frame_for(plot_id, facet, binned, project)
         if source is None or source.empty:
             continue
-        df = (pubfigures.timecourse_data(source, info["metric"])
-              if info["family"] == pubfigures.FAMILY_TIMECOURSE
-              else pubfigures.faceted_data(source, info["metric"]))
+        if info["family"] == pubfigures.FAMILY_TIMECOURSE:
+            df = pubfigures.timecourse_data(source, info["metric"])
+        elif info["family"] == pubfigures.FAMILY_SCATTER:
+            df = pubfigures.breaking_point_data(source)
+        else:
+            df = pubfigures.faceted_data(source, info["metric"])
         if df.empty:
             continue
         if len(images) >= MAX_IMAGES:

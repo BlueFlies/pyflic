@@ -286,7 +286,8 @@ class ProgressiveRatioExperimentType(ExperimentType):
                 "each group.")
 
     def report_set(self, chamber_layout: str) -> list[str]:
-        return ["timecourse_pr_diff", "faceted_licks", "faceted_events",
+        return ["timecourse_pr_diff", "scatter_pr_breaking_point",
+                "dot_pr_breaking_point", "faceted_licks", "faceted_events",
                 "faceted_pi"]
 
     def project_results_blocks(self, project) -> list:

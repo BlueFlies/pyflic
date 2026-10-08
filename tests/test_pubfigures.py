@@ -148,8 +148,37 @@ def _pr_facet_frame() -> pd.DataFrame:
 def test_faceted_data_keeps_role_for_progressive_ratio():
     df = pubfigures.faceted_data(_pr_facet_frame(), "Licks")
     assert "Role" in df.columns
-    assert list(df["Role"].cat.categories) == ["paired", "yoked"]
+    ## Yoked (control) left of paired along the top of the facet grid.
+    assert list(df["Role"].cat.categories) == ["yoked", "paired"]
     assert set(df["Phase"].astype(str)) == {"Training", "Test"}
+
+
+def test_order_roles_puts_yoked_before_paired():
+    assert pubfigures.order_roles(["paired", "yoked"]) == ["yoked", "paired"]
+    assert pubfigures.order_roles(["paired"]) == ["paired"]
+
+
+def test_order_phases_puts_test_above_training():
+    assert pubfigures.order_phases(["Training", "Test"]) == ["Test", "Training"]
+    assert pubfigures.order_phases(["Training"]) == ["Training"]
+
+
+def test_role_grid_uses_test_then_training_row_order():
+    df = pubfigures.faceted_data(_pr_facet_frame(), "Licks")
+    spec = pubfigures.default_spec("faceted_licks")
+    ## Data encounter order is Training then Test; the Role grid flips rows.
+    assert list(df["Phase"].cat.categories) == ["Training", "Test"]
+    data, _labels, _colors = pubfigures._apply_treatment_order(
+        df, spec, pubfigures.PlotStyle())
+    all_phases = list(data["Phase"].cat.categories)
+    include = pubfigures.order_phases(all_phases)
+    assert include == ["Test", "Training"]
+
+
+def test_role_display_labels_are_capitalized():
+    assert pubfigures.role_display_label("yoked") == "Yoked"
+    assert pubfigures.role_display_label("paired") == "Paired"
+    assert pubfigures.role_display_label("YOKED") == "Yoked"
 
 
 def test_faceted_data_without_role_stays_phase_only():
@@ -262,3 +291,84 @@ def test_preview_png_is_returned_as_bytes():
                                      pubfigures.PlotStyle())
     png = pubfigures.render_png_bytes(figure, pubfigures.PlotStyle())
     assert png[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+# ---------------------------------------------------------------------------
+# Progressive Ratio breaking-point scatter
+# ---------------------------------------------------------------------------
+
+def _breaking_point_frame() -> pd.DataFrame:
+    return pd.DataFrame({
+        "Experiment": ["rep1", "rep1", "rep2", "rep2"],
+        "Treatment": ["Ctrl", "Exp", "Ctrl", "Exp"],
+        "DFM": [1, 1, 2, 2],
+        "Group": [1, 2, 1, 2],
+        "PairedChamber": [1, 3, 1, 3],
+        "BreakingPoint": [4, 8, 3, 10],
+        "BreakMin": [40.0, 90.0, 55.0, 120.0],
+        "Censored": [False, True, False, False],
+        "TestMinutes": [200.0, 200.0, 180.0, 180.0],
+    })
+
+
+def test_breaking_point_scatter_is_progressive_ratio_only():
+    assert "scatter_pr_breaking_point" in pubfigures.plots_for_layout(
+        "two_well", "ProgressiveRatio")
+    assert "scatter_pr_breaking_point" not in pubfigures.plots_for_layout(
+        "two_well", "Hedonic")
+    assert "scatter_pr_breaking_point" not in pubfigures.plots_for_layout(
+        "two_well")
+    assert pubfigures.source_of("scatter_pr_breaking_point") == "pr_breaking"
+    assert pubfigures.family_of("scatter_pr_breaking_point") == (
+        pubfigures.FAMILY_SCATTER)
+
+
+def test_breaking_point_data_tidies_and_keeps_censoring():
+    df = pubfigures.breaking_point_data(_breaking_point_frame())
+    assert set(df.columns) >= {"Treatment", "BreakMin", "BreakingPoint",
+                               "Censored", "Experiment"}
+    assert df["Censored"].tolist() == [False, True, False, False]
+    assert list(df["BreakMin"]) == [40.0, 90.0, 55.0, 120.0]
+
+
+def test_breaking_point_scatter_renders(tmp_path: Path):
+    df = pubfigures.breaking_point_data(_breaking_point_frame())
+    spec = pubfigures.default_spec("scatter_pr_breaking_point")
+    figure = pubfigures.build_figure("scatter_pr_breaking_point", df, spec,
+                                     pubfigures.PlotStyle())
+    out = pubfigures.save_figure(figure, str(tmp_path / "bp.svg"), "svg")
+    assert Path(out).stat().st_size > 1000
+
+
+def test_breaking_point_by_treatment_is_progressive_ratio_only():
+    assert "dot_pr_breaking_point" in pubfigures.plots_for_layout(
+        "two_well", "ProgressiveRatio")
+    assert "dot_pr_breaking_point" not in pubfigures.plots_for_layout(
+        "two_well", "Hedonic")
+    assert pubfigures.source_of("dot_pr_breaking_point") == "pr_breaking"
+    spec = pubfigures.default_spec("dot_pr_breaking_point")
+    assert spec.x_label == ""
+    assert spec.y_label == "Breaking point"
+
+
+def test_breaking_point_by_treatment_renders(tmp_path: Path):
+    df = pubfigures.breaking_point_data(_breaking_point_frame())
+    spec = pubfigures.default_spec("dot_pr_breaking_point")
+    figure = pubfigures.build_figure("dot_pr_breaking_point", df, spec,
+                                     pubfigures.PlotStyle())
+    out = pubfigures.save_figure(figure, str(tmp_path / "bp_tx.svg"), "svg")
+    assert Path(out).stat().st_size > 1000
+    ## Dropping a treatment leaves the others on the shared categorical axis.
+    spec.treatments = {"Ctrl": {"label": "Ctrl", "show": True},
+                       "Exp": {"label": "Exp", "show": False}}
+    data, labels, _colors = pubfigures._apply_treatment_order(
+        df, spec, pubfigures.PlotStyle())
+    assert labels == ["Ctrl"]
+    assert set(data["Treatment"].astype(str)) == {"Ctrl"}
+
+
+def test_breaking_point_data_of_an_empty_frame_is_empty():
+    df = pubfigures.breaking_point_data(pd.DataFrame())
+    assert df.empty
+    assert list(df.columns) == ["Treatment", "BreakMin", "BreakingPoint",
+                                "Censored"]

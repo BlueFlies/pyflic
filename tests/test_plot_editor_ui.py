@@ -370,6 +370,18 @@ def pr_project_dir(tmp_path: Path) -> Path:
                                  4: "Exp", 5: "Ctrl", 6: "Ctrl"},
                 }],
             }, sort_keys=False), encoding="utf-8")
+        member_analysis = member / "analysis"
+        member_analysis.mkdir()
+        pd.DataFrame({
+            "Treatment": ["Ctrl", "Exp"],
+            "DFM": [1, 1],
+            "Group": [1, 2],
+            "PairedChamber": [1, 3],
+            "BreakingPoint": [4, 8],
+            "BreakMin": [40.0, 90.0],
+            "Censored": [False, True],
+            "TestMinutes": [200.0, 200.0],
+        }).to_csv(member_analysis / "pr_breaking_point.csv", index=False)
     (root / "project.yaml").write_text(
         yaml.safe_dump({"name": "pr_proj", "design": {"global": design}},
                        sort_keys=False), encoding="utf-8")
@@ -393,7 +405,7 @@ def test_pr_editor_shows_roles_for_faceted_plots(pr_editor, app):
     assert not pr_editor.roles_group.isHidden()
     roles = [pr_editor.role_list.item(i).text()
              for i in range(pr_editor.role_list.count())]
-    assert roles == ["paired", "yoked"]
+    assert roles == ["yoked", "paired"]
     assert all(pr_editor.role_list.item(i).checkState() == Qt.CheckState.Checked
                for i in range(pr_editor.role_list.count()))
 
@@ -404,6 +416,27 @@ def test_pr_editor_hides_roles_for_time_courses(pr_editor, app):
     _select(pr_editor, app, "timecourse_pr_diff")
     assert pr_editor.roles_group.isHidden()
     assert pr_editor.facets_group.isHidden()
+
+
+def test_pr_editor_offers_breaking_point_scatter(pr_editor, app):
+    _select(pr_editor, app, "scatter_pr_breaking_point")
+    assert pr_editor.facets_group.isHidden()
+    assert pr_editor.roles_group.isHidden()
+    assert not pr_editor.mark_experiments.isHidden()
+    data = pr_editor._data_for("scatter_pr_breaking_point")
+    assert data is not None and not data.empty
+    assert set(data.columns) >= {"Treatment", "BreakMin", "BreakingPoint",
+                                 "Censored"}
+
+
+def test_pr_editor_offers_breaking_point_by_treatment(pr_editor, app):
+    _select(pr_editor, app, "dot_pr_breaking_point")
+    assert pr_editor.facets_group.isHidden()
+    assert pr_editor.roles_group.isHidden()
+    data = pr_editor._data_for("dot_pr_breaking_point")
+    assert data is not None and not data.empty
+    assert set(data["Treatment"].astype(str)) == {"Ctrl", "Exp"}
+    assert pr_editor.treatment_table.rowCount() == 2
 
 
 def test_pr_editor_persists_phase_and_role_filters(pr_editor, app, pr_project_dir):

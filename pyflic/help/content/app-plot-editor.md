@@ -35,8 +35,8 @@ one thing and paging half its knobs behind a tab only asked which half was in fo
 |---|---|
 | **Style (shared across plots)** | the named Style and every look decision in it |
 | **This plot** | title, axis labels, y range, and the family-specific rows |
-| **Facets** | which phases the figure panels over (faceted family only) |
-| **Roles** | Progressive Ratio only: which Roles (`paired` / `yoked`) appear as rows |
+| **Facets** | which phases the figure panels over (faceted family only; PR: rows on the right) |
+| **Roles** | Progressive Ratio only: which Roles (`paired` / `yoked`) appear as columns along the top |
 | **Treatments** | one row each: shown or not, its printed Label, its Colour |
 
 Sizing can be per **figure** or per **facet**. *Figure (mm)* sets the whole image;
@@ -65,15 +65,17 @@ rather than set per figure.
 Colours are keyed by the treatment's **original** name, so renaming a treatment for one
 figure never changes its colour.
 
-## Two figure families
+## Figure families
 
 | Family | Shape | Extra controls |
 |---|---|---|
-| `faceted_<metric>` | x = Treatment, one panel per facet, points + mean ± SEM | facet inclusion, free y |
+| `faceted_<metric>` | x = Treatment, one panel per facet, points + mean ± SEM | facet inclusion, Roles (PR), free y |
 | `timecourse_<metric>` | x = time bin, one line per treatment, SEM ribbon | bin size, ribbon |
+| `scatter_pr_breaking_point` | x = BreakMin, y = Breaking Point (PR only) | treatments; Facets/Roles hidden |
+| `dot_pr_breaking_point` | x = Treatment, y = Breaking Point (PR only) | treatments; Facets/Roles hidden |
 
 The **Facets** group and the bin-size row swap places to match the selected plot's family;
-everything else is the same for both. The check boxes on the panel are *within* one
+everything else is the same across families. The check boxes on the panel are *within* one
 figure — which facets it shows and which treatments it draws — not a choice between
 figures.
 
@@ -85,19 +87,30 @@ single well.
 
 ## Progressive Ratio projects
 
-A Progressive Ratio Project adds **Paired − yoked cumulative licks since training**
-(`timecourse_pr_diff`), the type's headline figure, drawn from each member's
-`pr_cumulative_diff.csv` rather than the binned summary — run basic analysis in each member
-first. Its x axis is minutes since each chamber group's training end, zero is drawn as the
-reference line, and the mean is shown only over the range every group covers.
+A Progressive Ratio Project adds two type-specific figures beside the shared faceted set:
+
+- **Paired − yoked cumulative licks since training** (`timecourse_pr_diff`) — the headline
+  time course from each member's `pr_cumulative_diff.csv`. Minutes since training end on
+  the x axis, zero as the reference line, mean only over the range every group covers.
+- **Breaking point vs Test time** (`scatter_pr_breaking_point`) — one point per chamber
+  group from each member's `pr_breaking_point.csv`: x = `BreakMin` (minutes into the Test
+  phase of the last counted light event), y = `BreakingPoint`. Open symbols are censored
+  (still responding when the Test window ended). Run the breaking-point step (or basic
+  analysis) in each member first. Facets and Roles are hidden; Treatments and Mark members
+  still apply.
+- **Breaking point by treatment** (`dot_pr_breaking_point`) — the same breaking-point
+  rows with **Treatment** on the x axis (every selected treatment along one categorical
+  axis) and Breaking Point on y; no Phase/Role facets. Open symbols are censored. Use the
+  Treatments table to include or drop treatments.
 
 The faceted figures (`faceted_licks`, `faceted_pi`, `faceted_events`,
-`faceted_medduration`, …) panel as a **Role × Phase** grid when the Combined Analysis
-carries a `Role` column: rows are `paired` and `yoked`, columns are Training and Test.
-The **Facets** checklist chooses which periods appear (Training only, Test only, or both);
-the **Roles** checklist chooses which Roles appear. Untick one Role to show only paired or
-only yoked sucrose feeding for the periods you kept. For the within-group paired − yoked
-*difference* as the scientific unit, use the Project Report (and
+`faceted_medduration`, …) panel as a **Phase × Role** grid when the Combined Analysis
+carries a `Role` column: **Roles** are columns along the top in the order **Yoked**, then
+**Paired**, and **phases** are rows along the right with **Test** above **Training** when
+both are shown. The **Facets** checklist chooses which periods appear (Training only, Test
+only, or both); the **Roles** checklist chooses which Roles appear. Untick one Role to show
+only paired or only yoked sucrose feeding for the periods you kept. For the within-group
+paired − yoked *difference* as the scientific unit, use the Project Report (and
 `<project>_PairedYokedDiff.csv`), which plots and tests those differences and the breaking
 point. See [Progressive Ratio experiments](concepts-progressive-ratio.md) and
 [Reports](reports.md).
