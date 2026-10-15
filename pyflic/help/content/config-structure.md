@@ -89,9 +89,11 @@ The QC Viewer's **Auto Filter** and the Python API run the same removal on deman
 | `max_events_cutoff` | hedonic, progressive ratio | Remove a chamber if `EventsA` or `EventsB` is above this |
 
 An Experiment Type supplies its own defaults for these (Hedonic and Progressive Ratio set
-all three); a yaml value always wins. A Custom Experiment has none, and there an unset key
-means the check is not performed — pyflic reports it as "not configured" rather than
-substituting a number.
+all three). A yaml number always wins over the default. A yaml `null` also wins and means
+**that filter is off** (the Config Editor and Project Design dialog write `null` when the
+cutoff's **Use** checkbox is unchecked). An omitted key still inherits the type's default.
+A Custom Experiment has no defaults, and there an unset or null key means the check is not
+performed — pyflic reports it as "not configured" rather than substituting a number.
 
 A Progressive Ratio experiment adds its own, all with defaults:
 

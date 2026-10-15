@@ -1320,24 +1320,23 @@ class FLICConfigEditor(QMainWindow):
         self._filter_header_row = self._exp_form.rowCount()
         self._exp_form.addRow(filter_header)
 
-        ## Placeholders are filled from the type's default_constants, never
-        ## hardcoded: resolve_constants() merges those *under* the yaml, so a
-        ## blank field inherits rather than skips, and saying otherwise (as
-        ## "leave blank to skip" did) is simply false for a typed experiment.
-        self._min_raw_licks_edit = QLineEdit()
-        self._min_raw_licks_edit.setMaximumWidth(260)
+        ## Each cutoff is optional: unchecked writes YAML null (filter off);
+        ## checked + blank inherits the type's default (ADR-0011); checked +
+        ## a number overrides it.  Placeholders come from default_constants.
+        self._min_raw_licks_check, self._min_raw_licks_edit, min_row = (
+            self._make_threshold_control())
         self._min_raw_licks_row = self._exp_form.rowCount()
-        self._exp_form.addRow("Min Untransformed Licks:", self._min_raw_licks_edit)
+        self._exp_form.addRow("Min Untransformed Licks:", min_row)
 
-        self._max_dur_edit = QLineEdit()
-        self._max_dur_edit.setMaximumWidth(260)
+        self._max_dur_check, self._max_dur_edit, dur_row = (
+            self._make_threshold_control())
         self._max_dur_row = self._exp_form.rowCount()
-        self._exp_form.addRow("Max Median Duration:", self._max_dur_edit)
+        self._exp_form.addRow("Max Median Duration:", dur_row)
 
-        self._max_events_edit = QLineEdit()
-        self._max_events_edit.setMaximumWidth(260)
+        self._max_events_check, self._max_events_edit, events_row = (
+            self._make_threshold_control())
         self._max_events_row = self._exp_form.rowCount()
-        self._exp_form.addRow("Max Events:", self._max_events_edit)
+        self._exp_form.addRow("Max Events:", events_row)
 
         ## Progressive Ratio's own constants — the switches that decide which
         ## failed chamber groups leave, the light QC's thresholds and the
@@ -1593,29 +1592,84 @@ class FLICConfigEditor(QMainWindow):
 
     # ---- Auto-filter thresholds --------------------------------------
 
-    def _threshold_fields(self) -> tuple[tuple[QLineEdit, str], ...]:
+    def _make_threshold_control(self) -> tuple[QCheckBox, QLineEdit, QWidget]:
+        """Checkbox + value field for one optional auto-filter cutoff."""
+        check = QCheckBox("Use")
+        check.setToolTip(
+            "When checked, auto-removal applies this cutoff (blank value = "
+            "type default).  When unchecked, this filter is off.")
+        edit = QLineEdit()
+        edit.setMaximumWidth(200)
+        edit.setEnabled(False)
+        check.toggled.connect(edit.setEnabled)
+        row = QWidget()
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+        layout.addWidget(check)
+        layout.addWidget(edit, 1)
+        return check, edit, row
+
+    def _threshold_controls(
+            self) -> tuple[tuple[QCheckBox, QLineEdit, str], ...]:
         return (
-            (self._min_raw_licks_edit, "min_untransformed_licks_cutoff"),
-            (self._max_dur_edit, "max_med_duration_cutoff"),
-            (self._max_events_edit, "max_events_cutoff"),
+            (self._min_raw_licks_check, self._min_raw_licks_edit,
+             "min_untransformed_licks_cutoff"),
+            (self._max_dur_check, self._max_dur_edit,
+             "max_med_duration_cutoff"),
+            (self._max_events_check, self._max_events_edit,
+             "max_events_cutoff"),
         )
+
+    def _threshold_fields(self) -> tuple[tuple[QLineEdit, str], ...]:
+        return tuple((edit, key) for _check, edit, key in self._threshold_controls())
+
+    def _load_threshold_controls(self, constants: dict[str, Any]) -> None:
+        """Fill the optional cutoff rows from a ``constants:`` block.
+
+        ``null`` means the filter is off (checkbox unchecked).  An omitted key
+        means inherit the type's default when it has one (checkbox checked,
+        value blank).  A number is an override (checked, value shown).
+        """
+        defaults = self._current_type().default_constants or {}
+        for check, edit, key in self._threshold_controls():
+            if key in constants:
+                value = constants[key]
+                enabled = value is not None
+                text = "" if value is None else _fmt_number(value)
+            else:
+                enabled = defaults.get(key) is not None
+                text = ""
+            check.blockSignals(True)
+            check.setChecked(enabled)
+            check.blockSignals(False)
+            edit.setText(text)
+            edit.setEnabled(enabled and check.isEnabled())
 
     def _refresh_threshold_hints(self) -> None:
         """Show the type's default as placeholder text, never as a value.
 
         Writing the number into the field would freeze this config against
         today's defaults; leaving it blank keeps the type the owner, which is
-        the whole point of it having them (ADR-0011).
+        the whole point of it having them (ADR-0011).  On a type change, a
+        blank field follows the type: checked when the type has a default,
+        unchecked when it does not.
         """
         item = self._current_type()
         defaults = item.default_constants or {}
-        for widget, key in self._threshold_fields():
+        for check, edit, key in self._threshold_controls():
             value = defaults.get(key)
             if value is None:
-                widget.setPlaceholderText("no default \u2014 blank skips this filter")
+                edit.setPlaceholderText(
+                    "no default \u2014 check and type a number to filter")
             else:
-                widget.setPlaceholderText(
+                edit.setPlaceholderText(
                     f"{_fmt_number(value)}  (default for {item.display_name})")
+            if not edit.text().strip():
+                check.blockSignals(True)
+                check.setChecked(value is not None)
+                check.blockSignals(False)
+                edit.setEnabled(check.isChecked() and check.isEnabled())
         self._refresh_pr_constant_rows()
 
     def _pr_constants_apply(self) -> bool:
@@ -1937,12 +1991,16 @@ class FLICConfigEditor(QMainWindow):
                     **({"B": wb} if wb else {}),
                 }
 
-        ## Only what the experimenter actually typed reaches ``constants:``.
-        ## A blank field inherits the type's default, so materialising it here
-        ## would freeze this config against today's numbers (ADR-0011).
+        ## Optional cutoffs: unchecked → YAML null (filter off, overrides the
+        ## type default); checked + blank → omit (inherit); checked + number
+        ## → override.  Materialising the type default would freeze this
+        ## config against today's numbers (ADR-0011).
         constants: dict[str, Any] = {}
-        for widget, key in self._threshold_fields():
+        for check, widget, key in self._threshold_controls():
             if not self._threshold_row_visible(key):
+                continue
+            if not check.isChecked():
+                constants[key] = None
                 continue
             text = widget.text().strip()
             if not text:
@@ -2069,10 +2127,14 @@ class FLICConfigEditor(QMainWindow):
 
         for widget in (self._chamber_layout_combo, self._experiment_type_combo,
                        self._well_a_edit, self._well_b_edit,
-                       self._transform_licks_check, self._min_raw_licks_edit,
-                       self._max_dur_edit, self._max_events_edit):
+                       self._transform_licks_check):
             widget.setEnabled(not governed)
             widget.setToolTip(reason)
+        for check, edit, _key in self._threshold_controls():
+            check.setEnabled(not governed)
+            check.setToolTip(reason or check.toolTip())
+            edit.setEnabled(not governed and check.isChecked())
+            edit.setToolTip(reason)
         from .experiment_types.progressive_ratio import PR_CONSTANT_FIELDS
 
         for field in PR_CONSTANT_FIELDS:
@@ -2177,16 +2239,9 @@ class FLICConfigEditor(QMainWindow):
         # Lick transformation toggle
         self._transform_licks_check.setChecked(bool(global_cfg.get("transform_licks", True)))
 
-        # Filter thresholds
+        # Filter thresholds — null means off; omit means inherit (checked).
         constants = global_cfg.get("constants") or {}
-        val = constants.get("min_untransformed_licks_cutoff")
-        self._min_raw_licks_edit.setText("" if val is None else str(val))
-        for attr, key in (
-            ("_max_dur_edit", "max_med_duration_cutoff"),
-            ("_max_events_edit", "max_events_cutoff"),
-        ):
-            val = constants.get(key)
-            getattr(self, attr).setText("" if val is None else str(val))
+        self._load_threshold_controls(constants)
         self._load_pr_constants(constants)
 
         # Experimental design factors
@@ -2257,9 +2312,12 @@ class FLICConfigEditor(QMainWindow):
         self.setWindowTitle("FLIC Config Editor")
         self._well_a_edit.clear()
         self._well_b_edit.clear()
-        self._min_raw_licks_edit.clear()
-        self._max_dur_edit.clear()
-        self._max_events_edit.clear()
+        for check, edit, _key in self._threshold_controls():
+            check.blockSignals(True)
+            check.setChecked(False)
+            check.blockSignals(False)
+            edit.clear()
+            edit.setEnabled(False)
         self._load_pr_constants({})
         self._transform_licks_check.setChecked(True)
 

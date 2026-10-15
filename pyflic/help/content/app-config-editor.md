@@ -45,10 +45,13 @@ DFM; two-well gives 6. Change the layout and the chamber fields change with it â
 and if that would discard assignments you have already made, the editor names
 them and asks first.
 
-**Auto-filter thresholds show the type's defaults as grey placeholder text.**
-Leaving a threshold blank does not mean "no filtering": it means the Experiment
-Type's default applies. Type a value only to override it. A Custom Experiment
-has no defaults, so there a blank field really does skip the filter.
+**Auto-filter thresholds are optional.** Each of Min Untransformed Licks, Max
+Median Duration and Max Events has a **Use** checkbox and a value field. Uncheck
+**Use** to turn that filter off (the editor writes YAML `null` so a typed
+experiment does not fall back to its default). Check **Use** and leave the value
+blank to keep the Experiment Type's default (shown as grey placeholder text).
+Check **Use** and type a number to override. A Custom Experiment has no defaults,
+so there the filter runs only when **Use** is checked and a number is typed.
 
 **Factor assignments are positional and must be complete.** With two factors
 declared, every assigned chamber needs a level in both columns â€” the columns are

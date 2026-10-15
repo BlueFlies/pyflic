@@ -46,13 +46,16 @@ from .experiment_types.progressive_ratio import PR_CONSTANT_FIELDS
 from .ui import Category, icon
 from .ui.widgets import Card, CardGroup
 
-#: The three auto-removal cutoffs, in the order the config editor shows them.
+#: The three optional auto-removal cutoffs, in the order the config editor
+#: shows them.  Unchecked → YAML ``null`` (filter off); checked + blank →
+#: inherit the type default; checked + number → override.
 _CONSTANT_ROWS: tuple[tuple[str, str, str], ...] = (
     ("min_untransformed_licks_cutoff", "Min Untransformed Licks",
-     "e.g. 20  (leave blank to skip)"),
+     "type default when checked and blank"),
     ("max_med_duration_cutoff", "Max Median Duration",
-     "e.g. 13  (leave blank to skip)"),
-    ("max_events_cutoff", "Max Events", "e.g. 150  (leave blank to skip)"),
+     "type default when checked and blank"),
+    ("max_events_cutoff", "Max Events",
+     "type default when checked and blank"),
 )
 
 #: Progressive Ratio's own constants, (key, label, tooltip) per row, from the
@@ -296,13 +299,27 @@ class ProjectDesignDialog(QDialog):
         cform = QFormLayout()
         cform.setFieldGrowthPolicy(
             QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        self.constant_checks: dict[str, QCheckBox] = {}
         self.constant_edits: dict[str, QLineEdit] = {}
         for key, label, placeholder in _CONSTANT_ROWS:
+            check = QCheckBox("Use")
+            check.setToolTip(
+                "When checked, auto-removal applies this cutoff (blank value "
+                "= type default).  When unchecked, this filter is off.")
             edit = QLineEdit()
             edit.setPlaceholderText(placeholder)
-            edit.setMaximumWidth(240)
+            edit.setMaximumWidth(200)
+            edit.setEnabled(False)
+            check.toggled.connect(edit.setEnabled)
+            row = QWidget()
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.setSpacing(8)
+            row_layout.addWidget(check)
+            row_layout.addWidget(edit, 1)
+            self.constant_checks[key] = check
             self.constant_edits[key] = edit
-            cform.addRow(f"{label}:", edit)
+            cform.addRow(f"{label}:", row)
         card.add_body(cform)
 
         ## Shown only for a type that carries these constants (Progressive
@@ -416,12 +433,40 @@ class ProjectDesignDialog(QDialog):
                 f"facet_labels is not written.")
         elif not self.labels_edit.text().strip() and item.phase_labels:
             self.labels_edit.setText(", ".join(item.phase_labels))
-        for key, value in (item.default_constants or {}).items():
-            edit = self.constant_edits.get(key) or self.pr_number_edits.get(key)
+        defaults = item.default_constants or {}
+        for key, _label, placeholder in _CONSTANT_ROWS:
+            check = self.constant_checks[key]
+            edit = self.constant_edits[key]
+            value = defaults.get(key)
+            if value is None:
+                edit.setPlaceholderText(
+                    "no default — check and type a number to filter")
+            else:
+                edit.setPlaceholderText(
+                    f"{value:g}  (default for {item.display_name})"
+                    if isinstance(value, float)
+                    else f"{value}  (default for {item.display_name})")
+            ## Do not materialise the type default into the field (ADR-0011).
+            ## A blank checked field inherits; only an empty Custom field
+            ## follows the type by unchecking.
+            if not edit.text().strip():
+                loaded = getattr(self, "_loaded_constants", {})
+                if key in loaded:
+                    enabled = loaded[key] is not None
+                else:
+                    enabled = value is not None
+                check.blockSignals(True)
+                check.setChecked(enabled)
+                check.blockSignals(False)
+                edit.setEnabled(enabled)
+        for key, value in defaults.items():
+            if key in self.constant_edits:
+                continue
+            edit = self.pr_number_edits.get(key)
             if edit is not None and not edit.text().strip():
                 edit.setText(f"{value:g}" if isinstance(value, float)
                              else str(value))
-        pr_type = bool(_PR_KEYS & set(item.default_constants or {}))
+        pr_type = bool(_PR_KEYS & set(defaults))
         self.pr_qc_group.setVisible(pr_type)
         self.pr_break_group.setVisible(pr_type)
         self._on_layout_changed()
@@ -575,7 +620,24 @@ class ProjectDesignDialog(QDialog):
         self.params_form.load_values(params, chamber_size)
         constants = g.get("constants") or {}
         self._loaded_constants = dict(constants)
-        for key, edit in (*self.constant_edits.items(), *self.pr_number_edits.items()):
+        defaults = self._experiment_type().default_constants or {}
+        for key, edit in self.constant_edits.items():
+            check = self.constant_checks[key]
+            if key in constants:
+                value = constants[key]
+                enabled = value is not None
+                text = ("" if value is None else
+                        (f"{value:g}" if isinstance(value, float)
+                         else str(value)))
+            else:
+                enabled = defaults.get(key) is not None
+                text = ""
+            check.blockSignals(True)
+            check.setChecked(enabled)
+            check.blockSignals(False)
+            edit.setText(text)
+            edit.setEnabled(enabled)
+        for key, edit in self.pr_number_edits.items():
             value = constants.get(key)
             edit.setText("" if value is None else
                          (f"{value:g}" if isinstance(value, float)
@@ -605,6 +667,9 @@ class ProjectDesignDialog(QDialog):
         constants: dict = {}
         for key, label, _placeholder in _CONSTANT_ROWS:
             if chamber_size == 1 and key != "min_untransformed_licks_cutoff":
+                continue
+            if not self.constant_checks[key].isChecked():
+                constants[key] = None
                 continue
             text = self.constant_edits[key].text().strip()
             if not text:

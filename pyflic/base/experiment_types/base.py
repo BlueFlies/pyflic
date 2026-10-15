@@ -114,9 +114,16 @@ class ExperimentType:
 
     def resolve_constants(self, global_cfg: dict | None) -> dict:
         """The effective ``constants:`` block — the type's defaults with the
-        yaml's values layered on top."""
+        yaml's values layered on top.
+
+        A yaml value of ``null`` wins over a type default and means that
+        auto-filter check is off (the editors write ``null`` when a cutoff's
+        checkbox is unchecked).  An omitted key still inherits the type's
+        default.
+        """
         merged = dict(self.default_constants)
-        merged.update((global_cfg or {}).get("constants") or {})
+        for key, value in ((global_cfg or {}).get("constants") or {}).items():
+            merged[key] = value
         return merged
 
     def phase_labels_for(self, windows, global_cfg: dict | None) -> list[str]:
@@ -268,10 +275,12 @@ class ExperimentType:
             g["params"] = clean_params
         if well_names:
             g["well_names"] = dict(well_names)
-        merged_constants = dict(self.default_constants)
-        merged_constants.update(constants or {})
-        if merged_constants:
-            g["constants"] = merged_constants
+        ## Only what the caller stated — including explicit ``null`` to turn a
+        ## typed cutoff off.  Materialising ``default_constants`` here would
+        ## freeze every design against today's numbers (ADR-0011); load-time
+        ## ``resolve_constants()`` is what applies the type's defaults.
+        if constants:
+            g["constants"] = dict(constants)
         if factors:
             g["experimental_design_factors"] = {
                 str(k): [str(v) for v in (vals or [])]
