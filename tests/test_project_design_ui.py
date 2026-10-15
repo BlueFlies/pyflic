@@ -126,6 +126,29 @@ def test_phase_names_must_match_the_cutoffs(app, tmp_path, monkeypatch):
     assert warned and "3 names" in warned[0]
 
 
+def test_design_dialog_optional_auto_filter_checkboxes(app, tmp_path):
+    """Unchecked cutoffs write null; checked + blank inherit (omit the key)."""
+    root = tmp_path / "opt"
+    _write(root / "project.yaml", {"name": "Opt", "design": {"global": {
+        "experiment_type": "Hedonic",
+        "well_names": {"A": "S5", "B": "S5Y5"},
+        "constants": {"max_events_cutoff": None},
+    }}})
+    dialog = ProjectDesignDialog(start_dir=str(root))
+    assert not dialog.constant_checks["max_events_cutoff"].isChecked()
+    assert dialog.constant_checks["min_untransformed_licks_cutoff"].isChecked()
+    assert dialog.constant_edits["min_untransformed_licks_cutoff"].text() == ""
+
+    constants = dialog._build_design()["global"]["constants"]
+    assert constants["max_events_cutoff"] is None
+    assert "min_untransformed_licks_cutoff" not in constants
+
+    dialog.constant_checks["min_untransformed_licks_cutoff"].setChecked(True)
+    dialog.constant_edits["min_untransformed_licks_cutoff"].setText("35")
+    constants = dialog._build_design()["global"]["constants"]
+    assert constants["min_untransformed_licks_cutoff"] == 35
+
+
 # ---------------------------------------------------------------------------
 # Members inherit it
 # ---------------------------------------------------------------------------

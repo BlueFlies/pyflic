@@ -15,16 +15,18 @@ and a multi-select list said otherwise.  Every plot the Project can draw is
 always part of its figure set; ``plot_specs.yaml`` records how each one is
 drawn, not which ones exist.
 
-Everything that shapes the current figure is on one panel, in four groups —
-the shared Style, this plot, its Facets, its Treatments — the same column
-PyTrackingAnalysis's editor uses.  Tabs hid half the controls behind a click
-and made "which of these does the preview answer to" a question; a figure is
-one thing and its knobs belong in one place, scrolled rather than paged.
+Everything that shapes the current figure is on one scrolling panel — the
+shared Style, this plot, its Facets, its Roles (Progressive Ratio), its
+Treatments — the same column PyTrackingAnalysis's editor uses.  Tabs hid
+half the controls behind a click and made "which of these does the preview
+answer to" a question; a figure is one thing and its knobs belong in one
+place, scrolled rather than paged.
 
 Two spec families share that panel.  The Facets group and the binning row
-swap places depending on which family the selected plot belongs to; the
-Style group is identical for both, because a Plot Style is what makes a
-Project's figures look like one set.
+swap places depending on which family the selected plot belongs to; Roles
+appears only when the facet data carries a Role column.  The Style group is
+identical for both families, because a Plot Style is what makes a Project's
+figures look like one set.
 """
 
 from __future__ import annotations
@@ -189,6 +191,7 @@ class PlotEditorWindow(QMainWindow):
         self._controls_lay.addWidget(self._build_style_group())
         self._controls_lay.addWidget(self._build_plot_group())
         self._controls_lay.addWidget(self._build_facets_group())
+        self._controls_lay.addWidget(self._build_roles_group())
         self._controls_lay.addWidget(self._build_treatments_group())
         self._controls_lay.addStretch(1)
 
@@ -208,7 +211,7 @@ class PlotEditorWindow(QMainWindow):
 
     def _build_plot_group(self) -> CardGroup:
         group = CardGroup("This plot")
-        _add_help(group, "app-plot-editor#two-figure-families", "The two figure families")
+        _add_help(group, "app-plot-editor#figure-families", "The figure families")
         page = QWidget()
         form = QFormLayout(page)
         form.setContentsMargins(0, 0, 0, 0)
@@ -276,7 +279,26 @@ class PlotEditorWindow(QMainWindow):
         self.facet_list.setMaximumHeight(110)
         self.facet_list.itemChanged.connect(self._apply_content)
         self.facets_group.add(self.facet_list)
+        self.facets_group.add_note(
+            "Which phases appear as rows on the right (Test above Training "
+            "when both are shown). Untick to leave a period out.")
         return self.facets_group
+
+    def _build_roles_group(self) -> CardGroup:
+        """Paired vs yoked panels — Progressive Ratio only, when Role is present."""
+        self.roles_group = CardGroup("Roles")
+        _add_help(self.roles_group, "concepts-progressive-ratio",
+                  "Paired and yoked are roles, not treatments")
+        self.role_list = QListWidget()
+        self.role_list.setMaximumHeight(90)
+        self.role_list.itemChanged.connect(self._apply_content)
+        self.roles_group.add(self.role_list)
+        self.roles_group.add_note(
+            "Progressive Ratio: which Roles (paired / yoked) appear as columns "
+            "along the top. Untick to show one Role only; phases above still "
+            "choose the period.")
+        self.roles_group.setVisible(False)
+        return self.roles_group
 
     def _build_treatments_group(self) -> CardGroup:
         """One row per treatment: shown or not, what it is called, its colour.
@@ -287,7 +309,7 @@ class PlotEditorWindow(QMainWindow):
         marked as shared where it is edited.
         """
         group = CardGroup("Treatments")
-        _add_help(group, "app-plot-editor#one-panel-four-groups", "Labels, colours and which treatments are drawn")
+        _add_help(group, "app-plot-editor#one-scrolling-panel", "Labels, colours and which treatments are drawn")
         self.treatment_table = QTableWidget(0, 3)
         self.treatment_table.setHorizontalHeaderLabels(
             ["Treatment", "Label", "Colour"])
@@ -549,6 +571,8 @@ class PlotEditorWindow(QMainWindow):
         self._loading = True
         family = pubfigures.family_of(plot_id)
         is_timecourse = family == pubfigures.FAMILY_TIMECOURSE
+        is_faceted = family == pubfigures.FAMILY_FACETED
+        is_scatter = family == pubfigures.FAMILY_SCATTER
 
         self.title_edit.setText(spec.title)
         self.xlabel_edit.setText(spec.x_label)
@@ -562,18 +586,22 @@ class PlotEditorWindow(QMainWindow):
         self.binsize.setValue(spec.binsize)
         self.ribbon.setChecked(spec.ribbon)
 
-        self.facets_group.setVisible(not is_timecourse)
+        self.facets_group.setVisible(is_faceted)
         for widget in (self.binsize, self.binsize_label, self.ribbon,
                        self.ribbon_label):
             widget.setVisible(is_timecourse)
-        self.free_y.setVisible(not is_timecourse)
+        self.free_y.setVisible(is_faceted)
         ## Member shapes encode a per-point identity; a time course plots
         ## treatment means, so there is no point to give a shape.
-        self.mark_experiments.setVisible(not is_timecourse)
+        self.mark_experiments.setVisible(is_faceted or is_scatter)
 
         data = self._data_for(plot_id)
         self.facet_list.clear()
-        if not is_timecourse and data is not None and not data.empty:
+        self.role_list.clear()
+        has_roles = (is_faceted and data is not None and not data.empty
+                     and "Role" in data.columns)
+        self.roles_group.setVisible(has_roles)
+        if is_faceted and data is not None and not data.empty:
             phases = list(dict.fromkeys(data["Phase"].astype(str)))
             for phase in phases:
                 item = QListWidgetItem(phase)
@@ -582,6 +610,15 @@ class PlotEditorWindow(QMainWindow):
                 item.setCheckState(Qt.CheckState.Checked if included
                                    else Qt.CheckState.Unchecked)
                 self.facet_list.addItem(item)
+            if has_roles:
+                roles = pubfigures.order_roles(data["Role"].astype(str))
+                for role in roles:
+                    item = QListWidgetItem(role)
+                    item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                    included = not spec.roles or role in spec.roles
+                    item.setCheckState(Qt.CheckState.Checked if included
+                                       else Qt.CheckState.Unchecked)
+                    self.role_list.addItem(item)
 
         self._fill_treatment_table(spec, data)
         self._loading = False
@@ -624,12 +661,19 @@ class PlotEditorWindow(QMainWindow):
         if plot_id is None or self.project is None:
             return None
         info = pubfigures.PLOT_TYPES[plot_id]
-        if info["family"] == pubfigures.FAMILY_TIMECOURSE:
+        family = info["family"]
+        if family == pubfigures.FAMILY_TIMECOURSE:
             source = pubfigures.frame_for(plot_id, self._facet_frame,
                                           self._binned_frame, self.project)
             if source is None or source.empty:
                 return None
             return pubfigures.timecourse_data(source, info["metric"])
+        if family == pubfigures.FAMILY_SCATTER:
+            source = pubfigures.frame_for(plot_id, self._facet_frame,
+                                          self._binned_frame, self.project)
+            if source is None or source.empty:
+                return None
+            return pubfigures.breaking_point_data(source)
         source = self._facet_frame
         if source is None or source.empty:
             return None
@@ -658,6 +702,15 @@ class PlotEditorWindow(QMainWindow):
                   for i in range(self.facet_list.count())
                   if self.facet_list.item(i).checkState() == Qt.CheckState.Checked]
         spec.facets = facets or None
+
+        if self.roles_group.isVisible():
+            roles = [self.role_list.item(i).text()
+                     for i in range(self.role_list.count())
+                     if self.role_list.item(i).checkState()
+                     == Qt.CheckState.Checked]
+            spec.roles = pubfigures.order_roles(roles) or None
+        else:
+            spec.roles = None
 
         treatments = {}
         for row in range(self.treatment_table.rowCount()):
@@ -768,14 +821,21 @@ class PlotEditorWindow(QMainWindow):
         data = self._data_for(plot_id)
         if data is None or data.empty:
             source = pubfigures.source_of(plot_id)
-            self._show_preview_message(
-                "No paired − yoked curve data saved yet — run the basic "
-                "analysis (or plot_pr_cumulative_diff) in each member."
-                if source == "pr_diff" else
-                "No binned data saved yet — run a binned CSV in each "
-                "member." if source == "binned"
-                else "No combined analysis yet — build it from the Hub's "
-                     "Project panel.")
+            if source == "pr_diff":
+                message = (
+                    "No paired − yoked curve data saved yet — run the basic "
+                    "analysis (or plot_pr_cumulative_diff) in each member.")
+            elif source == "pr_breaking":
+                message = (
+                    "No breaking point table saved yet — run the breaking "
+                    "point step (or basic analysis) in each member.")
+            elif source == "binned":
+                message = ("No binned data saved yet — run a binned CSV in "
+                           "each member.")
+            else:
+                message = ("No combined analysis yet — build it from the "
+                           "Hub's Project panel.")
+            self._show_preview_message(message)
             return
         try:
             figure = pubfigures.build_figure(

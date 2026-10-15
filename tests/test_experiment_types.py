@@ -115,6 +115,20 @@ def test_yaml_constants_layer_over_the_type_defaults():
     assert merged["min_untransformed_licks_cutoff"] == 20   # type default kept
 
 
+def test_yaml_null_turns_a_typed_cutoff_off():
+    """Explicit null wins over the type default so a filter can be disabled."""
+    hedonic = et.get_experiment_type("Hedonic")
+    merged = hedonic.resolve_constants({
+        "constants": {
+            "min_untransformed_licks_cutoff": None,
+            "max_med_duration_cutoff": 13.0,
+        },
+    })
+    assert merged["min_untransformed_licks_cutoff"] is None
+    assert merged["max_med_duration_cutoff"] == 13.0
+    assert merged["max_events_cutoff"] == 150000.0
+
+
 def test_build_global_omits_what_the_type_owns():
     built = et.get_experiment_type("Hedonic").build_global(
         params={"feeding_threshold": 20, "chamber_size": 2},
@@ -122,6 +136,17 @@ def test_build_global_omits_what_the_type_owns():
     assert built["experiment_type"] == "Hedonic"
     assert "chamber_layout" not in built
     assert "chamber_size" not in built["params"]
+    ## Type defaults are resolved at load, not written into a fresh design.
+    assert "constants" not in built
+
+
+def test_build_global_keeps_explicit_null_cutoffs():
+    built = et.get_experiment_type("Hedonic").build_global(
+        constants={"max_events_cutoff": None, "min_untransformed_licks_cutoff": 35})
+    assert built["constants"] == {
+        "max_events_cutoff": None,
+        "min_untransformed_licks_cutoff": 35,
+    }
 
 
 def test_report_set_depends_on_the_chamber_layout():

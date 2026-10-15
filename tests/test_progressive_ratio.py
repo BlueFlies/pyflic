@@ -59,6 +59,8 @@ def test_type_owns_data_derived_facets():
     assert "facet_cutoffs" not in pr.build_global(well_names={"A": "S", "B": "Y"})
     assert pr.default_constants["require_training_complete"] is True
     assert pr.report_set("two_well")[0] == "timecourse_pr_diff"
+    assert "scatter_pr_breaking_point" in pr.report_set("two_well")
+    assert "dot_pr_breaking_point" in pr.report_set("two_well")
     assert pr.report_facets() == ["Test"]
 
 
@@ -380,9 +382,15 @@ def test_basic_analysis_writes_the_pr_outputs(tmp_path):
 
 def test_pr_diff_plot_spec_is_type_gated():
     assert "timecourse_pr_diff" in pubfigures.plots_for_layout("two_well", "ProgressiveRatio")
+    assert "scatter_pr_breaking_point" in pubfigures.plots_for_layout(
+        "two_well", "ProgressiveRatio")
+    assert "dot_pr_breaking_point" in pubfigures.plots_for_layout(
+        "two_well", "ProgressiveRatio")
     assert "timecourse_pr_diff" not in pubfigures.plots_for_layout("two_well", "Hedonic")
     assert "timecourse_pr_diff" not in pubfigures.plots_for_layout("two_well")
     assert pubfigures.source_of("timecourse_pr_diff") == "pr_diff"
+    assert pubfigures.source_of("scatter_pr_breaking_point") == "pr_breaking"
+    assert pubfigures.source_of("dot_pr_breaking_point") == "pr_breaking"
     assert pubfigures.source_of("timecourse_licks") == "binned"
     assert pubfigures.source_of("faceted_licks") == "facet"
     spec = pubfigures.default_spec("timecourse_pr_diff")

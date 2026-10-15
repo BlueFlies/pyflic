@@ -74,6 +74,10 @@ and the one in the editor is the one nobody runs in CI.
 - A blank threshold field is no longer a null. Reading one requires knowing
   the type, so any future surface showing "the cutoffs in force" must resolve
   through `resolve_constants()` rather than reading `constants:` directly.
+- To turn a typed cutoff **off**, the editors write an explicit YAML `null`
+  for that key. `resolve_constants()` lets `null` win over the type default;
+  omitting the key still inherits. Unchecked checkbox → `null`; checked +
+  blank → omit; checked + number → override.
 - `app-config-editor.md`'s "`chamber_size` is required and cannot be inferred"
   is false and is rewritten. The remaining eight help topics that still speak
   of `chamber_size` are pre-existing ADR-0007 drift, tracked separately.

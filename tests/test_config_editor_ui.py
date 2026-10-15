@@ -151,11 +151,12 @@ def test_a_hedonic_config_without_well_names_is_reported(editor):
 # ---------------------------------------------------------------------------
 
 def test_blank_thresholds_inherit_and_are_not_written(editor):
-    """``resolve_constants`` merges the type's defaults *under* the yaml, so a
-    blank field means "use the type's", not "no filtering".  Writing the number
-    out would freeze this config against today's defaults."""
+    """Checked + blank means "use the type's", not "no filtering".  Writing the
+    number out would freeze this config against today's defaults."""
     _select_type(editor, "Hedonic")
 
+    assert editor._min_raw_licks_check.isChecked()
+    assert editor._max_events_check.isChecked()
     assert "20" in editor._min_raw_licks_edit.placeholderText()
     assert "150000" in editor._max_events_edit.placeholderText()
     assert "constants" not in editor._collect_yaml()["global"]
@@ -163,10 +164,39 @@ def test_blank_thresholds_inherit_and_are_not_written(editor):
 
 def test_a_typed_threshold_is_written_as_an_override(editor):
     _select_type(editor, "Hedonic")
+    editor._min_raw_licks_check.setChecked(True)
     editor._min_raw_licks_edit.setText("35")
 
     constants = editor._collect_yaml()["global"]["constants"]
     assert constants == {"min_untransformed_licks_cutoff": 35.0}
+
+
+def test_unchecked_threshold_writes_null_to_disable(editor):
+    """Unchecked overrides the type default with YAML null (filter off)."""
+    _select_type(editor, "Hedonic")
+    editor._max_events_check.setChecked(False)
+
+    constants = editor._collect_yaml()["global"]["constants"]
+    assert constants["max_events_cutoff"] is None
+    assert "min_untransformed_licks_cutoff" not in constants
+
+
+def test_loaded_null_threshold_opens_unchecked(app, tmp_path):
+    win = _open(app, tmp_path, {
+        "global": {
+            "experiment_type": "Hedonic",
+            "constants": {"max_med_duration_cutoff": None},
+        },
+        "dfms": [{"id": 1, "chambers": {1: "Ctrl"}}],
+    })
+    try:
+        assert not win._max_dur_check.isChecked()
+        assert not win._max_dur_edit.isEnabled()
+        assert win._min_raw_licks_check.isChecked()
+        constants = win._collect_yaml()["global"]["constants"]
+        assert constants["max_med_duration_cutoff"] is None
+    finally:
+        win.close()
 
 
 # ---------------------------------------------------------------------------
