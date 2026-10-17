@@ -367,6 +367,89 @@ def test_without_a_program_the_data_give_the_linkage_and_nothing_fails(tmp_path)
                for n in notes)
 
 
+def _written(root: Path, name: str, *, writer=write_v4_recording, edit_config=None,
+             **kw) -> Path:
+    """The recording *name* and its config written to *root*, not loaded."""
+    spec, results = simulated(name)
+    root.mkdir(parents=True, exist_ok=True)
+    writer(root / "data", spec, results=results, **kw)
+    cfg = _config([d.dfm_id for d in spec.dfms])
+    if edit_config is not None:
+        edit_config(cfg)
+    (root / "flic_config.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False))
+    return root
+
+
+def _program_warnings(root: Path) -> list[str]:
+    from pyflic.base.opto_light import NO_PROGRAM_WARNING
+    from pyflic.base.yaml_lint import lint_flic_config
+
+    issues = lint_flic_config(root / "flic_config.yaml")
+    assert all(i.severity == "warning" for i in issues if NO_PROGRAM_WARNING in i.message)
+    return [i.message for i in issues if NO_PROGRAM_WARNING in i.message]
+
+
+def test_lint_warns_of_a_firmware_4_recording_without_its_program(tmp_path):
+    """Decision 4: the header and first rows say generation 3; without
+    Program.txt, or without the DFM's section, its types are unknown."""
+    from opto_fixtures import make_opto_dir
+
+    warning = ("DFM 1: firmware 4.0.0 recording without Program.txt: Paradigm types "
+               "and settings unknown")
+    assert _program_warnings(_written(tmp_path / "none", "choice", program=False)) == \
+        [warning, warning.replace("DFM 1", "DFM 2")]
+    assert _program_warnings(_written(tmp_path / "with", "choice")) == []
+    ## A program for DFM 2 only leaves DFM 1 without its section.
+    other = _written(tmp_path / "other", "choice1")
+    (other / "data" / "Program.txt").write_text(
+        program_text(choice_pr_spec(dfm_ids=(2,))), encoding="utf-8")
+    assert _program_warnings(other) == [warning]
+    ## Not for a DFM whose light QC is off, nor for older firmware, nor for a
+    ## recording made without a Program (every well Off).
+    def off(cfg):
+        cfg["dfms"][0]["optogenetics"] = False
+
+    assert _program_warnings(_written(tmp_path / "off", "choice1", program=False,
+                                      edit_config=off)) == []
+    assert _program_warnings(_written(tmp_path / "gen2", "choice1", program=False,
+                                      writer=write_gen2_recording)) == []
+    assert _program_warnings(make_opto_dir(tmp_path / "gen1", program=None)) == []
+    simple = _written(tmp_path / "simple", "choice1")
+    (simple / "data" / "Program.txt").write_text(
+        (FIXTURES / "Program_simple.txt").read_text(encoding="utf-8"), encoding="utf-8")
+    assert _program_warnings(simple) == []
+
+
+def test_the_report_and_the_hub_warn_of_a_firmware_4_recording_without_its_program(
+        qt_app, tmp_path):
+    from pyflic.base import report_layout as rl
+    from pyflic.base.hub import AnalysisHubWindow
+    from pyflic.base.opto_light import dfms_without_program, no_program_warning
+    from pyflic.base.pdf_report import build_experiment_report
+
+    warning = no_program_warning([1])
+    e = load(tmp_path / "exp", "choice1", program=False)
+    assert dfms_without_program(e) == [1]
+    doc = build_experiment_report(e, metrics=())
+    contents = next(i for i, b in enumerate(doc.blocks) if isinstance(b, rl.Contents))
+    glance = [b for b in doc.blocks[:contents] if isinstance(b, rl.Callout)]
+    hits = [b for b in glance if warning in b.text]
+    assert len(hits) == 1 and hits[0].tone == "warning"
+    hub = AnalysisHubWindow()
+    try:
+        hub.experiment, hub.experiment_name = e, "Rep1"
+        hub.refresh()
+        assert f"Loaded: Rep1 · {warning}" in hub.readout.status_text()
+        ## With its program, neither says it.
+        with_program = load(tmp_path / "with", "choice1")
+        assert dfms_without_program(with_program) == []
+        hub.experiment = with_program
+        hub.refresh()
+        assert "Program.txt" not in hub.readout.status_text()
+    finally:
+        hub.close()
+
+
 def test_an_interval_beyond_the_printed_lines_is_judged_by_its_paradigm(tmp_path):
     spec, _results = simulated("choice1")
     text = program_text(spec)

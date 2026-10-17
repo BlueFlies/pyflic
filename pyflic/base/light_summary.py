@@ -59,7 +59,6 @@ import pandas as pd
 from . import opto_program as op
 from . import windowing
 from .paradigm_state import GENERATION_PARADIGM
-from .utils import range_bounds, range_is_specified
 
 #: The per-well table, ``analysis/light_wells.csv``.  The design's factor
 #: columns follow ``Treatment``, as in the feeding summary.
@@ -105,46 +104,12 @@ _COUNT_COLUMNS = ("Activations", "AcclimationActivations", "FirmwareEvents", "Pr
 # Windows: one (a, b] range of minutes, or several
 # ---------------------------------------------------------------------------
 
-def _is_window_list(range_minutes: Any) -> bool:
-    """Whether *range_minutes* is a list of ``(a, b)`` windows rather than one."""
-    check = getattr(windowing, "is_window_list", None)
-    if check is not None:
-        return bool(check(range_minutes))
-    try:
-        first = range_minutes[0]
-    except (TypeError, IndexError, KeyError):
-        return False
-    return isinstance(first, (tuple, list, np.ndarray))
-
-
-def _row_mask(minutes: np.ndarray, range_minutes: Any) -> np.ndarray | None:
-    """Rows of *minutes* inside the window, as the feeding summary selects
-    them: ``(a, b]`` per window, an end of 0 open; ``None`` for every row.
-    ``windowing.range_mask`` where it exists (stream 5b), else the same rule
-    here."""
-    shared = getattr(windowing, "range_mask", None)
-    if shared is not None:
-        return shared(minutes, range_minutes)
-    if _is_window_list(range_minutes):
-        mask = np.zeros(minutes.size, dtype=bool)
-        for window in range_minutes:
-            a, b = range_bounds(window)
-            mask |= (minutes > a) & (minutes <= b)
-        return mask
-    if not range_is_specified(range_minutes):
-        return None
-    a, b = range_bounds(range_minutes)
-    return (minutes > a) & (minutes <= b)
-
-
 def _format_ranges(window: Any) -> str:
-    """The ``FacetRange`` cell of one window or several."""
-    if not _is_window_list(window):
-        return windowing.format_range(window)
-    shared = getattr(windowing, "format_ranges", None)
-    if shared is not None:
-        return shared(window)
-    return " + ".join(windowing.format_range(w) for w in window)
+    """The ``FacetRange`` cell of one window or several, as the feeding
+    summary's Facets write it."""
+    if windowing.is_window_list(window):
+        return windowing.format_ranges(window)
+    return windowing.format_range(window)
 
 
 class _Window(NamedTuple):
@@ -169,7 +134,8 @@ class _Window(NamedTuple):
 
 
 def _window(minutes: np.ndarray, range_minutes: Any) -> _Window:
-    mask = _row_mask(minutes, range_minutes)
+    ## The rows the feeding summary selects: (a, b] per window, None for all.
+    mask = windowing.range_mask(minutes, range_minutes)
     rows = np.arange(minutes.size) if mask is None else np.flatnonzero(mask)
     if not rows.size:
         return _Window(rows, [], 0)
@@ -653,10 +619,9 @@ def facet_windows(exp, dfm_id: int) -> list[tuple[str, Any, list[int] | None]]:
     is split by, each window as the feeding summary takes it.
 
     * Progressive Ratio: each Chamber Group's own (:meth:`group_windows`);
-    * the experiment's per-DFM Facets (``facet_windows_for``, Program
-      Facets), when it has them: each a label and one or more windows, the
-      list passed through;
-    * else the shared ``facet_cutoffs`` windows.
+    * else the experiment's per-DFM Facets
+      (:meth:`Experiment.facet_windows_for`, cutoff or Program Facets): each
+      a label and one or more windows, the list passed through.
     """
     group_windows = getattr(exp, "group_windows", None)
     if callable(group_windows) and type_owns_role(exp):
@@ -666,17 +631,13 @@ def facet_windows(exp, dfm_id: int) -> list[tuple[str, Any, list[int] | None]]:
                 int(ch.index))
         return [(label, window, chambers) for group, chambers in groups.items()
                 for label, window in group_windows(dfm_id, group)]
-    per_dfm = getattr(exp, "facet_windows_for", None)
-    if callable(per_dfm):
-        return [(label, windows, None) for label, windows in per_dfm(dfm_id)]
-    return [(label, window, None)
-            for label, window in zip(exp.facet_labels(), exp.facet_windows())]
+    return [(label, windows, None) for label, windows in exp.facet_windows_for(dfm_id)]
 
 
 def _as_range(window: Any) -> Any:
     """A Facet window as ``range_minutes``: one ``(a, b)`` through
     :func:`windowing.as_range_minutes`, a list as it is."""
-    return window if _is_window_list(window) else windowing.as_range_minutes(window)
+    return window if windowing.is_window_list(window) else windowing.as_range_minutes(window)
 
 
 def _facet_tables(exp) -> tuple[pd.DataFrame, pd.DataFrame]:

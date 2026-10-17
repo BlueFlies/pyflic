@@ -54,7 +54,13 @@ from .experiment_types.progressive_ratio import (
     parse_paired_chambers,
     partner_of,
 )
-from .opto_program import FIXED_RATIO, RATIO_PARADIGMS
+from .opto_program import (
+    FIXED_RATIO,
+    GRAMMAR_LEGACY,
+    PROGRESSIVE_RATIO,
+    RATIO_PARADIGMS,
+    TYPE_NAMES,
+)
 from .paradigm_state import GENERATION_PARADIGM, ParadigmState
 from .two_well_experiment import TwoWellExperiment
 from .utils import range_bounds, range_is_specified
@@ -124,11 +130,13 @@ PERSIST_COLUMNS: tuple[str, ...] = ("PersistA", "PersistACensored")
 COUNTED_COLUMN = "Counted"
 #: ``analysis/pr_breaking_point.csv``, after ``Treatment`` and the factors.
 #: ``BreakRequirement`` and ``FirmwareEvents`` are the firmware's record of
-#: the counted Light Events (generation 3; NA otherwise; ADR-0014 addendum).
+#: the counted Light Events (generation 3; NA otherwise; ADR-0014 addendum);
+#: ``ParadigmType`` the Test Paradigm's type
+#: (:meth:`ProgressiveRatioExperiment.test_paradigm_type`).
 BREAKING_POINT_SUMMARY_COLUMNS: tuple[str, ...] = (
     "DFM", "Group", "PairedChamber", "BreakingPoint", "BreakMin", "Censored",
     "TestMinutes", "LargestRequirement", "BreakRequirement", "FirmwareEvents",
-    "LickFreeLightEvents", "LightQC",
+    "LickFreeLightEvents", "LightQC", "ParadigmType",
 )
 
 
@@ -426,6 +434,23 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
         program = getattr(self, "opto_program", None)
         paradigms = getattr(program, "paradigms", None) or {}
         return str(name), paradigms.get(str(name))
+
+    def test_paradigm_type(self, dfm_id: int, group: int) -> str | None:
+        """The group's Test Paradigm type in PyMCU spelling
+        (``ProgressiveRatio`` or ``FixedRatio``), ``pr_breaking_point.csv``'s
+        ``ParadigmType``.  On generation 3 the type of :meth:`test_paradigm`;
+        on generations 1 and 2 ``ProgressiveRatio`` when a legacy
+        ``Program.txt`` has the DFM's section, the firmware that wrote one
+        having no other ratio Paradigm.  ``None`` when nothing says: no
+        program for the DFM, or a Test Paradigm the program does not define."""
+        if self._reads_phase(self.dfms[int(dfm_id)]):
+            _name, paradigm = self.test_paradigm(dfm_id, group)
+            return paradigm.type_name if paradigm is not None else None
+        program = getattr(self, "opto_program", None)
+        if program is not None and program.grammar == GRAMMAR_LEGACY \
+                and program.section(dfm_id) is not None:
+            return TYPE_NAMES[PROGRESSIVE_RATIO]
+        return None
 
     def _fixed_ratio(self, dfm_id: int, group: int) -> bool:
         """Whether the group's Test Paradigm is a FixedRatio (decision 14).
@@ -1145,7 +1170,12 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
                       range_minutes: Sequence[float],
                       transform_licks: bool) -> pd.DataFrame:
         """Treatment-labelled summary rows for *chambers* of one DFM over one
-        window — the per-group building block of the faceted summary."""
+        window — the per-group building block of the faceted summary.  On an
+        optogenetic experiment they carry ``LitSec`` and ``Activations`` over
+        that window, where :meth:`Experiment.feeding_summary` puts them; the
+        ``Role`` stays this type's own."""
+        from .light_summary import with_light_columns
+
         dfm = self.dfms[int(dfm_id)]
         wanted = {int(c) for c in chambers
                   if self.design.treatment_for(dfm_id, c) is not None}
@@ -1158,7 +1188,8 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
             return summ
         summ.insert(0, "Treatment",
                     [self.design.treatment_for(dfm_id, int(c)) for c in summ["Chamber"]])
-        return self._augment_rows(self._append_factor_columns(summ))
+        summ = with_light_columns(self, self._append_factor_columns(summ), range_minutes)
+        return self._augment_rows(summ)
 
     # ------------------------------------------------------------------
     # Facets: Training / Test, split at each group's own training end
@@ -2388,6 +2419,7 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
                     "FirmwareEvents": firmware,
                     "LickFreeLightEvents": qc.get("LickFreeEvents", np.nan),
                     "LightQC": qc.get("Flags", ""),
+                    "ParadigmType": self.test_paradigm_type(dfm_id, group),
                 })
         if not rows:
             return pd.DataFrame(columns=cols)

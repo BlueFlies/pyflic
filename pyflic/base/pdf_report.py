@@ -276,6 +276,7 @@ def _cover(experiment: Experiment, qc: dict, name: str) -> list[Any]:
     blocks.append(rl.Heading("At a glance", level=2, numbered=False))
     blocks.append(_integrity_callout(experiment, qc))
     blocks.append(_exclusion_callout(experiment))
+    blocks.extend(_program_callout(experiment))
     ## The optogenetic light QC is every type's, not a type's own.
     blocks.extend(experiment.opto.report_glance_blocks())
     blocks.extend(experiment.report_glance_blocks())
@@ -372,6 +373,20 @@ def _exclusion_callout(experiment: Experiment) -> rl.Callout:
     return rl.Callout(f"{len(frame)} chamber(s) excluded: {' and '.join(parts)}.  The "
                       f"results stand on the chambers that remain.",
                       tone="info", title="Exclusions")
+
+
+def _program_callout(experiment: Experiment) -> list[rl.Callout]:
+    """Decision 4's warning, for DFMs recorded with firmware 4.0.0 that have
+    no ``Program.txt`` section; nothing when every DFM has one or needs none."""
+    from .opto_light import dfms_without_program, no_program_warning
+
+    lacking = dfms_without_program(experiment)
+    if not lacking:
+        return []
+    return [rl.Callout(f"{no_program_warning(lacking)}.  The rows name each Paradigm but "
+                       f"not its type, so the type-dependent light checks and columns are "
+                       f"not made; copy the Program.txt PyMCU exported for this recording "
+                       f"into data/.", tone="warning", title="Program.txt")]
 
 
 def _crosstalk_blocks(experiment: Experiment, qc: dict) -> list[Any]:

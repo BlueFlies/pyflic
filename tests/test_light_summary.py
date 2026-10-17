@@ -296,19 +296,6 @@ def test_a_facet_of_several_windows_pools_them(tmp_path, monkeypatch):
     assert (early["LitSec"] - expected.loc[early.index]).abs().max() < 1e-9
 
 
-def test_facet_windows_prefers_a_per_dfm_form():
-    class Exp:
-        dfms = {}
-
-        def facet_windows_for(self, dfm_id):
-            return [("A", (0, 5))]
-
-        def facet_labels(self):
-            raise AssertionError("the shared windows are not read")
-
-    assert ls.facet_windows(Exp(), 1) == [("A", (0, 5), None)]
-
-
 # ---------------------------------------------------------------------------
 # Progressive Ratio keeps its own Role and windows
 # ---------------------------------------------------------------------------
@@ -339,6 +326,20 @@ def test_progressive_ratio_keeps_its_role_and_group_windows(pr):
     ## For comparing light behaviour, a yoked fly's light is its partner's.
     kept = ls.behaviour_rows(table)
     assert set(kept["Role"]) == {"paired"} and len(kept) == len(table) // 2
+
+
+def test_progressive_ratio_facet_rows_carry_their_windows_light(pr):
+    """The Training / Test rows have LitSec and Activations where the
+    whole-recording summary has them, each over the row's own window."""
+    facet = pr.feeding_summary_facet()
+    assert list(facet.columns[:2]) == ["Facet", "FacetRange"]
+    assert list(facet.columns[2:]) == list(pr.feeding_summary().columns)
+    light = ls.light_summary_facet(pr).set_index(["Facet", "DFM", "Chamber"])
+    for row in facet.itertuples(index=False):
+        assert row.LitSec == pytest.approx(light.loc[(row.Facet, row.DFM, row.Chamber),
+                                                     "LitSec"])
+    assert facet["Activations"].isna().all()          # generation 1: no Activations
+    assert set(facet["Role"]) == {"paired", "yoked"}
 
 
 # ---------------------------------------------------------------------------
