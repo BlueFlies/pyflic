@@ -176,6 +176,24 @@ def window_mask(minutes, range_minutes):
     return mask
 
 
+def range_mask(minutes, range_minutes):
+    """``(n,)`` bool for any ``range_minutes``: the rows whose *minutes* fall
+    in the ``(a, b]`` window or in any window of a list; ``None`` for the
+    whole-recording sentinel ``(0, 0)``.  What the feeding summary filters
+    by, for a table of another kind to filter the same way."""
+    import numpy as np
+
+    from .utils import range_bounds, range_is_specified
+
+    values = np.asarray(minutes, dtype=float)
+    if is_window_list(range_minutes):
+        return window_mask(values, range_minutes)
+    if not range_is_specified(range_minutes):
+        return None
+    a, b = range_bounds(range_minutes)
+    return (values > a) & (values <= b)
+
+
 def range_key(range_minutes) -> tuple:
     """A hashable cache key for *range_minutes*: ``(a, b)`` as floats for one
     window (the key the feeding-summary cache has always used), a tuple of

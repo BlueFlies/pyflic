@@ -11,7 +11,6 @@ the firmware simulator (``v4_fixtures``) and the generation-1 opto fixtures.
 from __future__ import annotations
 
 import os
-from dataclasses import replace
 from datetime import timedelta
 from functools import lru_cache
 from pathlib import Path

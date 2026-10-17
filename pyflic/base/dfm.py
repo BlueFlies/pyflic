@@ -827,13 +827,7 @@ class DFM:
         union, so a median is never an average of per-window medians."""
         from . import windowing
 
-        values = np.asarray(minutes, dtype=float)
-        if windowing.is_window_list(range_minutes):
-            return windowing.window_mask(values, range_minutes)
-        if not range_is_specified(range_minutes):
-            return None
-        a, b = range_bounds(range_minutes)
-        return (values > a) & (values <= b)
+        return windowing.range_mask(minutes, range_minutes)
 
     @staticmethod
     def _interval_summary(interval_df, range_minutes: Sequence[float]) -> tuple[float, float]:
