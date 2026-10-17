@@ -211,6 +211,13 @@ def test_the_rows_are_the_windows(choice):
     assert mine["LitSec"].tolist() == pytest.approx(
         [state.lit_seconds(1, r.i0, r.i1) for r in runs])
     assert int(choice.opto.decay_samples(1)[-1]) == 3            # 500 ms at 5 Hz
+    ## The same profile for a DFM the QC does not cover, from its rows.
+    minutes = choice.dfms[1].raw_df["Minutes"].to_numpy(dtype=float)
+    profile = oq.decay_profile(1, minutes, 5, None, choice.opto.program,
+                               oq.OptoQCSettings(), state=state)
+    assert np.array_equal(profile, choice.opto.result(1).decay_samples)
+    ## The baseline lead-in has no Hold of its own: the design's fallback.
+    assert profile[0] == oq.decay_samples_for(1000, 5)
 
 
 def test_yoked_controls_keep_their_yoking(yoked):
@@ -270,6 +277,22 @@ def test_a_row_paradigm_absent_from_the_program_fails_every_group(tmp_path):
     assert any("PR20 (Program Interval 2)" in n for n in result.notes)
     intervals = e.opto.interval_table()
     assert set(intervals.loc[intervals["ProgramInterval"] == 2, "Mode"]) == {oq.NOT_JUDGED}
+
+
+def test_a_row_paradigm_other_than_the_printed_line_is_a_mismatch(tmp_path):
+    """The rows win (ADR-0016): judged by the Paradigm they name, and the
+    program flagged as disagreeing."""
+    def edit(rows):
+        frame = rows[1]
+        frame["Paradigm"] = frame["Paradigm"].replace("Closed", "PR10")
+
+    e = load(tmp_path / "exp", "choice1", edit=edit)
+    result = e.opto.result(1)
+    assert result.flags == [oq.PROGRAM_MISMATCH]
+    assert any("Program Interval(s) 1 (PR10, printed Closed)" in n for n in result.notes)
+    intervals = e.opto.interval_table()
+    first = intervals[(intervals["Group"] == 1) & (intervals["ProgramInterval"] == 1)]
+    assert first["Mode"].tolist() == [op.PROGRESSIVE_RATIO]
 
 
 def test_an_acclimation_short_of_the_paradigms_count_warns(tmp_path):

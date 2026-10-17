@@ -732,7 +732,8 @@ def analyze_dfm(inp: DFMInputs, *, program: op.OptoProgram | None, setting: str,
     A generation-3 recording (*inp* carries its Paradigm state) is judged
     from the firmware's own record instead (:func:`_analyze_paradigm_state`).
     """
-    if inp.generation == GENERATION_PARADIGM and inp.state is not None:
+    if inp.generation == GENERATION_PARADIGM and inp.state is not None \
+            and len(inp.state) == np.asarray(inp.minutes).size:
         return _analyze_paradigm_state(inp, program=program, setting=setting,
                                        settings=settings)
     minutes = np.asarray(inp.minutes, dtype=float)
@@ -1575,40 +1576,41 @@ def _analyze_paradigm_state(inp: DFMInputs, *, program: op.OptoProgram | None,
             u_rows.append(onsets[keep])
             u_wells.append(np.full(int(keep.sum()), well, dtype=int))
             u_wins.append(ks[keep])
-        U_row = np.concatenate(u_rows) if u_rows else np.zeros(0, dtype=int)
-        U_well = np.concatenate(u_wells) if u_wells else np.zeros(0, dtype=int)
-        U_win = np.concatenate(u_wins) if u_wins else np.zeros(0, dtype=int)
-        order = np.lexsort((U_well, U_row))
-        U_row, U_well, U_win = U_row[order], U_well[order], U_win[order]
-        m = U_row.size
-        U_mode = [modes[k][0] for k in U_win.tolist()]
-        U_in_a = phase_a[U_row, U_well - 1] if m else np.zeros(0, dtype=bool)
-        U_cls = np.array([
-            _UNIT_FIXED if mode in FIXED_LENGTH_PARADIGMS and not a
+        empty = np.zeros(0, dtype=int)
+        unit_row = np.concatenate(u_rows) if u_rows else empty
+        unit_well = np.concatenate(u_wells) if u_wells else empty
+        unit_window = np.concatenate(u_wins) if u_wins else empty
+        order = np.lexsort((unit_well, unit_row))
+        unit_row, unit_well, unit_window = (unit_row[order], unit_well[order],
+                                            unit_window[order])
+        m = unit_row.size
+        unit_in_a = phase_a[unit_row, unit_well - 1]
+        ## How each Activation's light is judged: a fixed-length Main one
+        ## whole, by activity at its onset; a closed-loop or Acclimation one
+        ## sample by sample with the window rule; a NonFeeding one not at all.
+        unit_cls = np.array([
+            _UNIT_FIXED if mode in FIXED_LENGTH_PARADIGMS and not in_a
             else _UNIT_WINDOW if (mode in FIXED_LENGTH_PARADIGMS
                                   or mode in op.CLOSED_LOOP_PARADIGMS
                                   or mode == op.UNKNOWN_PARADIGM)
             else _UNIT_NON_FEEDING if mode == op.NON_FEEDING
             else _UNIT_NONE
-            for mode, a in zip(U_mode, U_in_a.tolist())], dtype=int)
-        U_act = np.array([bool(onset_activity(int(w))[int(r)])
-                          for r, w in zip(U_row.tolist(), U_well.tolist())], dtype=bool)
+            for mode, in_a in zip((modes[k][0] for k in unit_window.tolist()),
+                                  unit_in_a.tolist())], dtype=int)
+        unit_activity = np.array([bool(onset_activity(w)[r]) for r, w
+                                  in zip(unit_row.tolist(), unit_well.tolist())], dtype=bool)
         ## The light an Activation owns: to the next onset, the light going
-        ## out, or its window's end plus the Hold, whichever comes first.
-        positions = np.arange(n)
-        next_unlit = (np.minimum.accumulate(np.where(lit, n, positions)[::-1])[::-1]
-                      if n else np.zeros(0, dtype=int))
-        if m:
-            following = np.append(U_row[1:], n)
-            cap = np.array([windows[k].i1 + decays[k] + tol for k in U_win.tolist()])
-            U_end = np.minimum.reduce([following, next_unlit[U_row], cap,
-                                       np.full(m, n)])
-            U_end = np.maximum(U_end, U_row)
-        else:
-            U_end = np.zeros(0, dtype=int)
+        ## out, or its window's end plus the Hold, whichever comes first (an
+        ## open-loop window after it never goes out).
+        next_unlit = np.minimum.accumulate(np.where(lit, n, np.arange(n))[::-1])[::-1]
+        following = np.append(unit_row[1:], n)[:m]
+        cap =np.array([windows[k].i1 + decays[k] + tol for k in unit_window.tolist()],
+                       dtype=int)
+        unit_end = np.maximum(np.minimum.reduce([following, next_unlit[unit_row], cap,
+                                                 np.full(m, n)]), unit_row)
         owner = np.full(n, -1, dtype=int)
-        for i in np.flatnonzero(U_end > U_row).tolist():
-            owner[U_row[i]:U_end[i]] = i
+        for i in np.flatnonzero(unit_end > unit_row).tolist():
+            owner[unit_row[i]:unit_end[i]] = i
         owned = owner >= 0
         owned_rows = np.flatnonzero(owned)
         owned_unit = owner[owned_rows]
@@ -1617,15 +1619,14 @@ def _analyze_paradigm_state(inp: DFMInputs, *, program: op.OptoProgram | None,
         judged_ms = np.zeros(n)
         unexplained_ms = np.zeros(n)
         off_ms = np.zeros(n)
-        cls_of_row = U_cls[owned_unit] if m else np.zeros(0, dtype=int)
+        cls_of_row = unit_cls[owned_unit]
         fixed_rows = owned_rows[cls_of_row == _UNIT_FIXED]
         judged_ms[fixed_rows] = g_ms[fixed_rows]
-        bad_rows = owned_rows[(cls_of_row == _UNIT_FIXED) & ~U_act[owned_unit]] if m \
-            else owned_rows
+        bad_rows = owned_rows[(cls_of_row == _UNIT_FIXED) & ~unit_activity[owned_unit]]
         unexplained_ms[bad_rows] = g_ms[bad_rows]
         window_rows = cls_of_row == _UNIT_WINDOW
-        for k in np.unique(U_win[owned_unit[window_rows]]).tolist() if m else []:
-            sel = owned_rows[window_rows & (U_win[owned_unit] == k)]
+        for k in np.unique(unit_window[owned_unit[window_rows]]).tolist():
+            sel = owned_rows[window_rows & (unit_window[owned_unit] == k)]
             _mode, trig, _hold = modes[k]
             ok = activity_near(trig, decays[k] + tol, tol)[sel]
             judged_ms[sel] = g_ms[sel]
@@ -1639,10 +1640,9 @@ def _analyze_paradigm_state(inp: DFMInputs, *, program: op.OptoProgram | None,
         nf_lit_ms = 0.0
         feeding_events = closed_events = unlit_events = 0
         feeding_windows = False
-        unit_ms = (np.bincount(owned_unit, weights=g_ms[owned_rows], minlength=m)
-                   if m else np.zeros(0))
-        feeding_unit = (U_cls == _UNIT_FIXED) | (U_cls == _UNIT_WINDOW)
-        no_activity_unit = feeding_unit & ~U_act
+        unit_ms = np.bincount(owned_unit, weights=g_ms[owned_rows], minlength=m)
+        feeding_unit = (unit_cls == _UNIT_FIXED) | (unit_cls == _UNIT_WINDOW)
+        no_activity_unit = feeding_unit & ~unit_activity
         for k, w in enumerate(windows):
             mode, trig, hold = modes[k]
             if w.i1 <= w.i0:
@@ -1658,7 +1658,7 @@ def _analyze_paradigm_state(inp: DFMInputs, *, program: op.OptoProgram | None,
             if mode not in paradigms:
                 paradigms.append(mode)
             triggers_seen.update(trig)
-            in_window = U_win == k
+            in_window = unit_window == k
             row = {"DFM": inp.dfm_id, "Group": label, "Window": w.index,
                    "Interval": w.interval.index if w.interval is not None else np.nan,
                    "ProgramInterval": (w.program_interval if w.program_interval is not None
@@ -1724,8 +1724,7 @@ def _analyze_paradigm_state(inp: DFMInputs, *, program: op.OptoProgram | None,
         ## ---- the drifting-baseline signature: the firmware decided, pyflic
         ## saw no lick or touch ----
         evidence = np.zeros(n, dtype=bool)
-        if m:
-            evidence[owned_rows] = no_activity_unit[owned_unit]
+        evidence[owned_rows] = no_activity_unit[owned_unit]
         events_without = 0
         lone_rises = np.zeros(n, dtype=bool)
         for t in sorted(triggers_seen):
@@ -1740,8 +1739,8 @@ def _analyze_paradigm_state(inp: DFMInputs, *, program: op.OptoProgram | None,
             lone_rises[lone] = True
         if lone_rises.any():
             evidence |= near(lone_rises, int(max(decays, default=0)) + tol, 0)
-        contact_ms = float(unit_ms[feeding_unit].sum()) if m else 0.0
-        without_ms = float(unit_ms[no_activity_unit].sum()) if m else 0.0
+        contact_ms = float(unit_ms[feeding_unit].sum())
+        without_ms = float(unit_ms[no_activity_unit].sum())
 
         ## ---- the verdict on Explained Light ----
         judged_total = float(judged_ms.sum())
@@ -1857,38 +1856,43 @@ def _analyze_paradigm_state(inp: DFMInputs, *, program: op.OptoProgram | None,
         if unscheduled_ms >= 10_000.0:
             notes.append(f"{unscheduled_ms / 1000.0:.1f} s of light under an unknown "
                          f"instruction or a Paradigm this check cannot judge, not judged")
-        if any(mode == NOT_JUDGED for mode, _t, _h in modes) and section is not None:
-            dark = float(sum(g_ms[w.i0:w.i1].sum() for w, (mode, _t, _h)
-                             in zip(windows, modes) if mode == NOT_JUDGED and w.kind == "judged"))
-            if dark >= 10_000.0:
-                notes.append(f"{dark / 1000.0:.1f} s of light in Program Intervals whose "
-                             f"thresholds Program.txt does not print and no Activation "
-                             f"explains, not judged")
+        if section is not None:
+            unknown_thresholds_ms = float(sum(
+                g_ms[w.i0:w.i1].sum() for w, (mode, _t, _h) in zip(windows, modes)
+                if mode == NOT_JUDGED and w.kind == "judged"))
+            if unknown_thresholds_ms >= 10_000.0:
+                notes.append(f"{unknown_thresholds_ms / 1000.0:.1f} s of light in Program "
+                             f"Intervals whose thresholds Program.txt does not print and "
+                             f"whose group counted no Activation, not judged")
 
         ## ---- this group's Activations, one event each ----
-        unit_judged = (np.bincount(owned_unit, weights=judged_ms[owned_rows], minlength=m)
-                       if m else np.zeros(0))
-        unit_unexplained = (np.bincount(owned_unit, weights=unexplained_ms[owned_rows],
-                                        minlength=m) if m else np.zeros(0))
+        unit_judged = np.bincount(owned_unit, weights=judged_ms[owned_rows], minlength=m)
+        unit_unexplained = np.bincount(owned_unit, weights=unexplained_ms[owned_rows],
+                                       minlength=m)
         last_seen: dict[int, int] = {}
         last_activity: dict[tuple, np.ndarray] = {}
         unexplained_events = 0
         for i in range(m):
-            r, well, k = int(U_row[i]), int(U_well[i]), int(U_win[i])
-            e = int(U_end[i])
+            r, well, k = int(unit_row[i]), int(unit_well[i]), int(unit_window[i])
+            e = int(unit_end[i])
             mode, trig, _hold = modes[k]
-            cls = int(U_cls[i])
+            cls = int(unit_cls[i])
             w = windows[k]
-            in_a = bool(U_in_a[i])
+            in_a = bool(unit_in_a[i])
             requirement = np.nan
             events = np.nan
             if in_a:
+                ## Each Acclimation Activation is one Firmware Event.
                 events = 1
             elif mode in op.RATIO_PARADIGMS:
+                ## The Requirement met is on the row before; the first row of
+                ## a new Paradigm shows none, so the program's series says it.
                 met = state.requirement_met(well, r)
                 if met is None and starts[r] and w.paradigm is not None:
                     met = w.paradigm.requirement_for(1)
                 requirement = met if met is not None else np.nan
+                ## The Firmware Events since this well's previous Activation
+                ## under the same Paradigm, read from Progress.
                 i0 = max(last_seen.get(well, -1) + 1, int(segment_start[r]))
                 counted = state.firmware_events_between(well, i0, r + 1)
                 events = counted if counted else requirement
@@ -1896,10 +1900,10 @@ def _analyze_paradigm_state(inp: DFMInputs, *, program: op.OptoProgram | None,
             explained: bool | None = None
             un_sec = overrun = np.nan
             if cls == _UNIT_FIXED:
-                explained = bool(U_act[i])
+                explained = bool(unit_activity[i])
             elif cls == _UNIT_WINDOW:
                 explained = (bool(unit_judged[i] - unit_unexplained[i] > 0)
-                             if unit_judged[i] > 0 else bool(U_act[i]))
+                             if unit_judged[i] > 0 else bool(unit_activity[i]))
             if explained is not None:
                 un_sec = float(unit_unexplained[i]) / 1000.0
                 if not explained:

@@ -323,8 +323,10 @@ class OptoLightQC:
         """One row per Linkage Group of every DFM the QC covers —
         ``qc/opto/opto_light_qc.csv``.
 
-        ``Flags`` lists what fired: *unexplained light*, *light while off* and
-        *no light recorded* fail a group; the rest are warnings.  ``Verdict``
+        ``Flags`` lists what fired: *unexplained light*, *light while off*,
+        *no light recorded* and, on a firmware 4.0.0 recording, *broken
+        yoking* and *paradigm not in program* fail a group
+        (:data:`oq.FAILING_FLAGS`); the rest are warnings.  ``Verdict``
         is ``ok``, ``warning`` or ``failed``; ``Excluded`` says a failed
         group's chambers leave the analysis (``exclude_failed_opto_chambers``,
         off by default).  The definitions are in :mod:`pyflic.base.opto_qc`.
