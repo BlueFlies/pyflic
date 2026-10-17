@@ -7,6 +7,21 @@ from typing import Iterable, Sequence
 
 _nsre = re.compile(r"(\d+)")
 
+#: The Environmental Monitor's id.  PyMCU writes its records as
+#: ``DFM99_<n>.csv`` beside the DFMs' (27 columns, ``W1``-``W6`` relay and
+#: output states), so every DFM-id discovery skips it and the loader refuses
+#: it (decision 5 of ``docs/v4-data-plan.md``).
+ENVIRONMENTAL_MONITOR_ID = 99
+ENVIRONMENTAL_MONITOR_MESSAGE = "DFM 99 is the Environmental Monitor, not a DFM"
+
+
+def is_environmental_monitor(dfm_id) -> bool:
+    """Whether *dfm_id* names the Environmental Monitor, not a DFM."""
+    try:
+        return int(dfm_id) == ENVIRONMENTAL_MONITOR_ID
+    except (TypeError, ValueError):
+        return False
+
 
 def natural_key(s: str) -> list[object]:
     return [int(text) if text.isdigit() else text.lower() for text in _nsre.split(s)]

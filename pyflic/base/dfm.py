@@ -12,9 +12,26 @@ from .algorithms.feeding import bout_durations_and_intervals
 from .algorithms.tasting import tasting_bout_durations_and_intervals
 from .algorithms.thresholds import build_thresholds_table
 from .chamber import OneWellChamber, TwoWellChamber, compute_feeding_for_well, compute_tasting_for_well
+from .paradigm_state import (
+    GENERATION_EMPTY,
+    GENERATION_FLAG,
+    GENERATION_PARADIGM,
+    ParadigmState,
+    detect_generation,
+    split_paradigm_columns,
+)
 from .parameters import Parameters
 import re
-from .utils import natural_sorted, range_bounds, range_is_specified
+from .utils import (
+    ENVIRONMENTAL_MONITOR_ID,
+    ENVIRONMENTAL_MONITOR_MESSAGE,
+    natural_sorted,
+    range_bounds,
+    range_is_specified,
+)
+
+#: ``DFM.training_info`` by Generation: where a recording keeps its Training.
+TRAINING_INFO = {GENERATION_FLAG: "flag", GENERATION_EMPTY: "none", GENERATION_PARADIGM: "phase"}
 
 
 # ── DFM CSV loading (formerly io.py) ────────────────────────────────────────
@@ -41,6 +58,9 @@ class _LoadedDFM:
     df: pd.DataFrame
     version: int
     source_files: list[Path]
+    generation: int = GENERATION_FLAG
+    #: The Paradigm state on generation 3, row for row with *df*; else None.
+    paradigm: ParadigmState | None = None
 
 
 def _elapsed_seconds_from_date_time(df: pd.DataFrame) -> np.ndarray:
@@ -76,6 +96,8 @@ def _load_dfm_csvs(dfm_id: int, data_dir: str | Path = ".", range_minutes: Seque
     data_dir = Path(data_dir)
     if not data_dir.exists():
         raise FileNotFoundError(f"data_dir does not exist: {data_dir}")
+    if int(dfm_id) == ENVIRONMENTAL_MONITOR_ID:
+        raise ValueError(ENVIRONMENTAL_MONITOR_MESSAGE)
     v3 = natural_sorted(data_dir.glob(f"DFM{dfm_id}_*.csv"))
     if v3:
         files, version = v3, 3
@@ -91,11 +113,26 @@ def _load_dfm_csvs(dfm_id: int, data_dir: str | Path = ".", range_minutes: Seque
                 raise FileNotFoundError(f"DFM data file(s) not found for id={dfm_id} in {data_dir}")
     frames = [pd.read_csv(f) for f in files]
     df = pd.concat(frames, ignore_index=True) if len(frames) > 1 else frames[0]
+    ## The 63 Paradigm columns of a 90-column file come off before anything
+    ## else: every derived frame (baseline, licks, events, tasting) starts as
+    ## a copy of raw_df, and none of them reads these.  They live on in the
+    ## ParadigmState, which takes the same rows as raw_df below.
+    generation = detect_generation(df)
+    df, paradigm_columns = split_paradigm_columns(df)
     df = _ensure_minutes_seconds(df)
+    state = None
+    if generation == GENERATION_PARADIGM and paradigm_columns is not None:
+        state = ParadigmState.from_frame(
+            paradigm_columns, minutes=df["Minutes"].to_numpy(dtype=float),
+            index=df["Index"] if "Index" in df.columns else None)
     if range_is_specified(range_minutes):
         a, b = range_bounds(range_minutes)
-        df = df[(df["Minutes"] > a) & (df["Minutes"] < b)]
-    return _LoadedDFM(df=df.reset_index(drop=True), version=version, source_files=files)
+        keep = ((df["Minutes"] > a) & (df["Minutes"] < b)).to_numpy(dtype=bool)
+        df = df[keep]
+        if state is not None:
+            state = state.subset(keep)
+    return _LoadedDFM(df=df.reset_index(drop=True), version=version, source_files=files,
+                      generation=generation, paradigm=state)
 
 
 @dataclass(slots=True)
@@ -105,6 +142,17 @@ class DFM:
     raw_df: pd.DataFrame
     version: int = 2
     source_files: list[Path] | None = None
+    #: The recording's Generation (``CONTEXT.md``): 1 for a 27-column file, 2
+    #: for a 90-column one with every Paradigm column NA, 3 when they are
+    #: filled.  A second axis beside ``version``, which the file name gives.
+    generation: int = GENERATION_FLAG
+    #: The firmware's per-row Paradigm state on generation 3, row for row with
+    #: ``raw_df``; ``None`` on generations 1 and 2.
+    paradigm: ParadigmState | None = None
+    #: Where Training is read from: ``"flag"`` (generation 1, the 65536 flag
+    #: in the signal), ``"none"`` (generation 2, no Training information) or
+    #: ``"phase"`` (generation 3, each well's Phase).
+    training_info: str = "flag"
 
     well_names: dict[str, str] | None = None  # e.g. {"A": "Sucrose", "B": "Yeast"}
 
@@ -144,12 +192,22 @@ class DFM:
             raw_df=df,
             version=int(loaded.version),
             source_files=loaded.source_files,
+            generation=int(loaded.generation),
+            paradigm=loaded.paradigm,
+            training_info=TRAINING_INFO[int(loaded.generation)],
         )
 
         if correct_for_dual_feeding is None:
             correct_for_dual_feeding = bool(params.correct_for_dual_feeding)
 
-        if obj.version == 3:
+        ## Training: a flag inside the signal on generation 1 (only the v3
+        ## file name's firmware set it), each well's Phase on generation 3,
+        ## and nothing at all on generation 2.
+        if obj.generation == GENERATION_PARADIGM:
+            obj._calculate_paradigm_training()
+        elif obj.generation == GENERATION_EMPTY:
+            obj._calculate_no_training()
+        elif obj.version == 3:
             obj._calculate_progressive_ratio_training()
 
         obj.recompute_all(correct_for_dual_feeding=bool(correct_for_dual_feeding))
@@ -171,6 +229,10 @@ class DFM:
             raw_df=self.raw_df.copy(),
             version=self.version,
             source_files=self.source_files,
+            generation=self.generation,
+            ## Shared, not copied: nothing writes to a ParadigmState.
+            paradigm=self.paradigm,
+            training_info=self.training_info,
             well_names=self.well_names,
             in_training_data=(None if self.in_training_data is None
                               else self.in_training_data.copy()),
@@ -267,6 +329,64 @@ class DFM:
                     }
                 )
         self.in_training_data = pd.DataFrame(rows)
+
+    def _calculate_paradigm_training(self) -> None:
+        """Training on generation 3, from each well's Phase: the same
+        ``in_training_data`` table generation 1 builds, so
+        :meth:`training_end_minutes` and :meth:`training_flag_state` read
+        both alike.  The ``W`` values carry no flag and are left alone.
+
+        A well's training end is its first row under a ratio Paradigm and
+        out of Phase ``A`` (:meth:`ParadigmState.training_end`, decision 11).
+        ``Minutes`` and ``Sample`` are those of the row before it, the last
+        Training row, as generation 1 records the last flagged minute: the
+        Progressive Ratio windows split at (0, end] / (end, inf), which puts
+        the first Main row in Test.  ``EverFlagged`` is whether the well had
+        any Training to report (a row in ``A``, or a row of the Program
+        before its training end), and is False for a well that never runs a
+        ratio Paradigm; ``Cleared`` is whether a training end exists.
+        """
+        state = self.paradigm
+        n = len(self.raw_df)
+        minutes = pd.to_numeric(self.raw_df["Minutes"], errors="coerce").to_numpy(dtype=float)
+        samples = (pd.to_numeric(self.raw_df["Sample"], errors="coerce").to_numpy(dtype=float)
+                   if "Sample" in self.raw_df.columns else np.arange(1, n + 1, dtype=float))
+        ## Rows of the Program (not the baseline lead-in, Interval 0); an
+        ## unknown instruction counts as Program, not as baseline.
+        program_rows = state.program_interval.to_numpy(dtype=np.int64, na_value=-1) != 0
+        period_min = 1.0 / (60.0 * float(self.params.samples_per_second))
+        rows = []
+        for well in range(1, 13):
+            ratio = state.ratio_rows(well)
+            end = state.training_end(well)
+            if not ratio.any():
+                rows.append({"well": f"W{well}", "Minutes": np.nan, "Sample": np.nan,
+                             "EverFlagged": False, "Cleared": False})
+                continue
+            phase_a = state.phase_a[:, well - 1]
+            if end is None:
+                rows.append({"well": f"W{well}", "Minutes": np.nan, "Sample": np.nan,
+                             "EverFlagged": bool(phase_a.any()), "Cleared": False})
+                continue
+            if end > 0:
+                last_minute, last_sample = float(minutes[end - 1]), float(samples[end - 1])
+            else:
+                ## Training ended before the first row loaded (a range that
+                ## starts after it): the last Training row is the one before.
+                last_minute, last_sample = float(minutes[0]) - period_min, float(samples[0]) - 1.0
+            rows.append({
+                "well": f"W{well}", "Minutes": last_minute, "Sample": last_sample,
+                "EverFlagged": bool(phase_a.any() or program_rows[:end].any()),
+                "Cleared": True,
+            })
+        self.in_training_data = pd.DataFrame(rows)
+
+    def _calculate_no_training(self) -> None:
+        """Generation 2: the firmware recorded no Training at all, so every
+        well is never flagged (``training_info`` says why)."""
+        self.in_training_data = pd.DataFrame([
+            {"well": f"W{well}", "Minutes": np.nan, "Sample": np.nan,
+             "EverFlagged": False, "Cleared": False} for well in range(1, 13)])
 
     def training_end_minutes(self, well: int) -> float | None:
         """Minute at which *well*'s training flag cleared, or ``None`` when the
@@ -483,18 +603,28 @@ class DFM:
 
     # ---- QC ----
     def data_breaks(self, *, multiplier: float = 4.0) -> pd.DataFrame | None:
-        """Port of FindDataBreaks() from QC.R."""
+        """Port of FindDataBreaks() from QC.R: the rows that follow a gap in
+        time longer than *multiplier* sample periods.
+
+        Each row of ``raw_df`` after a break, led by ``BreakIndex`` (its
+        1-based row position) and ``GapSeconds`` (the time since the row
+        before).  R named these ``Index`` and ``Interval``, which a version-3
+        file already has as columns (and a 90-column one had ``Interval``
+        too), so the insert raised on every recording with a break.
+        """
         if "Seconds" not in self.raw_df.columns:
             return None
         seconds = pd.to_numeric(self.raw_df["Seconds"], errors="coerce").to_numpy(dtype=float)
-        interval = np.diff(seconds, prepend=seconds[0])
+        if seconds.size == 0:
+            return None
+        gap = np.diff(seconds, prepend=seconds[0])
         thresh = (1.0 / float(self.params.samples_per_second)) * float(multiplier)
-        idx = np.flatnonzero(interval > thresh)
+        idx = np.flatnonzero(gap > thresh)
         if idx.size == 0:
             return None
         out = self.raw_df.iloc[idx].copy()
-        out.insert(0, "Interval", interval[idx])
-        out.insert(0, "Index", idx + 1)
+        out.insert(0, "GapSeconds", gap[idx])
+        out.insert(0, "BreakIndex", idx + 1)
         return out.reset_index(drop=True)
 
     def integrity_report(self) -> dict[str, object]:
@@ -509,6 +639,7 @@ class DFM:
         print("DFM Integrity Report")
         print(f"DFM ID: {self.id}")
         print(f"Rows in RawData: {n}")
+        print(f"Generation: {self.generation}")
         print("==============================\n")
 
         start_time = end_time = elapsed_minutes = elapsed_minutes_from_minutes_col = None
@@ -585,6 +716,7 @@ class DFM:
         return {
             "dfm_id": self.id,
             "n_rawdata": n,
+            "generation": self.generation,
             "start_time": start_time,
             "end_time": end_time,
             "elapsed_minutes": elapsed_minutes,
@@ -723,16 +855,52 @@ class DFM:
             return np.nan, np.nan, np.nan, np.nan
         return float(np.mean(da)), float(np.median(da)), float(np.min(da)), float(np.max(da))
 
+    @property
+    def light_source(self) -> str:
+        """Where the light seconds of the feeding summary come from:
+        ``OnMs`` on generation 3 (exact, decision 31), else ``OptoCol1``
+        sampled once a record."""
+        if self.generation == GENERATION_PARADIGM and self.paradigm is not None:
+            return "OnMs, exact"
+        return f"OptoCol1, sampled at {float(self.params.samples_per_second):g} Hz"
+
+    def light_seconds(self, range_minutes: Sequence[float] = (0, 0)) -> np.ndarray:
+        """Seconds each well's LED was on over the (a, b] window, wells 1-12.
+
+        Generation 3 sums ``OnMs`` (:meth:`ParadigmState.lit_seconds`), the
+        milliseconds the LED was driven, light from Linkage included; the
+        other generations count the ``OptoCol1`` snapshots lit, one sample
+        period each, which misses on-periods shorter than a record.
+        """
+        if self.generation == GENERATION_PARADIGM and self.paradigm is not None:
+            i0, i1 = self._state_rows(range_minutes)
+            return np.array([self.paradigm.lit_seconds(w, i0, i1) for w in range(1, 13)], dtype=float)
+        lights = self._apply_range(self.lights_df, range_minutes)
+        if "W1" not in lights.columns:
+            return np.zeros(12, dtype=float)
+        return lights[[f"W{i}" for i in range(1, 13)]].sum(axis=0).to_numpy() / float(self.params.samples_per_second)
+
+    def _state_rows(self, range_minutes: Sequence[float]) -> tuple[int, int]:
+        """``[i0, i1)`` of the Paradigm state's rows in the (a, b] window
+        (``Minutes`` rises with the row, so the window is one block)."""
+        n = len(self.paradigm)
+        if not range_is_specified(range_minutes):
+            return 0, n
+        a, b = range_bounds(range_minutes)
+        minutes = self.paradigm.minutes
+        inside = np.flatnonzero((minutes > a) & (minutes <= b))
+        if inside.size == 0:
+            return 0, 0
+        return int(inside[0]), int(inside[-1]) + 1
+
     def feeding_summary(
         self,
         *,
         range_minutes: Sequence[float] = (0, 0),
         transform_licks: bool = True,
     ) -> pd.DataFrame:
-        lights = self._apply_range(self.lights_df, range_minutes)
-
         if self.params.chamber_size == 1:
-            lights_sec = lights[[f"W{i}" for i in range(1, 13)]].sum(axis=0).to_numpy() / float(self.params.samples_per_second) if "W1" in lights.columns else np.zeros(12, dtype=float)
+            lights_sec = self.light_seconds(range_minutes)
             rows: list[dict] = []
             for well in range(1, 13):
                 cname = f"W{well}"
@@ -763,7 +931,7 @@ class DFM:
             return out
 
         if self.params.chamber_size == 2:
-            lights_sec = lights[[f"W{i}" for i in range(1, 13)]].sum(axis=0).to_numpy() / float(self.params.samples_per_second)
+            lights_sec = self.light_seconds(range_minutes)
             rows = []
             for chamber in range(self.params.chamber_sets.shape[0]):
                 w1, w2 = int(self.params.chamber_sets[chamber, 0]), int(self.params.chamber_sets[chamber, 1])

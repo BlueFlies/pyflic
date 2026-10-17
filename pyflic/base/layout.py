@@ -37,6 +37,7 @@ import shutil
 from dataclasses import dataclass, field
 
 from .project import CONFIG_FILENAME
+from .utils import is_environmental_monitor
 
 #: Where a recording belongs, and where everything else loose is parked.
 DATA_DIRNAME = "data"
@@ -150,11 +151,23 @@ def data_dir(directory) -> str:
     return os.path.join(str(directory), DATA_DIRNAME)
 
 
-def dfm_files(directory) -> list[str]:
-    """DFM export filenames in *directory* that the loader would actually find."""
+def _recording_files(directory) -> list[str]:
+    """Every file of the recording PyMCU names ``DFM…csv``, the Environmental
+    Monitor's ``DFM99_<n>.csv`` included: filing moves them together."""
     return sorted(name for name in _entries(directory)
                   if _DFM_RE_STRICT.match(name)
                   and os.path.isfile(os.path.join(str(directory), name)))
+
+
+def _is_monitor_file(name: str) -> bool:
+    match = _DFM_RE.match(name)
+    return bool(match) and is_environmental_monitor(match.group(1))
+
+
+def dfm_files(directory) -> list[str]:
+    """DFM export filenames in *directory* that the loader would actually
+    find.  The Environmental Monitor's ``DFM99_<n>.csv`` is not a DFM."""
+    return [name for name in _recording_files(directory) if not _is_monitor_file(name)]
 
 
 def dfm_ids(directory) -> list[int]:
@@ -170,9 +183,9 @@ def dfm_ids(directory) -> list[int]:
 def _dfm_lookalikes(directory) -> list[str]:
     """Files that read as DFM exports to a human but not to the loader —
     ``dfm3_1.csv`` on a case-sensitive filesystem."""
-    strict = set(dfm_files(directory))
     return [name for name in _entries(directory)
-            if _DFM_RE.match(name) and name not in strict
+            if _DFM_RE.match(name) and not _DFM_RE_STRICT.match(name)
+            and not _is_monitor_file(name)
             and os.path.isfile(os.path.join(str(directory), name))]
 
 
@@ -202,7 +215,7 @@ def _is_sidecar(name: str) -> bool:
 
 
 def _loose_recording_files(directory) -> tuple[str, ...]:
-    return tuple(dfm_files(directory))
+    return tuple(_recording_files(directory))
 
 
 # ---------------------------------------------------------------------------

@@ -11,6 +11,7 @@ import pandas as pd
 
 from .dfm import DFM
 from .experiment_design import ExperimentDesign
+from .paradigm_state import GENERATION_DESCRIPTIONS
 
 # Okabe-Ito color-blind-safe palette (8 colors).
 _OKABE_ITO = [
@@ -638,6 +639,9 @@ class Experiment:
             dfm = self.dfms[dfm_id]
             buf.write(f"DFM {dfm_id}\n")
             buf.write(f"- version: {dfm.version}\n")
+            buf.write(f"- generation: {dfm.generation} "
+                      f"({GENERATION_DESCRIPTIONS.get(dfm.generation, 'unknown')})\n")
+            buf.write(f"- light seconds from: {dfm.light_source}\n")
             buf.write(f"- raw rows: {len(dfm.raw_df)}\n")
             if dfm.source_files:
                 buf.write("- source_files:\n")
