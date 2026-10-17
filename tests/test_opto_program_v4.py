@@ -1,7 +1,8 @@
 """The Opto Program's second grammar: the PyMCU 4.0.0 ``Program.txt``.
 
-``fixtures/Program_v4.txt`` is the example of ``docs/dfm-firmware-4-data-guide.md``
-§7.1, verbatim: PyMCU ``v4_Dev``'s own export of a Program with two named
+``fixtures/Program_v4.txt`` is the example §7.1 of the retired
+``docs/dfm-firmware-4-data-guide.md`` gave, verbatim (the guide is replaced by
+``docs/firmware-4-data-in-pyflic.md``): PyMCU ``v4_Dev``'s own export of a Program with two named
 Paradigms, a DFM in the old 19-number form (written back with a generated
 name), a connected DFM with no section and an Environmental Monitor.
 ``fixtures/Program_simple.txt`` is what PyMCU writes for a recording started

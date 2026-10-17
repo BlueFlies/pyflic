@@ -26,10 +26,10 @@ directories was the one to pool.
 
 ## Half-open windows
 
-Every window is `[start, end)` — inclusive at the start, exclusive at the end. That is what
-makes a faceted analysis a true partition: a lick landing exactly on a cutoff belongs to the
-phase after it and to nothing else. With inclusive bounds it would be counted in both
-adjacent phases and inflate them.
+Every window is `(start, end]` — exclusive at the start, inclusive at the end. That is what
+makes a faceted analysis a true partition: a sample landing exactly on a cutoff belongs to
+the phase before it and to nothing else. With inclusive bounds at both ends it would be
+counted in both adjacent phases and inflate them.
 
 The last facet always runs to the end of the recording, so nothing is lost at the tail.
 

@@ -462,7 +462,8 @@ def test_the_full_length_choice_spec_is_pymcus_example() -> None:
 # ---------------------------------------------------------------------------
 
 def test_program_text_matches_the_guides_export_example() -> None:
-    # docs/dfm-firmware-4-data-guide.md section 7.1, without its Env Mon block.
+    # The export example of the retired docs/dfm-firmware-4-data-guide.md (section
+    # 7.1; kept as tests/fixtures/Program_v4.txt), without its Env Mon block.
     closed = ParadigmSpec("Closed", "ClosedLoop", hold_ms=500)
     legacy = replace(closed, name="ClosedLoop-40Hz-8ms-Hold500-MaxOn0")
     choice: tuple[int | str, ...] = (20, OFF) * 6
