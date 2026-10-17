@@ -11,7 +11,9 @@ pyflic has **three** spec families where PyTrackingAnalysis has one:
 
 * ``faceted_<metric>`` — x = Treatment, one panel per Facet, jittered points
   with a mean overlay.  Expressible only because a time window is now a column
-  (ADR-0008).
+  (ADR-0008).  The light metrics (``faceted_activations``,
+  ``faceted_litsec``, …; :data:`LIGHT_METRICS`) are the same figure drawn
+  from the stacked light table, offered when a Project has one.
 * ``timecourse_<metric>`` — x = time bin, one line per Treatment with an SEM
   ribbon.  The figure that most distinguishes FLIC data, and the reason the
   Editor carries two preview forms.
@@ -174,6 +176,36 @@ PLOT_TYPES: dict[str, dict] = {
     },
 }
 
+#: The light table's numeric columns as faceted figures (decision 17 of
+#: ``docs/v4-data-plan.md``): ``faceted_<metric lower-cased>``, drawn from the
+#: Combined Analysis' stacked light table (:data:`SOURCE_LIGHT`), one point per
+#: chamber.  The four headline metrics come first.
+LIGHT_METRICS: tuple[tuple[str, str], ...] = (
+    ("Activations", "Activations"),
+    ("LitSec", "Lit time (s)"),
+    ("FirmwareEvents", "Firmware Events"),
+    ("AcclimationEndMin", "Acclimation end (min)"),
+    ("LitFraction", "Fraction of the time lit"),
+    ("ActivationsPerHour", "Activations per hour"),
+    ("LightOnsets", "Light onsets"),
+    ("AcclimationActivations", "Acclimation Activations"),
+    ("LastRequirementMet", "Last Requirement met"),
+    ("ProgressAtEnd", "Progress at the end"),
+    ("EventsPerActivation", "Firmware Events per Activation"),
+    ("LockedOutContactSec", "Feeding while locked out (s)"),
+    ("UnlitSec", "Unlit time (s)"),
+    ("Suppressions", "Suppressions"),
+)
+#: The named source of the light figures.
+SOURCE_LIGHT = "light"
+for _metric, _label in LIGHT_METRICS:
+    PLOT_TYPES[f"faceted_{_metric.lower()}"] = {
+        "family": FAMILY_FACETED, "metric": _metric, "y_label": _label,
+        "y_limits": None, "ref_line": None, "free_y": True,
+        "display": f"{_label} (light, faceted)", "source": SOURCE_LIGHT,
+    }
+del _metric, _label
+
 #: Member file behind each named extra source, relative to ``analysis/``.
 #: The default time-course source is ``binned_feeding_summary.csv``; the
 #: default faceted source is the Combined Analysis facet table.
@@ -188,14 +220,19 @@ def family_of(plot_id: str) -> str:
 
 
 def plots_for_layout(chamber_layout: str,
-                     experiment_type: str | None = None) -> list[str]:
+                     experiment_type: str | None = None, *,
+                     light: bool = False) -> list[str]:
     """Plot ids valid for *chamber_layout* — a PI figure is meaningless on a
     single-well recording, so the Editor never offers one.  A plot that names
     an ``experiment_type`` is offered only when *experiment_type* matches;
-    with *experiment_type* ``None`` such plots are left out."""
+    with *experiment_type* ``None`` such plots are left out.  The light
+    figures are offered only with *light* (a Project with a light table,
+    :func:`has_light_table`)."""
     out = []
     for plot_id, info in PLOT_TYPES.items():
         if not plot_allowed(plot_id, chamber_layout, experiment_type):
+            continue
+        if info.get("source") == SOURCE_LIGHT and not light:
             continue
         out.append(plot_id)
     return out
@@ -435,6 +472,17 @@ def _metric_values(df: pd.DataFrame, metric: str) -> pd.Series:
     return pd.to_numeric(_resolve_metric_col(df, metric), errors="coerce")
 
 
+def _panels_roles(frame: pd.DataFrame) -> bool:
+    """Whether *frame*'s ``Role`` is Progressive Ratio's paired / yoked (the
+    one Role a figure panels by): every Role it names is one of
+    :data:`ROLE_ORDER`."""
+    if "Role" not in frame.columns:
+        return False
+    roles = frame["Role"].fillna("").astype(str).str.strip()
+    named = set(roles[(roles != "") & (roles.str.lower() != "nan")])
+    return bool(named) and named <= set(ROLE_ORDER)
+
+
 def faceted_data(frame: pd.DataFrame, metric: str,
                  label_order: list[str] | None = None) -> pd.DataFrame:
     """Tidy per-chamber data for one metric: Treatment, Phase, Value
@@ -444,7 +492,9 @@ def faceted_data(frame: pd.DataFrame, metric: str,
     a Project's ``_Summary_Facet.csv``).  An unfaceted frame becomes a single
     "Whole recording" phase, so the same builder serves both.  A Progressive
     Ratio frame's ``Role`` column is kept so the figure can panel paired and
-    yoked separately instead of pooling them.
+    yoked separately instead of pooling them.  Any other ``Role`` (the
+    optogenetic chamber Role every optogenetic summary carries: Paired,
+    Self, Open, …) is a column to filter on, not a panel, and is dropped.
     """
     if frame is None or frame.empty:
         return pd.DataFrame(columns=["Treatment", "Phase", "Value"])
@@ -459,7 +509,7 @@ def faceted_data(frame: pd.DataFrame, metric: str,
         "Phase": pd.Categorical(phase, categories=order, ordered=True),
         "Value": _metric_values(frame, metric),
     })
-    if "Role" in frame.columns:
+    if _panels_roles(frame):
         roles = frame["Role"].astype(str).str.strip()
         role_order = order_roles(roles)
         out["Role"] = pd.Categorical(roles, categories=role_order, ordered=True)
@@ -1031,6 +1081,35 @@ def project_source_frame(project, source: str):
     return pd.concat(frames, ignore_index=True) if frames else None
 
 
+def facet_order(frame) -> list[str] | None:
+    """*frame*'s Facet labels in first-seen order, or ``None`` unfaceted."""
+    if frame is None or "Facet" not in frame.columns:
+        return None
+    return list(dict.fromkeys(frame["Facet"].astype(str)))
+
+
+def _light_table_paths(project) -> list[str]:
+    """The Combined Analysis' stacked light table, faceted first."""
+    return [os.path.join(project.analysis_path, f"{project.name}_{stem}.csv")
+            for stem in ("LightSummary_Facet", "LightSummary")]
+
+
+def has_light_table(project) -> bool:
+    """Whether the Project's Combined Analysis has a light table (one of its
+    Members is optogenetic), so the light figures have something to draw."""
+    return project is not None and any(os.path.isfile(p) for p in _light_table_paths(project))
+
+
+def project_light_frame(project):
+    """The light figures' source: the Combined Analysis' stacked per-chamber
+    light table (``<project>_LightSummary_Facet.csv``, else the unfaceted
+    ``<project>_LightSummary.csv``), or ``None``."""
+    for path in _light_table_paths(project):
+        if os.path.isfile(path):
+            return pd.read_csv(path)
+    return None
+
+
 def frame_for(plot_id: str, facet, binned, project=None):
     """The source frame a plot draws from, given the two standard frames and,
     for an extra source, the Project to stack it from."""
@@ -1039,6 +1118,8 @@ def frame_for(plot_id: str, facet, binned, project=None):
         return facet
     if source == "binned":
         return binned
+    if source == SOURCE_LIGHT:
+        return project_light_frame(project) if project is not None else None
     return project_source_frame(project, source) if project is not None else None
 
 
@@ -1077,7 +1158,8 @@ def render_all(project, fmt: str = "svg", out_dir: str | None = None,
     ## plots_for_layout has already applied the layout and Experiment Type
     ## gates, so anything it lists is a figure this Project is entitled to.
     for plot_id in plots_for_layout(project.chamber_layout,
-                                    project.experiment_type.name):
+                                    project.experiment_type.name,
+                                    light=has_light_table(project)):
         if only and plot_id not in only:
             continue
         spec = specs.plots.get(plot_id) or default_spec(plot_id, well_a)
@@ -1093,7 +1175,8 @@ def render_all(project, fmt: str = "svg", out_dir: str | None = None,
         elif family == FAMILY_SCATTER:
             df = breaking_point_data(source)
         else:
-            df = faceted_data(source, metric, label_order)
+            df = faceted_data(source, metric, label_order if source_of(plot_id) == "facet"
+                              else facet_order(source))
         if df.empty:
             log(f"    skipped {plot_id}: metric '{metric}' not in the data")
             continue

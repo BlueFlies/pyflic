@@ -31,6 +31,11 @@ METRIC_LABELS: dict[str, str] = {
     "dPersistA": "Δ {A} persistence, min (paired − yoked)",
     "PersistA": "{A} persistence (min)",
     "BreakingPoint": "Breaking point (light events earned)",
+    ## The light table's headline metrics (pyflic.base.light_summary).
+    "Activations": "Activations",
+    "LitSec": "Lit time (s)",
+    "FirmwareEvents": "Firmware Events",
+    "AcclimationEndMin": "Acclimation end (min)",
 }
 #: Single-well layouts have no A/B.
 SINGLE_WELL_LABELS: dict[str, str] = {

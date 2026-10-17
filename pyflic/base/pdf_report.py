@@ -13,7 +13,8 @@ Laid out by :mod:`pyflic.base.report_layout` on fixed US Letter pages:
   Chamber Layout (two-well: preference, then consumption; single-well:
   consumption) and extended or replaced by the Experiment Type
   (:meth:`Experiment.report_results_blocks`; Progressive Ratio: the
-  paired − yoked difference and the breaking point).
+  paired − yoked difference and the breaking point), then for an
+  optogenetic member the light table's **Light behaviour**.
 * **Appendix A** — every feeding metric by treatment; **Appendix B** — the
   analysis settings.
 
@@ -111,6 +112,7 @@ def build_experiment_report(
     doc.add(rl.Heading("Quality control"), _qc_blocks(experiment, qc))
     doc.add(rl.PageBreak(), rl.Heading("Results"))
     doc.add(experiment.report_results_blocks(_generic_results(experiment, options), options))
+    doc.add(_light_results(experiment, options))
     doc.add(rl.PageBreak(),
             rl.Heading("Appendix A — All feeding metrics", numbered=False),
             _all_metrics(experiment, options))
@@ -209,6 +211,38 @@ def _facet_description(experiment: Experiment) -> str:
                       for label, w in zip(labels, windows))
 
 
+def _per_dfm(values: dict[int, str]) -> str:
+    """One text for every DFM, or ``DFM 1, 2: … · DFM 3: …`` when they differ."""
+    by_text: dict[str, list[int]] = {}
+    for dfm_id, text in sorted(values.items()):
+        by_text.setdefault(text, []).append(dfm_id)
+    if len(by_text) == 1:
+        return next(iter(by_text))
+    return " · ".join(f"DFM {', '.join(str(d) for d in ids)}: {text}"
+                      for text, ids in by_text.items())
+
+
+def _recording_rows(experiment: Experiment) -> list[tuple[str, str]]:
+    """The cover's Generation line (what shape of data file each DFM
+    recorded, ``CONTEXT.md``) and, for an optogenetic member, where its lit
+    time comes from (decision 31)."""
+    from .paradigm_state import GENERATION_DESCRIPTIONS
+
+    generations = {
+        int(d): (f"{dfm.generation} — "
+                 f"{GENERATION_DESCRIPTIONS.get(dfm.generation, 'unknown')}")
+        for d, dfm in experiment.dfms.items() if getattr(dfm, "generation", None)}
+    rows: list[tuple[str, str]] = []
+    if generations:
+        rows.append(("Generation", _per_dfm(generations)))
+    if experiment.is_optogenetic:
+        sources = {int(d): str(experiment.dfms[d].light_source)
+                   for d in experiment.opto.dfm_ids()}
+        if sources:
+            rows.append(("Lit time from", _per_dfm(sources)))
+    return rows
+
+
 def _cover(experiment: Experiment, qc: dict, name: str) -> list[Any]:
     etype = getattr(experiment, "experiment_type", None)
     type_name = getattr(etype, "display_name", "Custom")
@@ -220,6 +254,7 @@ def _cover(experiment: Experiment, qc: dict, name: str) -> list[Any]:
     if experiment.experiment_dir is not None:
         rows.append(("Directory", str(experiment.experiment_dir)))
     rows.append(("DFMs", ", ".join(str(d) for d in sorted(experiment.dfms))))
+    rows.extend(_recording_rows(experiment))
     rows.append(("Treatments", _treatment_counts(experiment)))
     if experiment.design_factors:
         levels = (experiment.global_config or {}).get("experimental_design_factors") or {}
@@ -597,6 +632,63 @@ def _generic_results(experiment: Experiment, options: ReportOptions) -> list[Any
                 _timecourse(experiment, metric, mode, options), height=2.6,
                 title=f"{label(metric) if metric in rc.METRIC_LABELS else metric} over time",
                 caption=f"Mean ± SEM per treatment in {options.binsize_min:g}-minute bins."))
+    return blocks
+
+
+def _light_results(experiment: Experiment, options: ReportOptions) -> list[Any]:
+    """"Light behaviour", after the feeding results, for an optogenetic
+    member: a dot plot per headline metric of the light table by Treatment,
+    per Facet when the experiment has them, with the generic treatment
+    comparisons (decision 17).  A metric no row defines (its Paradigm type
+    does not, or the recording predates firmware 4.0.0) is left out."""
+    if not experiment.is_optogenetic:
+        return []
+    from . import light_summary as ls
+    from .analytics import treatment_comparisons
+
+    facet = ls.light_summary_facet(experiment)
+    if facet is not None and not facet.empty:
+        frame, facet_col = facet, "Facet"
+    else:
+        frame = ls.light_summary(experiment, range_minutes=options.range_minutes)
+        facet_col = None
+    kept = ls.behaviour_rows(frame)
+    blocks: list[Any] = [rl.Heading("Light behaviour", level=2)]
+    if kept is None or kept.empty:
+        return blocks + [rl.Callout("No chamber with a treatment has a light table row.",
+                                    tone="warning")]
+    if facet_col:
+        labels = list(dict.fromkeys(kept["Facet"].astype(str)))
+        frames = [(label, kept[kept["Facet"].astype(str) == label]) for label in labels]
+    else:
+        frames = [("Whole recording", kept)]
+    metrics = [m for m in ls.HEADLINE_METRICS
+               if m in kept.columns and pd.to_numeric(kept[m], errors="coerce").notna().any()]
+    per = "per Facet" if facet_col else "over the whole recording"
+    blocks.append(rl.Paragraph(
+        f"What the light did, from the light table (analysis/light_summary.csv), one "
+        f"point per chamber, {per}: Activations are the LED on-periods a well's own "
+        f"Paradigm started, lit time is the chamber's, Firmware Events count under a "
+        f"ratio Paradigm, and Acclimation end is the minute the chamber's wells left "
+        f"Acclimation.  The diamond and bars are the treatment mean ± SEM."
+        + ("  Paired chambers only: a yoked fly's light is its partner's."
+           if len(kept) < len(frame) else "")
+        + ("" if len(metrics) == len(ls.HEADLINE_METRICS) else
+           f"  Not defined here: "
+           f"{', '.join(m for m in ls.HEADLINE_METRICS if m not in metrics)}.")))
+    pending: list[rl.Plot] = []
+    for metric in metrics:
+        label = rc.metric_label(metric)
+        pending.append(rl.Plot(_dot(experiment, kept, metric, label, facet_col), title=label))
+        if len(pending) == 2:
+            blocks.append(rl.PlotRow(pending, height=3.0))
+            pending = []
+    if pending:
+        blocks.append(rl.PlotRow(pending, height=3.0))
+    if options.include_comparison and metrics:
+        blocks += rc.stats_table(treatment_comparisons(frames, metrics),
+                                 caption="Treatment comparisons: light behaviour",
+                                 show_phase=bool(facet_col))
     return blocks
 
 

@@ -30,23 +30,34 @@ from . import report_layout as rl
 
 
 def member_table(project) -> pd.DataFrame:
-    """One row per Member: what went in, and what was left out."""
+    """One row per Member: what went in, and what was left out, and the
+    Generation of its recordings, read from its saved outputs.  A Member
+    without Training information (generation 2, decision 15) says so in a
+    ``Note`` column, present when any Member needs one."""
+    from .light_summary import NO_TRAINING_INFORMATION
+
     exclusions = project.aggregated_exclusions()
     excluded = (exclusions.groupby("Experiment").size().to_dict()
                 if not exclusions.empty else {})
+    no_training = set(project.generation_2_members())
     rows = []
     for name in project.member_names:
         status = project.member_status(name)
-        rows.append({
+        generations = project.member_generations(name) or ([2] if name in no_training else [])
+        row = {
             "Member": name,
             "DFMs": status["dfms"],
+            "Generation": ", ".join(str(g) for g in generations) or "—",
             "Chambers analysed": status["chambers"] if status["chambers"] is not None else "—",
             "Excluded": int(excluded.get(name, 0)),
             "Analysed": ("re-run needed" if status.get("stale") else
                          "yes" if status["analyzed"] else "NO"),
             "Faceted": "yes" if status["faceted"] else "no",
             "Report": "yes" if status["report"] else "no",
-        })
+        }
+        if no_training:
+            row["Note"] = NO_TRAINING_INFORMATION if name in no_training else ""
+        rows.append(row)
     return pd.DataFrame(rows)
 
 
@@ -113,9 +124,9 @@ def _pooled_figure(project, plot_id: str, facet, binned, specs):
     source = pubfigures.frame_for(plot_id, facet, binned, project)
     if source is None or source.empty:
         return None
-    label_order = None
-    if facet is not None and "Facet" in facet.columns:
-        label_order = list(dict.fromkeys(facet["Facet"].astype(str)))
+    ## A figure from another table (the light table) orders its own Facets.
+    label_order = pubfigures.facet_order(
+        facet if pubfigures.source_of(plot_id) == "facet" else source)
     df = (pubfigures.timecourse_data(source, info["metric"])
           if family == pubfigures.FAMILY_TIMECOURSE
           else pubfigures.faceted_data(source, info["metric"], label_order))
@@ -386,6 +397,54 @@ def _results_blocks(project, summary: pd.DataFrame, facet) -> list[Any]:
                else "Treatment comparisons, per chamber")
     blocks += rc.stats_table(rows, caption=caption, well_names=names, show_phase=True,
                              two_well=two_well)
+    blocks += _light_blocks(project, specs)
+    return blocks
+
+
+def _light_blocks(project, specs) -> list[Any]:
+    """"Light behaviour": the stacked light table pooled as the feeding
+    metrics are — a faceted figure per headline metric and the treatment
+    comparisons — for a Project with optogenetic Members; nothing otherwise."""
+    from .light_summary import HEADLINE_METRICS, behaviour_rows
+
+    frames = project.combined_light_frames()
+    light = frames.get("LightSummary")
+    if light is None:
+        return []
+    paired_only = len(behaviour_rows(light)) < len(light)
+    blocks: list[Any] = [
+        rl.Heading("Light behaviour", level=2),
+        rl.Paragraph(
+            "What the light did, from every optogenetic member's light table: "
+            "Activations (LED on-periods a well's own Paradigm started), lit time, "
+            "Firmware Events and the minute Acclimation ended, one point per chamber.  "
+            "Members recorded before DFM firmware 4.0.0 have lit time only (from "
+            "OptoCol1); a measure no Paradigm in the Project defines is left out."
+            + ("  The statistics compare paired chambers: a yoked fly's light is its "
+               "partner's." if paired_only else "")),
+    ]
+    pending: list[rl.Plot] = []
+    for metric in HEADLINE_METRICS:
+        plot_id = f"faceted_{metric.lower()}"
+        info = pubfigures.PLOT_TYPES[plot_id]
+        try:
+            figure = _pooled_figure(project, plot_id, None, None, specs)
+        except Exception as exc:  # noqa: BLE001
+            blocks.append(rl.Callout(f"{info['display']}: could not be drawn ({exc}).",
+                                     tone="failed"))
+            continue
+        if figure is None:
+            continue
+        pending.append(rl.Plot(figure, title=info["y_label"],
+                               width=(rl.CONTENT_W - 0.25) / 2))
+        if len(pending) == 2:
+            blocks.append(rl.PlotRow(pending, height=3.2))
+            pending = []
+    if pending:
+        blocks.append(rl.PlotRow(pending, height=3.2))
+    rows = project.light_comparison_rows(light, frames.get("LightSummary_Facet"))
+    blocks += rc.stats_table(rows, caption="Light behaviour: treatment comparisons, "
+                                           "per chamber", show_phase=True)
     return blocks
 
 

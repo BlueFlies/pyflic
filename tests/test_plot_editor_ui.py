@@ -186,8 +186,11 @@ def test_the_plot_picker_is_single_choice(editor):
     ## Every figure this Project can draw is offered, none of them ticked.
     offered = {editor.plot_combo.itemData(i)
                for i in range(editor.plot_combo.count())}
+    ## The light figures only when the Project has a light table (stream 5a).
     assert offered == set(pubfigures.plots_for_layout(
-        editor.project.chamber_layout, editor.project.experiment_type.name))
+        editor.project.chamber_layout, editor.project.experiment_type.name,
+        light=pubfigures.has_light_table(editor.project)))
+    assert "faceted_activations" not in offered
     ## The lists that remain are inside one plot: its facets and treatments.
     assert isinstance(editor.facet_list, QListWidget)
 
@@ -455,3 +458,50 @@ def test_pr_editor_persists_phase_and_role_filters(pr_editor, app, pr_project_di
     saved = pubfigures.load_project_specs(str(pr_project_dir))
     assert saved.plots["faceted_licks"].facets == ["Test"]
     assert saved.plots["faceted_licks"].roles == ["paired"]
+
+
+# ---------------------------------------------------------------------------
+# The light figures (stream 5a: the light table joins the faceted family)
+# ---------------------------------------------------------------------------
+
+def _pooled_light_rows() -> pd.DataFrame:
+    rows = []
+    for experiment in ("rep1", "rep2"):
+        for facet, window in (("0-60 min", "(0, 60)"), ("60+ min", "(60, inf)")):
+            for treatment, base in (("Ctrl", 10.0), ("Exp", 30.0)):
+                for index in range(4):
+                    rows.append({
+                        "Experiment": experiment, "Facet": facet, "FacetRange": window,
+                        "DFM": 1, "Chamber": index + 1, "Treatment": treatment,
+                        "Role": "Self", "Generation": 3, "Activations": base + index,
+                        "LitSec": 2.0 * base, "FirmwareEvents": float("nan"),
+                    })
+    return pd.DataFrame(rows)
+
+
+@pytest.fixture
+def light_editor(app, project_dir):
+    _pooled_light_rows().to_csv(project_dir / "analysis" / "proj_LightSummary_Facet.csv",
+                                index=False)
+    window = PlotEditorWindow(str(project_dir))
+    window.show()
+    app.processEvents()
+    yield window
+    window.close()
+
+
+def test_the_editor_renders_faceted_activations(light_editor, app):
+    _select(light_editor, app, "faceted_activations")
+    assert not light_editor.preview_label.pixmap().isNull()
+    assert light_editor.preview_label.text() == ""
+    phases = [light_editor.facet_list.item(i).text()
+              for i in range(light_editor.facet_list.count())]
+    assert phases == ["0-60 min", "60+ min"]
+    ## The optogenetic Role is a filter column, not a panel.
+    assert light_editor.roles_group.isHidden()
+
+
+def test_a_light_measure_without_data_says_so(light_editor, app):
+    _select(light_editor, app, "faceted_firmwareevents")
+    assert light_editor.preview_label.pixmap().isNull()
+    assert "light" in light_editor.preview_label.text().lower()

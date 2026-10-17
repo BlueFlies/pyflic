@@ -113,6 +113,18 @@ def test_light_phase_summary_has_two_phases(experiment):
     assert set(df["Phase"]).issubset({"light", "dark"})
 
 
+def test_light_phase_summary_is_per_chamber(experiment):
+    """Decision 24 of docs/v4-data-plan.md: a sample is "light" for a chamber
+    when its own wells are lit.  The fixture's OptoCol1 is 1 or 0 (well 1
+    only), so chamber 1 alternates and the other five stay dark; before, all
+    six were in "light" whenever well 1 was."""
+    df = light_phase_summary(experiment)
+    light = df[df["Phase"] == "light"].set_index("Chamber")["PhaseSeconds"]
+    lit_seconds = experiment.dfms[1].lights_df["W1"].sum() / 5.0
+    assert light.loc[1] == pytest.approx(lit_seconds) and lit_seconds > 0
+    assert (light.loc[[2, 3, 4, 5, 6]] == 0.0).all()
+
+
 def test_parameter_sensitivity_grid(experiment):
     res = parameter_sensitivity(
         experiment, parameter="feeding_event_link_gap",

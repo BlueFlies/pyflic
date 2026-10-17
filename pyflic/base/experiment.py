@@ -71,6 +71,9 @@ class Experiment:
     program_notes: list[str] = field(default_factory=list)
     _opto: Any = None
     _opto_snapshot: dict | None = None
+    #: The light table's per-DFM preparation (pyflic.base.light_summary),
+    #: kept while the DFM object and the program stay the same.
+    _light_contexts: dict = field(default_factory=dict)
 
     # ---- the optogenetic light QC (pyflic.base.opto_light) -------------
 
@@ -2034,7 +2037,14 @@ class Experiment:
         When *transform_licks* is ``None`` (the default), the experiment-wide
         setting from ``self.transform_licks`` is used (driven by
         ``global.transform_licks`` in ``flic_config.yaml``).
+
+        On an optogenetic experiment each row also carries its chamber's
+        ``Role``, ``LitSec`` and ``Activations``
+        (:func:`~pyflic.base.light_summary.with_light_columns`), redone on
+        every call like the light QC's columns.
         """
+        from .light_summary import with_light_columns
+
         if transform_licks is None:
             transform_licks = self.transform_licks
         from . import windowing
@@ -2042,7 +2052,8 @@ class Experiment:
         ## range_minutes may be a list of windows (a Program Facet).
         key = windowing.range_key(range_minutes), bool(transform_licks)
         if key in self._feeding_summary_cache:
-            return self.opto.with_columns(self._feeding_summary_cache[key])
+            return with_light_columns(
+                self, self.opto.with_columns(self._feeding_summary_cache[key]), range_minutes)
 
         if self.parallel:
             from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
@@ -2074,7 +2085,7 @@ class Experiment:
             )
 
         self._feeding_summary_cache[key] = result
-        return self.opto.with_columns(result)
+        return with_light_columns(self, self.opto.with_columns(result), range_minutes)
 
     def binned_feeding_summary(
         self,
@@ -2738,7 +2749,9 @@ class Experiment:
           3. ``write_summary()``              → ``experiment_dir/analysis/summary.txt``
           4. ``write_feeding_summary()``       → ``experiment_dir/analysis/feeding_summary.csv``
           5. ``write_feeding_summary_facet()`` → ``.../feeding_summary_facet.csv`` (faceted experiments only)
-          6. ``write_feeding_summary_plot()``  → ``.../feeding_summary.{plot_format}``
+          6. the light tables (optogenetic experiments only) → ``.../light_wells.csv``,
+             ``light_summary.csv`` and, faceted, their ``_facet`` variants
+          7. ``write_feeding_summary_plot()``  → ``.../feeding_summary.{plot_format}``
 
         Auto-removal applies the design's ``constants:`` cutoffs once per
         loaded experiment: every output after it describes the filtered
@@ -2753,7 +2766,7 @@ class Experiment:
         """
         n_dfms = len(self.dfms)
         optogenetic = self.is_optogenetic
-        n_steps = (5 if skip_qc else 6) + (1 if optogenetic else 0)
+        n_steps = (5 if skip_qc else 6) + (2 if optogenetic else 0)
         print("=" * 50, flush=True)
         print("FLIC Basic Analysis", flush=True)
         print(f"  Project : {self.experiment_dir}", flush=True)
@@ -2843,6 +2856,17 @@ class Experiment:
         else:
             print(f"  Done → {facet_csv_path}", flush=True)
 
+        light_paths: dict[str, Path] = {}
+        if optogenetic:
+            from . import light_summary
+
+            step += 1
+            print(f"\n[{step}/{n_steps}] Light tables...", flush=True)
+            if self.analysis_dir is not None:
+                light_paths = light_summary.write(self, range_minutes=range_minutes)
+                print(f"  Done → {', '.join(p.name for p in light_paths.values())}",
+                      flush=True)
+
         step += 1
         print(f"\n[{step}/{n_steps}] Feeding summary plot...", flush=True)
         plot_path = self.write_feeding_summary_plot(
@@ -2865,5 +2889,6 @@ class Experiment:
             "feeding_summary_facet": facet_csv_path,
             "feeding_summary_plot": plot_path,
             **opto_paths,
+            **light_paths,
         }
 
