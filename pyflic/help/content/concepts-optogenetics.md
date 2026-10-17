@@ -173,7 +173,7 @@ Basic analysis and **QC reports** write, into the member's `qc/opto/`:
 | `opto_light_qc.csv` | linkage group | wells, trigger wells, chambers, treatment, lit and unexplained time, onset, the emulated trigger's contact, `LikelyCause`, `Flags`, `Verdict`, `Excluded` |
 | `opto_light_intervals.csv` | group × scheduled interval | the interval's mode, decay and trigger wells; lit, unexplained and contact time; feeding bouts and unlit ones |
 | `opto_light_events.csv` | light event | onset, end, duration, interval, `UnexplainedSec`, `Explained`, and `OverrunSec`, the light's time past the last lick plus decay |
-| `opto_program.csv` | program interval | the program as read: paradigm, decay, delay, max time on, frequency, acclimation events, linkage, trigger wells, and the raw `F` and `P` the MCU echoed beside their decoding |
+| `opto_program.csv` | program interval | the program as read: the Paradigm's name and type (`ParadigmType`, as PyMCU spells it) with its settings (`HoldMs`, `ActivationMs`, `LockoutMs`, `Acclimation`, the Requirement series …, `NA` where the type has none), linkage, trigger wells, and for an export older than PyMCU 4.0.0 the raw `F` and `P` it echoed (`LegacyF`, `LegacyP`); such an export's intervals are named as PyMCU names converted old settings, e.g. `ClosedLoop-40Hz-8ms-Hold500-MaxOn0` |
 | `opto_light_dfm<id>.png` | DFM | the QC figure, below |
 
 `summary.txt` gains an *Optogenetic light QC* section, and the experiment report a

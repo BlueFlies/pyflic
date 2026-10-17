@@ -418,11 +418,14 @@ def test_the_pipeline_writes_qc_opto(tmp_path):
     assert list(qc.columns) == list(oq.OPTO_QC_COLUMNS)
     program = pd.read_csv(opto / "opto_program.csv")
     assert list(program.columns) == list(oq.OPTO_PROGRAM_COLUMNS)
-    assert program.loc[0, "Paradigm"] == op.CLOSED_LOOP
-    assert program.loc[0, "DecayMs"] == 1000
+    ## The legacy interval as the Paradigm PyMCU would make of it.
+    assert program.loc[0, "Paradigm"] == "ClosedLoop-40Hz-8ms-Hold1000-MaxOn0"
+    assert program.loc[0, "ParadigmType"] == "ClosedLoop"
+    assert bool(program.loc[0, "Generated"]) and program.loc[0, "HoldMs"] == 1000
+    assert pd.isna(program.loc[0, "ActivationMs"])
     ## The values the MCU echoed, beside their decoding.
-    assert (program.loc[0, "F"], program.loc[0, "FrequencyHz"]) == (40, 40)
-    assert (program.loc[0, "P"], bool(program.loc[0, "NonFeeding"])) == (8, False)
+    assert (program.loc[0, "LegacyF"], program.loc[0, "FrequencyHz"]) == (40, 40)
+    assert (program.loc[0, "LegacyP"], program.loc[0, "PulseWidthMs"]) == (8, 8)
     ## Failures are flagged, not excluded, by default.
     removed = pd.read_csv(root / "analysis" / "removed_chambers.csv")
     assert not removed["Reason"].astype(str).str.contains("opto").any()

@@ -49,8 +49,9 @@ def test_the_program_is_read_and_agrees_with_the_config(exp):
     program = exp.opto.program_table()
     assert list(program["DFM"]) == [1, 2]            # the loaded DFMs' sections only
     row = program.iloc[0]
-    assert (row.F, row.FrequencyHz, row.AcclimationEvents) == (5160, 40, 10)
-    assert (row.DecayMs, row.Delay, row.Paradigm) == (500, 1000, "progressive ratio")
+    assert (row.LegacyF, row.FrequencyHz, row.Acclimation) == (5160, 40, 10)
+    assert (row.ActivationMs, row.ParadigmType) == (500, "ProgressiveRatio")
+    assert exp.opto_program.section(1).intervals[0].paradigm.legacy.delay == 1000
 
 
 def test_the_optogenetic_verdicts(exp):

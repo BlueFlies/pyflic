@@ -1222,6 +1222,9 @@ class OptoTab(QtWidgets.QWidget):
             ("Program", opto.program_table(), False),
         ):
             shown = rows_of(frame, by_group=by_group)
+            if label == "Program":
+                ## A setting none of this DFM's Paradigms has is noise here.
+                shown = shown.dropna(axis=1, how="all")
             layout = self._hosts[label]
             if shown.empty:
                 layout.addWidget(QtWidgets.QLabel(f"No {label.lower()} for this group."))

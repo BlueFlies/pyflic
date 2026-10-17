@@ -2,29 +2,44 @@
 
 The DFM firmware decides when an Optolid LED is on from settings the
 stand-alone MCU loads at the start of a run: a signal **threshold** per well, a
-**linkage** that ORs wells together, and five optogenetic parameters —
-frequency, pulse width, decay, delay and max-time-on — whose combination
-selects a paradigm (open loop, closed loop, fixed interval, progressive ratio,
-non-feeding activation).  None of it is in the DFM CSVs, which record only the
-outcome: ``OptoCol1``, the LEDs actually lit at each sample.
+**linkage** that ORs wells together, and the rule that turns contact into
+light.  None of it is in a pre-4.0.0 DFM CSV, which records only the outcome:
+``OptoCol1``, the LEDs actually lit at each sample.
 
-The MCU writes the program back out as ``Program.txt``, echoing every interval
-as it parsed it — ``F:``, ``P:``, ``D:``, ``L:``, ``M:`` are frequency, pulse
-width, decay, delay and max-time-on — and the experimenter copies that file into
-``data/`` beside the CSVs.  This module reads that export (never the authored
-``[General]`` / ``[DFM]`` program, which is the MCU's input, not a record of
-what ran) into an :class:`OptoProgram`.  Terms, fixed in ``CONTEXT.md``:
+The MCU writes the program back out as ``Program.txt`` and the experimenter
+copies that file into ``data/`` beside the CSVs.  This module reads that export
+(never the authored ``[General]`` / ``[DFM]`` program, which is the MCU's input,
+not a record of what ran) into an :class:`OptoProgram`.  The export has three
+shapes, told apart by content, behind one API:
+
+* **legacy** (PyMCU 3.x): each interval line echoes five numbers — ``F:``,
+  ``P:``, ``D:``, ``L:``, ``M:`` are frequency, pulse width, decay, delay and
+  max-time-on — whose combination selects the paradigm, and thresholds are
+  integers (0 always on, -1 never).  Semantics are the MCU/DFM version 2.0
+  conventions, with two encodings decoded here: the high seven bits of the
+  frequency carry an acclimation-event count, and the top bit of the pulse
+  width selects non-feeding activation.  Each interval's numbers are wrapped
+  into a :class:`Paradigm` with PyMCU's generated name, as PyMCU 4.0.0 itself
+  converts an old program (``PyMCU/docs/ProgramFormat.md``, "Converting old
+  programs");
+* **v4** (PyMCU 4.0.0): a ``Paradigms:`` block names each **Paradigm** with
+  its type and every setting, and interval lines read ``(stamp) Dark|Lit,
+  NAME, t1..t12, N min`` with thresholds a level, ``On`` or ``Off``;
+* **simple**: a recording started without a Program exports one ``***ALL
+  DFM***`` block, every well ``Off``; it yields no DFM section.
+
+Terms, fixed in ``CONTEXT.md``:
 
 * the **Opto Program** is the parsed file;
+* a **Paradigm** is a named rule for when a well's LED turns on, of one of six
+  types, with its settings;
+* a **Program Interval** is one timed step of a DFM's program: its Paradigm,
+  its dark setting and a threshold per well;
 * a **Linkage Group** is a set of wells sharing one linkage number, lit
   together whenever any member is triggered;
-* a **Trigger Well** is a well whose threshold is positive in some interval,
-  so its signal can switch its group's light on.
-
-Semantics are the MCU/DFM version 2.0 conventions ("Stand Alone MCU Programming
-Conventions"), with two encodings decoded here: the high seven bits of the
-frequency carry the progressive ratio's acclimation-event count, and the top
-bit of the pulse width selects non-feeding activation.
+* a **Trigger Well** is a well whose threshold is a signal level in some
+  interval, so its signal can switch its group's light on;
+* the **Hold** is how long an Activation keeps the LED on after contact ends.
 
 Pure Python, no pandas: the parser is imported by the loader, the linter and
 the editors.
@@ -32,11 +47,12 @@ the editors.
 
 from __future__ import annotations
 
+import math
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Iterable
+from typing import Callable, Iterable
 
 PROGRAM_FILENAME = "Program.txt"
 N_WELLS = 12
@@ -49,10 +65,17 @@ FREQUENCY_BITS = 9
 #: only while the fly feeds); the pulse width proper is the value below it.
 INVERT_BIT = 0x8000
 
-#: Firmware defaults for a parameter no line states.
+#: Firmware defaults for a parameter no line of a legacy export states.
 FIRMWARE_DEFAULTS = {"frequency": 40, "pulse_width": 8, "decay": 0, "delay": 0,
                      "max_time_on": 0}
 DEFAULT_LINKAGE: tuple[int, ...] = tuple(range(1, N_WELLS + 1))
+
+#: :attr:`OptoProgram.grammar` — which shape of export the file had.
+GRAMMAR_LEGACY = "legacy"
+GRAMMAR_V4 = "v4"
+GRAMMAR_SIMPLE = "simple"
+#: The warning a ``***ALL DFM***`` export always carries.
+SIMPLE_WARNING = "recorded without a Program: every well Off"
 
 # ---------------------------------------------------------------------------
 # The ``optogenetics`` setting
@@ -105,24 +128,91 @@ def setting_to_yaml(setting: str):
 
 
 # ---------------------------------------------------------------------------
-# Paradigms
+# Thresholds
+# ---------------------------------------------------------------------------
+
+#: A well lit for the whole interval, whatever the Paradigm (legacy ``0``).
+ON = "On"
+#: A well that never lights by its own signal (legacy ``-1``); linkage can
+#: still light it, and it runs no Paradigm of its own.
+OFF = "Off"
+#: The highest signal level a threshold can be.
+MAX_LEVEL = 1023
+#: One well's threshold in one interval: a signal level (1 to
+#: :data:`MAX_LEVEL`), :data:`ON` or :data:`OFF`.
+Threshold = int | str
+
+
+def is_trigger(t: Threshold) -> bool:
+    """Whether *t* is a signal level — the well's own contact decides."""
+    return isinstance(t, int) and not isinstance(t, bool)
+
+
+def threshold_from_legacy(value: int) -> Threshold:
+    """A pre-4.0.0 threshold in the new terms, as PyMCU 4.0.0 converts it: 0
+    is :data:`ON`; -1, any other negative and anything above
+    :data:`MAX_LEVEL` are :data:`OFF`; the rest are levels."""
+    value = int(value)
+    if value == 0:
+        return ON
+    if value < 0 or value > MAX_LEVEL:
+        return OFF
+    return value
+
+
+def threshold_text(t: Threshold) -> str:
+    """``On``, ``Off`` or the level, as the export prints it."""
+    return str(t)
+
+
+# ---------------------------------------------------------------------------
+# Paradigm types
 # ---------------------------------------------------------------------------
 
 OPEN_LOOP = "open loop"
 CLOSED_LOOP = "closed loop"
+#: Not a type of its own: a closed loop whose light is cut off after a
+#: maximum on-time.  Kept as a mode because pre-4.0.0 outputs name it.
 CLOSED_LOOP_MAX = "closed loop, max time on"
 FIXED_INTERVAL = "fixed interval"
 PROGRESSIVE_RATIO = "progressive ratio"
+FIXED_RATIO = "fixed ratio"
 NON_FEEDING = "non-feeding activation"
 LIGHTS_OFF = "off"
 UNKNOWN_PARADIGM = "unknown"
 
+#: The six Paradigm types, in PyMCU's order.
+PARADIGM_TYPES: tuple[str, ...] = (OPEN_LOOP, CLOSED_LOOP, FIXED_INTERVAL, NON_FEEDING,
+                                   PROGRESSIVE_RATIO, FIXED_RATIO)
+#: PyMCU's spelling of each type, as the export and the data file write it.
+TYPE_NAMES: dict[str, str] = {
+    OPEN_LOOP: "OpenLoop", CLOSED_LOOP: "ClosedLoop", FIXED_INTERVAL: "FixedInterval",
+    NON_FEEDING: "NonFeeding", PROGRESSIVE_RATIO: "ProgressiveRatio",
+    FIXED_RATIO: "FixedRatio",
+}
+_TYPE_BY_NAME = {name.lower(): kind for kind, name in TYPE_NAMES.items()}
+
+
+def type_from_name(name: str) -> str | None:
+    """The type for PyMCU's spelling *name* (case-insensitive), or ``None``."""
+    return _TYPE_BY_NAME.get(str(name).strip().lower())
+
+
+#: Paradigms that earn an Activation by a count of Firmware Events.
+RATIO_PARADIGMS: tuple[str, ...] = (PROGRESSIVE_RATIO, FIXED_RATIO)
 #: Paradigms whose light is switched on by the fly's contact with a Trigger
 #: Well — the ones the light QC can explain from licks.
 FEEDING_PARADIGMS: tuple[str, ...] = (CLOSED_LOOP, CLOSED_LOOP_MAX, FIXED_INTERVAL,
-                                      PROGRESSIVE_RATIO)
+                                      PROGRESSIVE_RATIO, FIXED_RATIO)
 #: Paradigms in which every feeding bout should light the group.
 CLOSED_LOOP_PARADIGMS: tuple[str, ...] = (CLOSED_LOOP, CLOSED_LOOP_MAX)
+#: Paradigms that take an ``Acclimation`` count.
+ACCLIMATION_PARADIGMS: tuple[str, ...] = (FIXED_INTERVAL, PROGRESSIVE_RATIO, FIXED_RATIO)
+
+SERIES_ARITHMETIC = "Arithmetic"
+SERIES_EXPONENTIAL = "Exponential"
+#: The largest Requirement the firmware holds (a 16-bit count).
+MAX_REQUIREMENT = 0xFFFF
 
 
 class ProgramError(ValueError):
@@ -131,12 +221,12 @@ class ProgramError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class OptoParams:
-    """One interval's optogenetic parameters as the MCU holds them.
+    """One legacy interval's optogenetic parameters as the MCU held them.
 
     *frequency* and *pulse_width* are the raw values, encodings included;
     the properties decode them.  *delay* and *max_time_on* are milliseconds
     except under a progressive ratio, where they are the lick increment and
-    the lick cap.
+    the lick cap.  Reachable as :attr:`Paradigm.legacy`.
     """
 
     frequency: int
@@ -167,7 +257,7 @@ class OptoParams:
 
     @property
     def paradigm(self) -> str:
-        """The paradigm this parameter set selects for a well whose threshold
+        """The mode this parameter set selects for a well whose threshold
         is positive (the conventions' table; a zero threshold is open loop and
         a negative one is off, whatever the parameters say)."""
         if self.inverted:
@@ -194,6 +284,226 @@ class OptoParams:
         return ", ".join(parts)
 
 
+# ---------------------------------------------------------------------------
+# Paradigms
+# ---------------------------------------------------------------------------
+
+#: The export's setting names: (setting, Paradigm field, kind).  The kind
+#: decides the unit printed and how a value is read.
+_FREQUENCY = ("Frequency", "frequency_hz", "hz")
+_PULSE_WIDTH = ("PulseWidth", "pulse_width_ms", "ms")
+_HOLD = ("HoldMs", "hold_ms", "ms")
+_MAX_ON = ("MaxOnMs", "max_on_ms", "ms")
+_ACTIVATION = ("ActivationMs", "activation_ms", "ms")
+_LOCKOUT = ("LockoutMs", "lockout_ms", "ms")
+_ON_DELAY = ("OnDelayMs", "on_delay_ms", "ms")
+_EVENT_GAP = ("EventGapMs", "event_gap_ms", "ms")
+_ACCLIMATION = ("Acclimation", "acclimation", "count")
+_SERIES = ("Series", "series", "series")
+_FIRST = ("FirstRequirement", "first_requirement", "count")
+_STEP = ("Step", "step", "count")
+_SCALE = ("Scale", "scale", "decimal")
+_RATE = ("Rate", "rate", "decimal")
+_CAP = ("Cap", "cap", "count")
+_RATIO = ("Ratio", "ratio", "count")
+
+_LIGHT = (_FREQUENCY, _PULSE_WIDTH)
+#: Each type's settings in PyMCU's display order (``Paradigm._SETTINGS``).
+_TYPE_SETTINGS: dict[str, tuple[tuple[str, str, str], ...]] = {
+    OPEN_LOOP: (),
+    CLOSED_LOOP: (_HOLD, _MAX_ON, _EVENT_GAP),
+    FIXED_INTERVAL: (_ACTIVATION, _LOCKOUT, _EVENT_GAP, _ACCLIMATION),
+    NON_FEEDING: (_ON_DELAY, _MAX_ON),
+    PROGRESSIVE_RATIO: (_ACTIVATION, _SERIES, _FIRST, _STEP, _SCALE, _RATE, _CAP,
+                        _EVENT_GAP, _ACCLIMATION),
+    FIXED_RATIO: (_ACTIVATION, _RATIO, _EVENT_GAP, _ACCLIMATION),
+}
+#: Settings that belong to one Series only; the export prints the chosen one's.
+_SERIES_SETTINGS = {SERIES_ARITHMETIC: ("FirstRequirement", "Step"),
+                    SERIES_EXPONENTIAL: ("Scale", "Rate")}
+_ALL_SETTINGS = {s[0].lower() for specs in _TYPE_SETTINGS.values() for s in specs} \
+    | {s[0].lower() for s in _LIGHT}
+_UNITS = {"hz": " Hz", "ms": " ms"}
+
+
+@dataclass(frozen=True, slots=True)
+class Paradigm:
+    """A named rule for when a well's LED turns on, with its settings.
+
+    *type* is one of :data:`PARADIGM_TYPES` (pyflic's mode strings;
+    :attr:`type_name` is PyMCU's spelling).  A setting the type does not take
+    is ``None``.  An interval of a legacy export is wrapped into one with
+    *generated* set and its raw numbers kept in *legacy*.
+    """
+
+    name: str
+    type: str
+    frequency_hz: int
+    pulse_width_ms: int
+    hold_ms: int | None = None            # ClosedLoop HoldMs
+    max_on_ms: int | None = None          # ClosedLoop, NonFeeding
+    activation_ms: int | None = None      # FixedInterval, ratio types
+    lockout_ms: int | None = None         # FixedInterval
+    on_delay_ms: int | None = None        # NonFeeding
+    event_gap_ms: int | None = None
+    acclimation: int = 0
+    series: str | None = None             # ProgressiveRatio: Arithmetic | Exponential
+    first_requirement: int | None = None
+    step: int | None = None
+    scale: float | None = None
+    rate: float | None = None
+    cap: int | None = None
+    ratio: int | None = None              # FixedRatio
+    generated: bool = False               # a name PyMCU made from old-format settings
+    legacy: OptoParams | None = None      # the pre-4.0.0 numbers this was inferred from
+
+    @property
+    def type_name(self) -> str:
+        """PyMCU's spelling of :attr:`type`, e.g. ``ClosedLoop``."""
+        return TYPE_NAMES.get(self.type, self.type)
+
+    @property
+    def mode(self) -> str:
+        """What the light QC calls this rule: the type, except that a closed
+        loop with a maximum on-time is :data:`CLOSED_LOOP_MAX`."""
+        if self.type == CLOSED_LOOP and (self.max_on_ms or 0) > 0:
+            return CLOSED_LOOP_MAX
+        return self.type
+
+    @property
+    def hold(self) -> int | None:
+        """The Hold (``CONTEXT.md``): ``HoldMs`` for a closed loop,
+        ``ActivationMs`` for a fixed interval and the ratio types, ``None``
+        for the types without one."""
+        if self.type == CLOSED_LOOP:
+            return self.hold_ms
+        if self.type in ACCLIMATION_PARADIGMS:
+            return self.activation_ms
+        return None
+
+    def requirement_for(self, k: int) -> int | None:
+        """Firmware Events needed for the *k*-th Main Activation (from 1), as
+        the firmware computes it (``LEDControl.c``, ``RequirementFor``);
+        ``None`` outside the ratio types and for a legacy progressive ratio,
+        whose old lick counts have no Requirement."""
+        k = int(k)
+        if k < 1:
+            raise ValueError(f"k counts Main Activations from 1, got {k}")
+        if self.type == FIXED_RATIO:
+            if self.ratio is None:
+                return None
+            value = int(self.ratio)
+        elif self.type == PROGRESSIVE_RATIO and self.series is not None:
+            cap = int(self.cap) if self.cap else MAX_REQUIREMENT
+            if cap > MAX_REQUIREMENT:
+                cap = MAX_REQUIREMENT
+            if self.series == SERIES_EXPONENTIAL:
+                ## The MCU sends Scale and Rate as thousandths; the firmware
+                ## rounds half up and caps before converting.
+                scale = round(float(5.0 if self.scale is None else self.scale) * 1000) / 1000
+                rate = round(float(0.2 if self.rate is None else self.rate) * 1000) / 1000
+                x = scale * math.exp(rate * k) - scale
+                value = cap if x >= cap else int(math.floor(x + 0.5))
+            else:
+                first = 1 if self.first_requirement is None else int(self.first_requirement)
+                step = 0 if self.step is None else int(self.step)
+                value = first + step * (k - 1)
+            value = min(value, cap)
+        else:
+            return None
+        return max(1, min(value, MAX_REQUIREMENT))
+
+    def describe(self) -> str:
+        """The Paradigm as the export prints it, e.g. ``PR10
+        (ProgressiveRatio): Frequency 40 Hz, PulseWidth 8 ms, ActivationMs 500
+        ms, Series Arithmetic, …``; settings that are ``None`` are left out."""
+        parts = []
+        skip = ()
+        if self.type == PROGRESSIVE_RATIO:
+            skip = tuple(name for series, names in _SERIES_SETTINGS.items()
+                         if series != self.series for name in names)
+        for setting, attr, kind in _LIGHT + _TYPE_SETTINGS.get(self.type, ()):
+            value = getattr(self, attr)
+            if value is None or setting in skip:
+                continue
+            text = f"{value:g}" if kind == "decimal" else str(value)
+            parts.append(f"{setting} {text}{_UNITS.get(kind, '')}")
+        return f"{self.name} ({self.type_name}): {', '.join(parts)}"
+
+
+def _generated_name(kind: str, frequency_hz: int, pulse_width_ms: int,
+                    settings: Iterable[tuple[str, object]]) -> str:
+    """PyMCU's name for a Paradigm made from old settings
+    (``Paradigm.Legacy``): ``ClosedLoop-40Hz-8ms-Hold500-MaxOn0``.  Equal
+    settings give equal names."""
+    return f"{TYPE_NAMES[kind]}-{frequency_hz}Hz-{pulse_width_ms}ms" + "".join(
+        f"-{setting.replace('Ms', '')}{value}" for setting, value in settings)
+
+
+def _pymcu_generated_name(paradigm: Paradigm) -> str | None:
+    """The name PyMCU 4.0.0 would give *paradigm* had it come from an old
+    interval line, or ``None`` for a type it never generates."""
+    p = paradigm
+    if p.acclimation:
+        return None
+    if p.type == CLOSED_LOOP:
+        settings = (("HoldMs", p.hold_ms), ("MaxOnMs", p.max_on_ms))
+    elif p.type == FIXED_INTERVAL:
+        settings = (("ActivationMs", p.activation_ms), ("LockoutMs", p.lockout_ms))
+    elif p.type == NON_FEEDING:
+        settings = (("OnDelayMs", p.on_delay_ms), ("MaxOnMs", p.max_on_ms))
+    else:
+        return None
+    return _generated_name(p.type, p.frequency_hz, p.pulse_width_ms, settings)
+
+
+def paradigm_from_legacy(params: OptoParams) -> Paradigm:
+    """The :class:`Paradigm` a legacy interval's numbers meant.
+
+    The type is the one :attr:`OptoParams.paradigm` infers; the settings
+    follow PyMCU 4.0.0's conversion of an old program: delay 0 is ClosedLoop
+    (``HoldMs`` = decay, ``MaxOnMs`` = max-time-on, a negative one meaning no
+    limit), a delay with no max-time-on is FixedInterval (``ActivationMs`` =
+    decay, ``LockoutMs`` = delay), the pulse width's top bit is NonFeeding
+    (``OnDelayMs`` = delay, ``MaxOnMs`` = decay).  PyMCU refuses the old
+    progressive ratio and the frequency's acclimation bits, which counted
+    milliseconds of contact; pyflic still reads them, as a ProgressiveRatio
+    with ``ActivationMs`` = decay and no Requirement series, and as
+    ``acclimation``.  Those two extend PyMCU's naming pattern
+    (``-Delay…-MaxOn…``, ``-Acclimation…``) so that different old settings
+    keep different names.
+    """
+    mode = params.paradigm
+    decay, delay, max_on = int(params.decay), int(params.delay), int(params.max_time_on)
+    if mode == NON_FEEDING:
+        kind = NON_FEEDING
+        settings = {"on_delay_ms": delay, "max_on_ms": decay}
+        named = (("OnDelayMs", delay), ("MaxOnMs", decay))
+    elif mode in CLOSED_LOOP_PARADIGMS:
+        kind = CLOSED_LOOP
+        settings = {"hold_ms": decay, "max_on_ms": max(max_on, 0)}
+        named = (("HoldMs", decay), ("MaxOnMs", max(max_on, 0)))
+    elif mode == FIXED_INTERVAL:
+        kind = FIXED_INTERVAL
+        settings = {"activation_ms": decay, "lockout_ms": delay}
+        named = (("ActivationMs", decay), ("LockoutMs", delay))
+    else:
+        kind = PROGRESSIVE_RATIO
+        settings = {"activation_ms": decay}
+        named = (("ActivationMs", decay), ("Delay", delay), ("MaxOn", max_on))
+    acclimation = params.acclimation_events
+    if acclimation:
+        named = (*named, ("Acclimation", acclimation))
+    name = _generated_name(kind, params.frequency_hz, params.pulse_width_ms, named)
+    return Paradigm(name=name, type=kind, frequency_hz=params.frequency_hz,
+                    pulse_width_ms=params.pulse_width_ms, acclimation=acclimation,
+                    generated=True, legacy=params, **settings)
+
+
+# ---------------------------------------------------------------------------
+# Program Intervals and DFM sections
+# ---------------------------------------------------------------------------
+
 @dataclass(frozen=True, slots=True)
 class ProgramInterval:
     """One interval line of a DFM section, as the MCU echoed it."""
@@ -201,35 +511,55 @@ class ProgramInterval:
     index: int                         # 1-based position in its DFM section
     start: datetime | None             # the timestamp the export printed
     dark: bool                         # the DFM ran dark (indicator LEDs off)
-    thresholds: tuple[int, ...]        # W1..W12
-    params: OptoParams
+    thresholds: tuple[Threshold, ...]  # W1..W12: a level, ON or OFF
+    paradigm: Paradigm                 # parsed, or synthesised from F/P/D/L/M
     duration_min: float
 
-    def threshold(self, well: int) -> int:
-        return int(self.thresholds[int(well) - 1])
+    def threshold(self, well: int) -> Threshold:
+        return self.thresholds[int(well) - 1]
+
+    def _wells(self, wells: Iterable[int] | None,
+               keep: Callable[[Threshold], bool]) -> tuple[int, ...]:
+        pool = range(1, N_WELLS + 1) if wells is None else wells
+        return tuple(int(w) for w in pool if keep(self.threshold(w)))
 
     def trigger_wells(self, wells: Iterable[int] | None = None) -> tuple[int, ...]:
-        """Wells (of *wells*, default all twelve) whose threshold is positive."""
-        pool = range(1, N_WELLS + 1) if wells is None else wells
-        return tuple(int(w) for w in pool if self.threshold(w) > 0)
+        """Wells (of *wells*, default all twelve) whose threshold is a level."""
+        return self._wells(wells, is_trigger)
 
     def open_wells(self, wells: Iterable[int] | None = None) -> tuple[int, ...]:
-        pool = range(1, N_WELLS + 1) if wells is None else wells
-        return tuple(int(w) for w in pool if self.threshold(w) == 0)
+        """Wells whose threshold is :data:`ON`."""
+        return self._wells(wells, lambda t: t == ON)
+
+    def off_wells(self, wells: Iterable[int] | None = None) -> tuple[int, ...]:
+        """Wells whose threshold is :data:`OFF`."""
+        return self._wells(wells, lambda t: t == OFF)
 
     def group_mode(self, wells: Iterable[int]) -> str:
         """What a Linkage Group of *wells* does during this interval.
 
-        A zero threshold on any member lights the whole group constantly (open
-        loop); every member negative keeps it dark (off); otherwise the group
-        answers to its Trigger Wells under this interval's paradigm.
+        An :data:`ON` threshold on any member lights the whole group
+        constantly (open loop); every member :data:`OFF` keeps it dark (off);
+        otherwise the group answers to its Trigger Wells under the
+        Paradigm's :attr:`~Paradigm.mode`.
         """
         wells = tuple(int(w) for w in wells)
-        if any(self.threshold(w) == 0 for w in wells):
+        if any(self.threshold(w) == ON for w in wells):
             return OPEN_LOOP
-        if all(self.threshold(w) < 0 for w in wells):
+        if all(self.threshold(w) == OFF for w in wells):
             return LIGHTS_OFF
-        return self.params.paradigm
+        return self.paradigm.mode
+
+    @property
+    def hold_ms(self) -> int:
+        """The Hold the light QC allows after contact, in ms.  A legacy
+        interval keeps its decay whatever the paradigm, as pyflic always
+        read it; a v4 one has its Paradigm's :attr:`~Paradigm.hold`, 0 for a
+        type without one."""
+        legacy = self.paradigm.legacy
+        if legacy is not None:
+            return legacy.decay_ms
+        return int(self.paradigm.hold or 0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -259,7 +589,7 @@ class DFMProgram:
         return {label: tuple(wells) for label, wells in groups.items()}
 
     def trigger_wells(self) -> tuple[int, ...]:
-        """Every well whose threshold is positive in at least one interval."""
+        """Every well whose threshold is a level in at least one interval."""
         found = {w for iv in self.intervals for w in iv.trigger_wells()}
         return tuple(sorted(found))
 
@@ -323,9 +653,25 @@ class OptoProgram:
     rejected: dict[int, str] = field(default_factory=dict)
     #: Lines skipped and sections ignored, for the summary.
     warnings: list[str] = field(default_factory=list)
+    #: Name -> Paradigm: the ``Paradigms:`` block, or for a legacy export the
+    #: Paradigms synthesised from its intervals.
+    paradigms: dict[str, Paradigm] = field(default_factory=dict)
+    #: :data:`GRAMMAR_LEGACY`, :data:`GRAMMAR_V4` or :data:`GRAMMAR_SIMPLE`.
+    grammar: str = GRAMMAR_LEGACY
 
     def section(self, dfm_id: int) -> DFMProgram | None:
         return self.dfms.get(int(dfm_id))
+
+    def interval_for(self, dfm_id: int, k: int) -> ProgramInterval | None:
+        """The *k*-th interval line printed for *dfm_id* (1-based, as a 4.0.0
+        data file's ``Interval`` column counts), or ``None``.  The export
+        omits Intervals that start past the duration and a Repeating
+        program's later passes, so a recorded *k* may have no line."""
+        section = self.section(dfm_id)
+        k = int(k)
+        if section is None or not 1 <= k <= len(section.intervals):
+            return None
+        return section.intervals[k - 1]
 
     def resolved_end(self) -> datetime | None:
         """``End Time``, else ``Start Time`` plus ``Duration``."""
@@ -384,11 +730,20 @@ _KEYED_RE = re.compile(r"^(?P<key>[A-Za-z])\s*:\s*(?P<value>[-+]?\d+(?:\.\d+)?)\
 _NUMBER_RE = re.compile(r"[-+]?\d+(?:\.\d+)?")
 _DARK_RE = re.compile(r"^dark\s*[:=]?\s*(?P<state>on|off|yes|no|true|false|\d+)$",
                       re.IGNORECASE)
+_PARADIGMS_RE = re.compile(r"^paradigms\s*:\s*$", re.IGNORECASE)
+#: ``NAME (Type): Setting value[ unit], …`` — PyMCU's names start with a
+#: letter and hold letters, digits, ``_``, ``-`` and ``.``.
+_PARADIGM_LINE_RE = re.compile(
+    r"^(?P<name>[A-Za-z][\w.\-]*)\s*\(\s*(?P<type>[^()]*?)\s*\)\s*:\s*(?P<settings>.*)$")
+_MINUTES_RE = re.compile(r"^(?P<value>[-+]?\d+(?:\.\d+)?)\s*(?:min)?$", re.IGNORECASE)
 _TIME_FORMATS = ("%m/%d/%Y %H:%M:%S", "%m/%d/%Y %I:%M:%S %p", "%m/%d/%Y %H:%M",
                  "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S")
 _PROGRAM_TYPES = ("linear", "repeating", "circadian", "constant")
 #: The MCU reserves this id for the Environmental Monitor.
 _ENVMON_ID = 99
+#: Sections a 4.0.0 export writes that are not DFMs and need no warning.
+_ENVMON_SECTION = "env mon"
+_ALL_DFM_SECTION = "all dfm"
 
 _HEADER_KEYS = {
     "start time": "start", "end time": "end", "duration": "duration",
@@ -408,7 +763,15 @@ _SECTION_KEYS = {
     "max time on": "max_time_on", "maxtimeon": "max_time_on",
     "program type": "program_type",
 }
-#: Interval keys the export writes after the thresholds.
+#: The keys a 4.0.0 export writes; the legacy ``Opto …`` defaults have no
+#: meaning beside a ``Paradigms:`` block.
+_V4_HEADER = ("start", "end", "duration", "linkage", "program_type", "baseline")
+_V4_SECTION = ("linkage", "program_type")
+#: What an ``***ALL DFM***`` block states.
+_SIMPLE_KEYS = {"start time": "start", "end time": "end", "duration": "duration",
+                "linkage": "linkage", "baseline": "baseline",
+                "program type": "program_type"}
+#: Interval keys the legacy export writes after the thresholds.
 _INTERVAL_KEYS = {"F": "frequency", "P": "pulse_width", "D": "decay", "L": "delay",
                   "M": "max_time_on"}
 _PARAM_ORDER = ("frequency", "pulse_width", "decay", "delay", "max_time_on")
@@ -476,7 +839,7 @@ def _parse_program_type(text: str, warnings: list[str], where: str) -> str:
 
 def _parse_interval(index: int, stamp: str, body: str, defaults: dict,
                     warnings: list[str], where: str) -> ProgramInterval:
-    """One ``(timestamp) Dark Off,t1..t12,F:..,P:..,D:..,L:..,M:..,<min>min.``
+    """One legacy ``(timestamp) Dark Off,t1..t12,F:..,P:..,D:..,L:..,M:..,<min>min.``
     line.  Raises ``ValueError`` when the line cannot be a program interval."""
     text = body.strip()
     if text.endswith("."):
@@ -533,8 +896,176 @@ def _parse_interval(index: int, stamp: str, body: str, defaults: dict,
     if stamp.strip() and start is None:
         warnings.append(f"{where}: interval {index} timestamp {stamp.strip()!r} not "
                         f"understood; the interval is placed after the one before it")
-    return ProgramInterval(index=index, start=start, dark=dark, thresholds=thresholds,
-                           params=OptoParams(**params), duration_min=duration)
+    return ProgramInterval(index=index, start=start, dark=dark,
+                           thresholds=tuple(threshold_from_legacy(t) for t in thresholds),
+                           paradigm=paradigm_from_legacy(OptoParams(**params)),
+                           duration_min=duration)
+
+
+# ---- the 4.0.0 grammar -----------------------------------------------------
+
+def _whole(text: str) -> int:
+    """A whole number written as ``500`` or ``500.0``."""
+    try:
+        return int(text)
+    except ValueError:
+        number = float(text)
+        if not number.is_integer():
+            raise ValueError(f"{text!r} is not a whole number") from None
+        return int(number)
+
+
+def _parse_setting_value(kind: str, text: str):
+    text = text.strip()
+    if kind in _UNITS:
+        unit = _UNITS[kind].strip().lower()
+        if text.lower().endswith(unit):
+            text = text[:-len(unit)].strip()
+    if kind == "series":
+        for series in (SERIES_ARITHMETIC, SERIES_EXPONENTIAL):
+            if text.lower() == series.lower():
+                return series
+        raise ValueError(f"Series must be Arithmetic or Exponential, not {text!r}")
+    if kind == "decimal":
+        return float(text)
+    return _whole(text)
+
+
+def _parse_paradigm_line(number: int, match: re.Match, warnings: list[str]
+                         ) -> Paradigm | None:
+    """One ``NAME (Type): Setting value[ unit], …`` line of the ``Paradigms:``
+    block, or ``None`` (with a warning) when its type is not one of the six."""
+    name = match.group("name")
+    kind = type_from_name(match.group("type"))
+    if kind is None:
+        warnings.append(f"line {number}: Paradigm {name} has type "
+                        f"{match.group('type')!r}, not one of "
+                        f"{', '.join(TYPE_NAMES.values())}; it is dropped")
+        return None
+    allowed = {s[0].lower(): s for s in _LIGHT + _TYPE_SETTINGS[kind]}
+    values: dict[str, object] = {}
+    for item in match.group("settings").split(","):
+        item = item.strip()
+        if not item:
+            continue
+        key, _sep, rest = item.partition(" ")
+        spec = allowed.get(key.lower())
+        if spec is None:
+            why = (f"{TYPE_NAMES[kind]} Paradigms have no {key}"
+                   if key.lower() in _ALL_SETTINGS else f"unknown setting {key!r}")
+            warnings.append(f"line {number}: Paradigm {name}: {why}; ignored")
+            continue
+        setting, attr, setting_kind = spec
+        if attr in values:
+            warnings.append(f"line {number}: Paradigm {name}: {setting} is given "
+                            f"twice; the first is kept")
+            continue
+        try:
+            values[attr] = _parse_setting_value(setting_kind, rest)
+        except ValueError as err:
+            warnings.append(f"line {number}: Paradigm {name}: {setting} {rest.strip()!r} "
+                            f"not understood ({err}); ignored")
+    ## The export prints every setting; these two are the only ones a
+    ## Paradigm cannot lack, so a hand-edited file falls back on PyMCU's
+    ## defaults for them.
+    for attr, setting, default, unit in (("frequency_hz", "Frequency", 40, "Hz"),
+                                         ("pulse_width_ms", "PulseWidth", 8, "ms")):
+        if attr not in values:
+            warnings.append(f"line {number}: Paradigm {name} states no {setting}; "
+                            f"taken as {default} {unit}")
+            values[attr] = default
+    paradigm = Paradigm(name=name, type=kind, **values)
+    if _pymcu_generated_name(paradigm) == name:
+        paradigm = replace(paradigm, generated=True)
+    return paradigm
+
+
+def _parse_threshold(text: str) -> Threshold:
+    value = text.strip()
+    if value.lower() == ON.lower():
+        return ON
+    if value.lower() == OFF.lower():
+        return OFF
+    try:
+        level = int(value)
+    except ValueError:
+        level = None
+    if level is None or not 1 <= level <= MAX_LEVEL:
+        raise ValueError(f"thresholds are On, Off or a level from 1 to {MAX_LEVEL}, "
+                         f"not {value!r}")
+    return level
+
+
+def _lookup(paradigms: dict[str, Paradigm], name: str) -> Paradigm | None:
+    """The Paradigm *name* refers to; PyMCU matches names ignoring case."""
+    found = paradigms.get(name)
+    if found is None:
+        folded = name.lower()
+        found = next((p for key, p in paradigms.items() if key.lower() == folded), None)
+    return found
+
+
+def _parse_v4_interval(index: int, stamp: str, body: str,
+                       paradigms: dict[str, Paradigm], warnings: list[str],
+                       where: str) -> ProgramInterval:
+    """One ``(stamp) Dark|Lit, NAME, t1..t12, N min`` line.  Raises
+    ``ValueError`` when the line cannot be a program interval."""
+    text = body.strip()
+    if text.endswith("."):
+        text = text[:-1]
+    tokens = [t.strip() for t in text.split(",")]
+    if len(tokens) != N_WELLS + 3:
+        raise ValueError(f"{len(tokens)} values; an interval is Dark or Lit, a Paradigm, "
+                         f"{N_WELLS} thresholds and its minutes")
+    head = tokens[0].lower()
+    if head not in ("dark", "lit"):
+        raise ValueError(f"{tokens[0]!r} is not Dark or Lit")
+    paradigm = _lookup(paradigms, tokens[1])
+    if paradigm is None:
+        raise ValueError(f"no Paradigm named {tokens[1]!r} in the Paradigms block")
+    thresholds = tuple(_parse_threshold(t) for t in tokens[2:2 + N_WELLS])
+    match = _MINUTES_RE.match(tokens[-1])
+    if match is None:
+        raise ValueError(f"duration {tokens[-1]!r} is not a number of minutes")
+    duration = float(match.group("value"))
+    if duration <= 0:
+        raise ValueError(f"duration {tokens[-1]!r} is not positive")
+    start = _parse_time(stamp) if stamp.strip() else None
+    if stamp.strip() and start is None:
+        warnings.append(f"{where}: interval {index} timestamp {stamp.strip()!r} not "
+                        f"understood; the interval is placed after the one before it")
+    return ProgramInterval(index=index, start=start, dark=head == "dark",
+                           thresholds=thresholds, paradigm=paradigm,
+                           duration_min=duration)
+
+
+def _grammar_of(lines: list[str]) -> str:
+    """Which export *lines* are: a ``Paradigms:`` line or an interval whose
+    head is a bare ``Dark`` / ``Lit`` is 4.0.0; an ``***ALL DFM***`` block with
+    no DFM section is the simple export; anything else is legacy."""
+    v4 = has_dfm = has_all = False
+    for raw in lines:
+        line = raw.strip().replace("\t", " ")
+        if _PARADIGMS_RE.match(line):
+            v4 = True
+            continue
+        section = _SECTION_RE.match(line)
+        if section is not None:
+            name = section.group("name")
+            dfm = _DFM_SECTION_RE.match(name)
+            if dfm is not None and int(dfm.group("id")) != _ENVMON_ID:
+                has_dfm = True
+            elif _norm(name) == _ALL_DFM_SECTION:
+                has_all = True
+            continue
+        interval = _INTERVAL_RE.match(line)
+        if interval is not None:
+            head = interval.group("body").split(",", 1)[0].strip().lower()
+            if head in ("dark", "lit"):
+                v4 = True
+    if has_all and not has_dfm:
+        return GRAMMAR_SIMPLE
+    return GRAMMAR_V4 if v4 else GRAMMAR_LEGACY
 
 
 @dataclass
@@ -548,20 +1079,28 @@ class _Section:
 
 
 def parse_program(text: str, *, path: str | Path | None = None) -> OptoProgram:
-    """Read an MCU-exported ``Program.txt``.
+    """Read an MCU-exported ``Program.txt``, of either grammar.
 
     Unknown lines are skipped with a warning; a DFM section that cannot be
-    read (a malformed linkage or interval, no interval at all) is dropped and
-    its reason kept in :attr:`OptoProgram.rejected`; a file with no readable
-    DFM section at all raises :class:`ProgramError`.
+    read (a malformed linkage or interval, an interval naming a Paradigm the
+    block does not define, no interval at all) is dropped and its reason kept
+    in :attr:`OptoProgram.rejected`; a file with no readable DFM section at
+    all raises :class:`ProgramError` — except the simple export of a
+    recording made without a Program, which has none by design and is
+    returned with :data:`SIMPLE_WARNING`.
     """
+    lines = str(text).splitlines()
+    grammar = _grammar_of(lines)
+    legacy = grammar == GRAMMAR_LEGACY
     warnings: list[str] = []
     header: dict = {}
     sections: list[_Section] = []
+    paradigm_lines: list[tuple[int, re.Match]] = []
     current: _Section | None = None
     ignored: _Section | None = None
+    in_simple = in_paradigms = False
     authored = False
-    for number, raw in enumerate(str(text).splitlines(), start=1):
+    for number, raw in enumerate(lines, start=1):
         line = raw.strip().replace("\t", " ")
         if not line or line.startswith("#"):
             continue
@@ -570,24 +1109,50 @@ def parse_program(text: str, *, path: str | Path | None = None) -> OptoProgram:
             warnings.append(f"line {number}: {line} is a section of an authored MCU "
                             f"program, not of the exported Program.txt; skipped")
             current = ignored = None
+            in_simple = in_paradigms = False
             continue
         section_match = _SECTION_RE.match(line)
         if section_match is not None:
             name = section_match.group("name")
             dfm_match = _DFM_SECTION_RE.match(name)
+            in_simple = in_paradigms = False
             if dfm_match is not None and int(dfm_match.group("id")) != _ENVMON_ID:
                 current = _Section(name=name, first_line=number,
                                    dfm_id=int(dfm_match.group("id")))
                 sections.append(current)
                 ignored = None
+            elif grammar == GRAMMAR_SIMPLE and _norm(name) == _ALL_DFM_SECTION:
+                ## Its settings describe the recording; its interval lines are
+                ## every well Off, which is what no section already means.
+                current = ignored = None
+                in_simple = True
             else:
                 current = None
                 ignored = _Section(name=name, first_line=number, dfm_id=None)
-                warnings.append(f"line {number}: section '{name}' is not a DFM; "
-                                f"its lines are ignored")
+                if legacy or _norm(name) != _ENVMON_SECTION:
+                    warnings.append(f"line {number}: section '{name}' is not a DFM; "
+                                    f"its lines are ignored")
             continue
         if ignored is not None:
             continue
+        if in_simple:
+            key, sep, value = line.partition(":")
+            name = _SIMPLE_KEYS.get(_norm(key)) if sep else None
+            if name is not None:
+                header[name] = (number, value.strip())
+            elif "," not in line:
+                warnings.append(f"line {number}: not understood, skipped: {line!r}")
+            continue
+        if not legacy and current is None and _PARADIGMS_RE.match(line):
+            in_paradigms = True
+            continue
+        if in_paradigms and current is None:
+            ## Before the interval parser and the key/value split: a Paradigm
+            ## line holds commas and a colon of its own.
+            paradigm_match = _PARADIGM_LINE_RE.match(line)
+            if paradigm_match is not None:
+                paradigm_lines.append((number, paradigm_match))
+                continue
         interval_match = _INTERVAL_RE.match(line)
         if interval_match is not None:
             if current is None:
@@ -604,6 +1169,11 @@ def parse_program(text: str, *, path: str | Path | None = None) -> OptoProgram:
         norm = _norm(key)
         if current is None:
             name = _HEADER_KEYS.get(norm)
+            if name is not None and not legacy and name not in _V4_HEADER:
+                warnings.append(f"line {number}: {key.strip()!r} belongs to the "
+                                f"pre-4.0.0 export, not beside a Paradigms block; "
+                                f"skipped")
+                continue
             if name is None:
                 warnings.append(f"line {number}: unknown setting {key.strip()!r}; "
                                 f"skipped")
@@ -611,6 +1181,11 @@ def parse_program(text: str, *, path: str | Path | None = None) -> OptoProgram:
             header[name] = (number, value.strip())
         else:
             name = _SECTION_KEYS.get(norm)
+            if name is not None and not legacy and name not in _V4_SECTION:
+                warnings.append(f"line {number} (DFM {current.dfm_id}): "
+                                f"{key.strip()!r} belongs to the pre-4.0.0 export; "
+                                f"skipped")
+                continue
             if name is None:
                 warnings.append(f"line {number} (DFM {current.dfm_id}): unknown "
                                 f"setting {key.strip()!r}; skipped")
@@ -649,10 +1224,25 @@ def parse_program(text: str, *, path: str | Path | None = None) -> OptoProgram:
     defaults = {k: header_value(k, _parse_int, FIRMWARE_DEFAULTS[k])
                 for k in _PARAM_ORDER}
 
-    ## ---- the DFM sections ----
     program = OptoProgram(path=Path(path) if path is not None else None, start=start,
                           end=end, duration_min=duration, baseline=bool(baseline),
-                          warnings=warnings)
+                          warnings=warnings, grammar=grammar)
+    if grammar == GRAMMAR_SIMPLE:
+        warnings.append(SIMPLE_WARNING)
+        return program
+
+    ## ---- the Paradigms block ----
+    for number, match in paradigm_lines:
+        paradigm = _parse_paradigm_line(number, match, warnings)
+        if paradigm is None:
+            continue
+        if _lookup(program.paradigms, paradigm.name) is not None:
+            warnings.append(f"line {number}: a second Paradigm named {paradigm.name}; "
+                            f"the first is kept")
+            continue
+        program.paradigms[paradigm.name] = paradigm
+
+    ## ---- the DFM sections ----
     for section in sections:
         dfm_id = int(section.dfm_id)
         where = f"DFM {dfm_id}"
@@ -677,10 +1267,15 @@ def parse_program(text: str, *, path: str | Path | None = None) -> OptoProgram:
             intervals = []
             for index, (number, stamp, body) in enumerate(section.intervals, start=1):
                 try:
-                    intervals.append(_parse_interval(index, stamp, body, section_defaults,
-                                                     warnings, where))
+                    if legacy:
+                        interval = _parse_interval(index, stamp, body, section_defaults,
+                                                   warnings, where)
+                    else:
+                        interval = _parse_v4_interval(index, stamp, body,
+                                                      program.paradigms, warnings, where)
                 except ValueError as err:
                     raise ValueError(f"interval {index} (line {number}): {err}") from None
+                intervals.append(interval)
         except ValueError as err:
             program.rejected[dfm_id] = str(err)
             warnings.append(f"DFM {dfm_id}: section dropped — {err}")
@@ -688,6 +1283,9 @@ def parse_program(text: str, *, path: str | Path | None = None) -> OptoProgram:
         program.dfms[dfm_id] = DFMProgram(dfm_id=dfm_id, linkage=tuple(linkage),
                                           program_type=program_type,
                                           intervals=tuple(intervals))
+        if legacy:
+            for interval in intervals:
+                program.paradigms.setdefault(interval.paradigm.name, interval.paradigm)
     if not program.dfms:
         where = f"{program.path.name}: " if program.path is not None else ""
         if authored:

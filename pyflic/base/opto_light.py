@@ -122,6 +122,42 @@ def _split_flags(text: Any) -> list[str]:
             if f and f.lower() != "nan"]
 
 
+#: The program table's Paradigm settings, in the order a reader is shown them:
+#: each type's own order in PyMCU's export.
+_SETTING_COLUMNS: tuple[str, ...] = (
+    "HoldMs", "OnDelayMs", "MaxOnMs", "ActivationMs", "LockoutMs", "Series",
+    "FirstRequirement", "Step", "Scale", "Rate", "Cap", "Ratio", "EventGapMs", "Acclimation",
+)
+
+
+def program_view(program: pd.DataFrame) -> pd.DataFrame:
+    """The program table (:func:`opto_qc.program_frame`) for a reader: one
+    ``Hold (ms)`` column — the Hold of ``CONTEXT.md``, ``HoldMs`` or else
+    ``ActivationMs`` — and the Paradigm's other settings in one ``Settings``
+    cell, so that a row shows only what its type has."""
+    holds: list[Any] = []
+    settings: list[str] = []
+    for _, row in program.iterrows():
+        hold_column = next((c for c in ("HoldMs", "ActivationMs") if pd.notna(row[c])),
+                           None)
+        holds.append(row[hold_column] if hold_column else pd.NA)
+        parts = []
+        for column in _SETTING_COLUMNS:
+            value = row[column]
+            if column == hold_column or pd.isna(value):
+                continue
+            text = f"{value:g}" if isinstance(value, float) else str(value)
+            parts.append(f"{column} {text}")
+        settings.append(", ".join(parts) or "—")
+    return pd.DataFrame({
+        "DFM": program["DFM"], "Interval": program["Interval"],
+        "Minutes": program["DurationMin"], "Paradigm": program["Paradigm"],
+        "Type": program["ParadigmType"],
+        "Hold (ms)": pd.array(holds, dtype="Int64"), "Settings": settings, "Freq (Hz)": program["FrequencyHz"],
+        "Linkage": program["Linkage"], "Trigger wells": program["TriggerWells"],
+    })
+
+
 def verdict_text(flags: Any) -> str:
     """A flag list as one table cell whose first word carries the tone:
     ``ok``, ``warning: …`` or ``failed: …``."""
@@ -293,9 +329,9 @@ class OptoLightQC:
         return pd.DataFrame(rows, columns=list(oq.OPTO_EVENT_COLUMNS))
 
     def program_table(self) -> pd.DataFrame:
-        program = self.program
-        rows = [] if program is None else oq.program_rows(program, self.dfm_ids())
-        return pd.DataFrame(rows, columns=list(oq.OPTO_PROGRAM_COLUMNS))
+        """The program as read, one row per interval of every DFM the QC
+        covers — ``qc/opto/opto_program.csv`` (:data:`oq.OPTO_PROGRAM_COLUMNS`)."""
+        return oq.program_frame(self.program, self.dfm_ids())
 
     # ------------------------------------------------------------------
     # Per chamber
@@ -511,11 +547,11 @@ class OptoLightQC:
                f"Settings: {settings.describe()}", ""]
         program = self.program_table()
         if not program.empty:
-            show = program[["DFM", "Interval", "DurationMin", "Paradigm", "DecayMs",
-                            "Delay", "MaxTimeOn", "FrequencyHz", "AcclimationEvents",
-                            "TriggerWells"]].copy()
-            show.columns = ["DFM", "Int", "Min", "Paradigm", "Decay", "Delay", "MaxOn",
-                            "Hz", "Accl", "Trigger wells"]
+            show = program_view(program)[["DFM", "Interval", "Minutes", "Paradigm", "Type",
+                                          "Hold (ms)", "Settings", "Freq (Hz)",
+                                          "Trigger wells"]]
+            show.columns = ["DFM", "Int", "Min", "Paradigm", "Type", "Hold", "Settings",
+                            "Hz", "Trigger wells"]
             out.append(show.to_string(index=False))
             out.append("")
         table = self.qc_table()
@@ -772,15 +808,8 @@ class OptoLightQC:
         blocks.append(rl.Callout(self.program_line(), tone=program_tone, title="Program"))
         program = self.program_table()
         if not program.empty:
-            view = pd.DataFrame({
-                "DFM": program["DFM"], "Interval": program["Interval"],
-                "Minutes": program["DurationMin"], "Paradigm": program["Paradigm"],
-                "Decay (ms)": program["DecayMs"], "Delay": program["Delay"],
-                "Max time on": program["MaxTimeOn"], "Freq (Hz)": program["FrequencyHz"],
-                "Acclimation": program["AcclimationEvents"],
-                "Linkage": program["Linkage"], "Trigger wells": program["TriggerWells"],
-            })
-            blocks.append(rl.Table(view, caption="The program, as the MCU echoed it",
+            blocks.append(rl.Table(program_view(program),
+                                   caption="The program, as the MCU echoed it",
                                    formats={"Minutes": "{:g}"}))
         table = self.qc_table()
         view = pd.DataFrame({
