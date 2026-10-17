@@ -969,12 +969,20 @@ Phase 0 (one agent, sequential, on v4_Dev)
   merge as `v4-stream-3-light-qc`, `v4-stream-4-pr`, `v4-stream-5-light-table`,
   `v4-stream-6-integrity`, each in its own worktree, merged back to `v4_Dev`
   one at a time; stream 7 works on `v4_Dev` after the last merge.
-- Gate for every merge: `uv run pytest tests/` with no failure that is not one
-  of the six pre-existing ones (`test_hub_batch_ui::…preflight…`,
-  `test_hub_ribbon_ui::…analysis_card…`, `test_layout_and_exclusion_sheet::…scoped…`,
-  two `test_parity_r` fixture-missing cases, `test_project::…escape_its_batch`);
-  the real Progressive Ratio dataset's outputs unchanged except where a
-  decision says otherwise (decision 24); `pyflic lint` clean on the fixtures.
+- Gate for every merge: `python -m pytest tests -q -p no:cacheprovider`, run
+  from the checkout's root with the main `.venv`'s Python, with no failure that
+  is not one of the eight pre-existing ones on `v4_Dev` at fbbcda1
+  (`test_hub_batch_ui::test_the_preflight_previews_the_sheet_without_writing_it`,
+  `test_hub_ribbon_ui::test_the_analysis_card_appears_only_with_a_project`,
+  `test_layout_and_exclusion_sheet::test_rows_are_scoped_to_the_projects_actually_running`,
+  `test_opto_editors_ui::test_the_constants_are_written_only_when_set`,
+  `test_opto_editors_ui::test_a_hidden_section_keeps_what_the_file_says` (both
+  from the "Make auto-filters optional" merge, which writes
+  `min_untransformed_licks_cutoff: None`), two `test_parity_r` fixture-missing
+  cases, `test_project::test_a_project_key_cannot_escape_its_batch`); the
+  existing generation-1 tests unchanged, because the real Progressive Ratio
+  dataset was not on this machine on 2026-10-17 and its test skips; `pyflic
+  lint` clean on the fixtures.
 - Shared surfaces two streams touch, and who owns them: `qc_viewer.py`
   (stream 6; stream 3 changes only `OptoTab._COLUMNS`), `hub.py` buttons
   (stream 5 adds Light summary CSV, stream 6 adds Program timeline, both
