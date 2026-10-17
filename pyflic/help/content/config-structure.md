@@ -10,6 +10,7 @@ global:
   constants: { ... }                     # optional
   params: { ... }                        # optional
   facet_cutoffs: [ ... ]                 # optional
+  facet_source: ...                      # optional: cutoffs (default), program or program_cycles
   experimental_design_factors: { ... }   # optional
   well_names: { ... }                    # required by Hedonic and ProgressiveRatio
 
@@ -87,6 +88,30 @@ Minutes at which the recording is split into named phases, with optional `facet_
 Progressive Ratio owns its facets (Training and Test, split at each chamber group's
 training end) and must not state them. See [Facets](concepts-facets.md).
 
+## `global.facet_source`
+
+Where the Facets come from:
+
+| Value | Facets |
+|---|---|
+| `cutoffs` (the default) | `facet_cutoffs`, the same minute windows on every DFM |
+| `program` | one per Program Interval of each DFM's `Program.txt` section, labelled by its Paradigm's name, its Cycles pooled |
+| `program_cycles` | one per Program Interval and Cycle, labelled `<Paradigm> C<n>` |
+
+A Paradigm a DFM runs in two Program Intervals is labelled `I<k> <Paradigm>`. Recordings
+older than firmware 4.0.0 lay the Facets out from the program's clock schedule, which
+`summary.txt` notes as approximate.
+
+```yaml
+global:
+  optogenetics: auto
+  facet_source: program
+```
+
+`pyflic lint` and the loader refuse `program` or `program_cycles` without a `data/Program.txt`
+section for every DFM, beside `facet_cutoffs`, or under Progressive Ratio, which owns its
+Facets. See [Facets](concepts-facets.md#program-facets).
+
 ## `global.constants`
 
 Cutoffs used by automatic chamber removal. They are not applied at load: they take effect
@@ -127,7 +152,8 @@ What the light QC checks, and how the breaking point is defined, is in
 
 Every optogenetic experiment, of any type, reads the optogenetic light QC's constants too —
 `exclude_failed_opto_chambers` (off by default: failed linkage groups are flagged, not
-excluded) and seven thresholds whose names start `opto_`. They are listed in
+excluded) and twelve thresholds whose names start `opto_`, five of which apply only to
+firmware 4.0.0 recordings. They are listed in
 [Optogenetic experiments](concepts-optogenetics.md#thresholds). The Project Design
 dialog and the [Config Editor](app-config-editor.md) show these as fields for a
 Progressive Ratio experiment, the type's default in grey. A value of the wrong kind or out

@@ -108,9 +108,9 @@ exp.roles_table()                 # DFM, Chamber, Group, Role, Partner
 exp.training_table()              # per chamber group: training end, complete or not
 exp.paired_yoked_diff()           # paired − yoked, per group per Facet
 exp.light_qc_table()              # the light QC verdict per group
-exp.light_events_ledger()         # every Test light event, with Counted
+exp.light_events_ledger()         # every Test light event, with Counted (and Requirement)
 
-exp.breaking_point_summary()      # BreakingPoint, BreakMin, Censored, TestMinutes, ...
+exp.breaking_point_summary()      # BreakingPoint, BreakMin, Censored, BreakRequirement, ...
 exp.breaking_point_sensitivity(gaps=[60, 120, 240])
 exp.group_break(dfm_id=1, group=2)            # the first-gap rule's verdict for one group
 exp.chamber_persistence(dfm_id=1, chamber=3)  # (minutes, censored)
@@ -151,9 +151,56 @@ program = read_program("data/Program.txt")
 program.section(1).linkage_groups()          # {1: (1, 2, 3, 4), ...}
 program.section(1).intervals[0].paradigm.describe()   # "PR10 (ProgressiveRatio): ..."
 program.grammar                              # "legacy", "v4" or "simple"
+program.paradigms["PR10"].requirement_for(3) # the 3rd Main Activation's Requirement
+program.interval_for(1, 2)                   # DFM 1's Program Interval 2
 ```
 
 See [Optogenetic experiments](concepts-optogenetics.md).
+
+## Firmware 4.0.0 data
+
+A few modules read what the firmware recorded. Each takes a loaded experiment or DFM.
+
+**The Paradigm state.** Every `DFM` has a `generation` (1, 2 or 3) and, on generation 3, a
+`paradigm`: the 63 firmware columns as arrays, one row per `raw_df` row, wells numbered
+1–12. `raw_df` no longer holds them.
+
+```python
+dfm.generation                    # 1, 2 or 3
+dfm.training_info                 # "flag", "none" or "phase"
+dfm.light_source                  # "OnMs, exact" or "OptoCol1, sampled at 5 Hz"
+dfm.light_seconds()               # seconds lit, wells 1-12
+state = dfm.paradigm              # None before generation 3
+state.interval_runs()             # runs of rows per Program Interval and Cycle
+state.activation_onsets(1)        # rows where well 1's Activations rose
+state.training_end(1)             # first Main row under a ratio Paradigm
+state.requirement_met(1, onset)   # the Requirement that Activation met
+```
+
+**Roles** (`pyflic.base.opto_roles`): `dfm_linkage_view(dfm, section)` gives a DFM's light
+circuits and trigger wells, from the program or the data, and
+`chamber_roles(view, dfm_chamber_map(dfm))` its chambers' Roles.
+
+**The light table** (`pyflic.base.light_summary`): `light_summary(exp)` and
+`light_wells(exp)` return the per-chamber and per-well tables, `light_summary_facet(exp)`
+and `light_wells_facet(exp)` the same per Facet, and `write(exp)` writes all four into
+`analysis/`. `HEADLINE_METRICS` names the four tested by default.
+
+**Program Facets** (`pyflic.base.program_facets`): `exp.facet_source` is `cutoffs`,
+`program` or `program_cycles`; `exp.facet_windows_for(dfm_id)` gives a DFM's Facets, each a
+label with one or more `(start, end)` windows.
+
+**Messages** (`pyflic.base.messages`): `read(data_dir)` returns `Messages.csv` as a table
+(`DFM, Time, Index, Message, MsgType`), empty when there is none; `for_dfm(frame, dfm_id)`
+and `errors(frame)` filter it.
+
+**The Program timeline** (`pyflic.base.program_timeline`): `plot_dfm(exp, dfm_id,
+binsize_min=10)` returns the figure, `well_table(exp, dfm_id)` the state of each well at the
+end of the loaded range, and `write(exp)` saves every DFM's figure to `qc/program/`.
+
+A `ProgressiveRatioExperiment` adds `exp.training_information()` (the *no training
+information* text, or `None`) and `exp.test_paradigm(dfm_id, group)` (the name and the
+Paradigm of a group's Test). See [Generations](concepts-optogenetics.md#generations).
 
 ## DFM objects
 

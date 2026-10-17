@@ -94,8 +94,13 @@ load a config that states one. What each setting does is in
 Once the experiment is known to be optogenetic — the setting is `yes`, `data/` holds a
 `Program.txt`, or a run has already written its light QC — an *Optogenetic light QC*
 section shows the thresholds, shared by every type, under the same rule as the rest: grey
-defaults, and only what you type is written. See
-[Optogenetic experiments](concepts-optogenetics.md).
+defaults, and only what you type is written. Five of them apply to firmware 4.0.0
+recordings only. See [Optogenetic experiments](concepts-optogenetics.md#thresholds).
+
+**Facet source** on the Experiment tab says where the Facets come from: minute cutoffs (the
+default), or the Program Intervals of `Program.txt`, with or without their Cycles pooled.
+A type that owns its Facets, such as Progressive Ratio, greys it out. See
+[Program Facets](concepts-facets.md#program-facets).
 
 **A member's config shows the design read-only.** Opened on a Project's member, the
 editor fills the global settings from `project.yaml`, marks them read-only with a banner,

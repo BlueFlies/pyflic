@@ -7,7 +7,12 @@ how much. If your rig recorded light state, pyflic can split every metric by lig
 
 If a DFM's CSV contains an **`OptoCol1`** column — and optionally **`OptoCol2`** — pyflic
 decodes the per-well light on/off state from those bit-encoded values and stores it
-alongside the signal.
+alongside the signal. `OptoCol1` is a snapshot, taken five times a second: a light that came
+on and went off between two snapshots is not in it.
+
+A recording from DFM firmware 4.0.0 also carries **`OnMs`** for every well: how many of the
+record's 200 milliseconds its LED was on, from any cause. pyflic uses it wherever it exists,
+because it is exact. See [Generations](concepts-optogenetics.md#generations).
 
 No `OptoCol1` column means no light information. Nothing fails; the light-phase features
 simply have nothing to report and the light columns read zero. If you expected light data
@@ -27,6 +32,13 @@ dark phases and reports metrics for each, exported with these columns:
 DFM, Chamber, Treatment, Phase (light/dark), PhaseSeconds, Licks, Events, ...
 ```
 
+**The phase is each chamber's own.** A sample is *light* for a chamber when one of its own
+wells is lit: its `OptoCol1` bit, or on a firmware 4.0.0 recording its `OnMs` above zero.
+Light a well receives through its linkage group counts, because the fly sees it. Until
+firmware 4.0.0 support the phase was the whole DFM's: any lit LED put every chamber of the
+DFM in *light*. On a recording whose chambers were lit at different times the numbers
+change, and they are now the right ones.
+
 `PhaseSeconds` is what makes the rest comparable. Light and dark phases are rarely equal
 in length across a recording — a run that starts mid-afternoon has an unequal first
 phase — so raw counts per phase are not comparable until you normalise by the time spent
@@ -35,7 +47,9 @@ that is really just a difference in exposure.
 
 **Per-well light-on seconds.** The feeding summary carries `OptoOn_sec` for each chamber
 (`OptoOn_sec_A` and `OptoOn_sec_B` for two-well chambers), giving the total time the light
-was on for that well.
+was on for that well. On a firmware 4.0.0 recording it is the sum of `OnMs`; before, it
+counts the lit `OptoCol1` snapshots, one sample period each. `summary.txt` says which, per
+DFM, under *light seconds from*.
 
 ## Optogenetics
 
@@ -46,7 +60,8 @@ unchanged.
 
 An experiment with light in these columns also gets the **optogenetic light QC**, which
 checks that the light was where the licks were and reads the MCU's `Program.txt` for the
-thresholds, linkage and decay behind it. See
+thresholds, linkage and Paradigms behind it, and the **light table**, which says what each
+chamber's light did. Its feeding-summary rows gain `Role`, `LitSec` and `Activations`. See
 [Optogenetic experiments and the light QC](concepts-optogenetics.md).
 
 ---

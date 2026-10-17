@@ -31,9 +31,11 @@ The recording has two phases:
 1. **Training.** Closed loop: every sucrose feed by the paired fly turns
    the light on. The firmware marks training in the data, and each group
    finishes training at its own time, when its paired fly has done so.
-2. **Test.** The firmware demands progressively more licks for each light
+2. **Test.** The firmware demands progressively more feeding for each light
    event. A fly that finds the light rewarding keeps working as the price
-   rises, up to a point.
+   rises, up to a point. From DFM firmware 4.0.0 the price is counted in
+   feeding bouts, and a fixed ratio, the same price every time, is possible
+   too.
 
 The analysis asks three questions:
 
@@ -57,16 +59,40 @@ Two rules run through everything:
 
 ### Data you need
 
-- **Version-3 DFM files with light data (`OptoCol1`).** The training flag
-  and the light state both live there. Without them no group ever finishes
-  training, and every group is removed.
+What the DFM files must hold depends on the firmware that recorded them.
+pyflic reads the shape of each DFM's file and calls it its **generation**:
+
+| Generation | Recorded by | Training is read from | Light events are read from |
+|---|---|---|---|
+| 1 | PyMCU 3.x, DFM firmware before 4.0.0 | a flag inside the sucrose well's signal | onsets of the light in `OptoCol1` |
+| 2 | PyMCU 4.0.0, DFM firmware before 4.0.0 | nowhere: no training information | onsets of the light in `OptoCol1` |
+| 3 | PyMCU 4.0.0, DFM firmware 4.0.0 | the paired sucrose well's Phase column | the paired sucrose well's Activations |
+
+- **Generation 1 needs version-3 DFM files with light data (`OptoCol1`).**
+  The training flag and the light state both live there. Without them no
+  group ever finishes training, and every group is removed.
+- **Generation 2 has no training information at all.** Its groups are
+  kept, each as one `Recording` phase with no Test, no breaking point and no
+  sucrose persistence (section 5.1).
+- **Generation 3 records Training, every light event and the requirement it
+  met** in its own columns, and the light exactly.
 - **Both wells named:** well A is the sucrose well, well B the yeast well.
-- **The MCU's `Program.txt` (recommended).** The MCU writes the program it
-  ran back out as `Program.txt`; copy it into the member's `data/` folder,
-  beside the DFM files. It tells pyflic each well's threshold, the linkage
-  and the light decay, which the light QC needs to judge the light
-  properly, and it can name the paired chambers for you. Without it the
-  analysis still runs, with a more limited light QC.
+- **The MCU's `Program.txt`.** The MCU writes the program it ran back out as
+  `Program.txt`; copy it into the member's `data/` folder, beside the DFM
+  files. pyflic reads both the PyMCU 4.0.0 export and the older one. It
+  tells pyflic each well's threshold, the linkage and the light's rule — its
+  **Paradigm**: ProgressiveRatio or FixedRatio, with its settings — which
+  the light QC needs to judge the light properly, and it can name the paired
+  chambers for you. Without it the analysis still runs, with a more limited
+  light QC. **On generation 3 it is all but required:** the data name each
+  Paradigm but not its type, so without the file a fixed ratio cannot be
+  told from a progressive one, and pyflic warns loudly (*firmware 4.0.0
+  recording without Program.txt*).
+
+A firmware 4.0.0 program usually runs a ClosedLoop Paradigm first, then the
+ratio Paradigm, or a ratio Paradigm whose `Acclimation` setting gives each
+fly a set number of closed-loop light events first. Either way that opening
+is Training.
 
 ### Setting up the experiment
 
@@ -198,7 +224,7 @@ them for the whole Project, never for one member.
 | `min_untransformed_licks_cutoff` | 20 | removes a chamber whose sucrose or yeast well has fewer licks than this over the whole recording, counted before any transform |
 | `max_med_duration_cutoff` | 13.0 | removes a chamber whose median feeding-event duration at either well is above this (a sign of a stuck or bleeding signal) |
 | `max_events_cutoff` | 150000 | removes a chamber with an implausible number of events at either well |
-| `require_training_complete` | true | removes **both** chambers of a group whose paired fly never finished training |
+| `require_training_complete` | true | removes **both** chambers of a group whose paired fly never finished training; a generation-2 group, which has no training information, is kept |
 | `exclude_failed_pr_groups` | true | removes **both** chambers of a group that fails the light QC |
 
 The optogenetic light QC has its own switch, `exclude_failed_opto_chambers`,
@@ -226,13 +252,22 @@ section 5.2. Its settings, with their defaults:
 | `opto_unexplained_warn_fraction` | 0.10 | a group whose lit time is this fraction unexplained by licks gets a warning |
 | `opto_unexplained_fail_fraction` | 0.30 | this fraction fails the group |
 | `opto_unexplained_min_sec` | 30 | seconds of unexplained light needed before either is judged |
-| `opto_default_decay_ms` | 1000 | the light decay assumed without `Program.txt` |
-| `opto_decay_tolerance_samples` | 2 | slack, in samples, around the decay |
+| `opto_default_decay_ms` | 1000 | the light's Hold assumed without `Program.txt` |
+| `opto_decay_tolerance_samples` | 2 | slack, in samples, around the Hold |
 | `opto_unlit_feeding_fraction` | 0.50 | in a closed-loop interval, this share of feeding bouts that never lit the group is a warning |
 | `opto_open_loop_min_lit_fraction` | 0.95 | an open-loop interval lit for less than this share of its time is a warning |
+| `opto_event_disagreement_warn_fraction` | 0.25 | firmware 4.0.0: a paired sucrose well whose firmware-counted feeding bouts and pyflic's differ by more than this share is a warning |
+| `opto_yoking_fail_fraction` | 0.01 | firmware 4.0.0: a group whose yoked light differs from the paired light by more than 1 ms in more than this share of its lit records fails |
+| `opto_lost_records_warn` | 25 | firmware 4.0.0: more records lost than this is a warning for the DFM |
+| `opto_unknown_rows_warn_fraction` | 0.01 | firmware 4.0.0: more than this share of rows under an instruction outside the program is a warning for the DFM |
+| `opto_late_records_warn` | 10 | firmware 4.0.0: more late records than this is a warning for the DFM |
 
-[Checking your data](qc-user-guide.md), section 6, describes the checks
-these settings drive.
+The last five apply only to firmware 4.0.0 recordings, and their defaults
+have no real recording behind them yet. [Checking your data](qc-user-guide.md),
+section 6, describes the checks these settings drive.
+
+This type owns its phases, so its design never states `facet_cutoffs` or
+`facet_source`.
 
 ### Breaking point
 
@@ -256,8 +291,9 @@ smallest p-value. pyflic does not know the time of day, so a long night
 pause ends a count like any other.
 
 **Choosing `pr_test_window_min`.** Each group is watched from its own
-training end to the end of the recording, so a group that trained late gets
-less Test time and is more likely to be censored (section 5.6). The
+training end to the end of the recording — on firmware 4.0.0, to the end of
+the ratio Paradigm's run — so a group that trained late gets less Test time
+and is more likely to be censored (section 5.6). The
 `TestMinutes` column of `pr_breaking_point.csv` shows each group's window.
 If those windows differ a lot, set `pr_test_window_min` to a value no longer
 than the shortest one: every group is then judged over the same span. It
@@ -276,19 +312,50 @@ only the smoothness of the curve, not any statistic.
 
 ### 5.1 Training
 
-A group's **training end** is the last minute its paired fly's sucrose well
-carries the firmware's training flag. The other three wells of the group
-normally clear at the same moment. If they don't, the difference appears as
-a *training-flag note* in `summary.txt` and the report. These notes are QC
-information, not errors: the analysis always follows the paired sucrose
-well.
+Where a group's **training end** comes from depends on the recording's
+generation (section 2).
+
+**Generation 1.** The training end is the last minute its paired fly's
+sucrose well carries the firmware's training flag. The other three wells of
+the group normally clear at the same moment. If they don't, the difference
+appears as a *training-flag note* in `summary.txt` and the report. These
+notes are QC information, not errors: the analysis always follows the
+paired sucrose well.
+
+**Generation 3.** The firmware records each well's **Phase**: `A` while the
+well is in **Acclimation**, its opening run of closed-loop light events, and
+`M` (Main) after. The training end is the paired sucrose well's first row in
+`M` under the ratio Paradigm. Everything before it is Training, including a
+ClosedLoop interval that ran before the ratio Paradigm. The other three
+wells are `Off`, read `M` throughout and say nothing, so there are no
+per-well notes. The notes say instead:
+
+- *Training was empty*, when the ratio Paradigm had no Acclimation and no
+  interval before it. Training then ended at the program's first row, and
+  the group counts as having completed it.
+- why Training never completed: the paired sucrose well never ran a ratio
+  Paradigm, was still in Acclimation when the recording ended, or never
+  reached `M` under one;
+- *Paradigm restarted at Program Interval k*, when the well went back into
+  Acclimation later. The firmware starts a well afresh whenever the Paradigm
+  changes name.
+
+**Generation 2** records no Training at all. Nothing is removed for it:
+each group becomes one phase, `Recording`, with no Test, so no breaking
+point and no sucrose persistence, and it is never pooled with other
+members' Test. `TrainingComplete` is `NA`. `summary.txt`, the report's cover,
+the Hub's **Loaded** line, the Project Report's member table and the Stats
+text all say *no training information: recorded with DFM firmware older than
+4.0.0*.
 
 A group whose paired fly **never finished training** has no Test phase. It
 appears as `TrainingComplete = false`, and by default both its chambers are
 removed.
 
 **Where to look:** the report's *Progressive ratio: training* table (one row
-per group, with its training end) and the training-flag notes beneath it.
+per group, with its training end) and the training notes beneath it. On a
+firmware 4.0.0 recording the Program timeline (section 6) shows each well's
+Acclimation directly.
 
 ### 5.2 Light QC: did the paired fly earn its light?
 
@@ -300,6 +367,12 @@ the light on its own. pyflic sees a flat signal and no licks. The light
 then describes the sensor, not the fly, and every number built on it is
 meaningless. The light QC catches this, per group, over the whole
 recording.
+
+A **light event** is one onset of the group's light. On an older recording
+it is read from `OptoCol1`, which samples the light five times a second. On
+a firmware 4.0.0 recording it is an **Activation** of the paired sucrose
+well: the firmware's own record of each light it switched on for that well,
+exact to the record.
 
 | Check | What it means | Verdict |
 |---|---|---|
@@ -335,13 +408,24 @@ began. Two ways to use it:
 Whichever you choose, apply the same rule to every group, whatever its
 treatment.
 
-**Lick-free is decay-aware.** The firmware keeps the light on for its
-*decay* after the lick that earned it, and a brief touch it counts may read
-below pyflic's feeding threshold. A light event is therefore lick-free only
-when it has no sucrose lick since the previous one *and* no sucrose lick or
-touch within its decay — the decay `Program.txt` states, or
-`opto_default_decay_ms` without it. A light the fly touched for is never
-counted against it, and the breaking point counts it.
+**Lick-free allows for the Hold.** The firmware keeps the light on for its
+*Hold* after the contact that earned it (the old programs' *decay*), and a
+brief touch it counts may read below pyflic's feeding threshold. A light
+event is therefore lick-free only when it has no sucrose lick since the
+previous one *and* no sucrose lick or touch within its Hold — the one
+`Program.txt` states, or `opto_default_decay_ms` without it. A light the fly
+touched for is never counted against it, and the breaking point counts it.
+
+**The firmware's own count, on firmware 4.0.0.** The firmware counts the
+feeding bouts it saw at the paired sucrose well, its **Firmware Events**, and
+records how many each light event needed. pyflic measures their trend across
+the Test, `TrendRhoFirmware` in `pr_light_qc.csv`, beside the trend of
+pyflic's licks. The *no increasing trend* warning stays on pyflic's licks.
+When the firmware's count rises and pyflic's licks do not, the group gets a
+note instead: *the firmware counted rising Events per light event; pyflic's
+licks did not follow: check detection*. The fly worked to the schedule, and
+pyflic's detection missed some of it. Under a fixed ratio the requirement
+never rises, so no trend is judged at all.
 
 **The general optogenetic light QC runs beside this one.** It asks a
 simpler question of every linkage group — here, every chamber group — from
@@ -352,7 +436,10 @@ pyflic saw nothing is named as a drifting baseline. The two checks can
 disagree. On the first real dataset, a group lit for four hours during
 training passes this check, because one long light event is not a run of
 lick-free events, and fails the general one, because 93% of those four
-hours had no lick. A group the general check fails is flagged, not removed,
+hours had no lick. On a firmware 4.0.0 recording the general check also
+confirms the yoking: the yoked chamber's wells must count no light events of
+their own and get exactly the paired well's light, or the group fails for
+*broken yoking*. A group the general check fails is flagged, not removed,
 unless you switch on `exclude_failed_opto_chambers`. Its results are in
 `qc/opto/`, an *Optogenetic light QC* section of `summary.txt` and of the
 report, and the **Light explained by licks (QC)** figure. The QC Viewer's
@@ -438,15 +525,48 @@ before that pause: the last ratio it met. Some details:
   with a tick.
 - **The yoked fly has no breaking point.** Its light is its partner's, so
   there is nothing for it to have worked for.
-- **The unit is light events, not licks.** The firmware's lick schedule
-  isn't recorded in the data. `LargestRequirement`, the most licks credited
-  to one counted event, is given as a description only.
+- **The unit is light events, not licks.** Before firmware 4.0.0 the
+  firmware's schedule isn't recorded in the data, and `LargestRequirement`,
+  the most licks credited to one counted event, is given as a description
+  only.
+
+**The recorded Requirement (firmware 4.0.0).** A firmware 4.0.0 recording
+states, for every light event, the **Requirement** it met: the number of
+feeding bouts the firmware demanded for it. The breaking point is still the
+count of lick-backed light events, because a light with no lick is still the
+drifting-sensor signature. The Requirement is reported beside it:
+
+| Column | What it is |
+|---|---|
+| `BreakRequirement` | the Requirement the last counted light event met: the ratio the fly reached, in the firmware's own units |
+| `FirmwareEvents` | the feeding bouts the firmware counted for the counted light events |
+| `ParadigmType` | the Test Paradigm: `ProgressiveRatio` or `FixedRatio` |
+| `LargestRequirement` | the same as `BreakRequirement` here |
+
+Both reports show the break requirement beside the breaking point, and the
+Project Report adds its median per treatment.
+
+**Fixed ratio.** Under a FixedRatio Test Paradigm every light event needs the
+same number of feeding bouts. The same rule runs, and what it counts is the
+activations the fly earned before its first long pause. `BreakRequirement` is
+the constant ratio, no trend is judged, and the reports title the section
+**Fixed ratio: activations earned** (the Project Report when every pooled
+group ran a fixed ratio).
+
+**The end of the Test window.** On a firmware 4.0.0 recording the Test ends
+where the ratio Paradigm's run ends, not at the end of the recording. A
+ClosedLoop interval after it is not Test. Only the first ratio run is the
+Test: a later one is noted in `summary.txt`. `pr_test_window_min` caps the
+window after that, and `TestMinutes` is each group's.
 
 The file is `pr_breaking_point.csv`, one row per group, with `BreakingPoint`,
-`BreakMin`, `Censored`, `TestMinutes`, `LargestRequirement` and the group's
-light QC result. `pr_light_events.csv` lists every Test light event, with a
-`Counted` column showing which ones make up the breaking point. Use it to
-check any group by hand.
+`BreakMin`, `Censored`, `TestMinutes`, `LargestRequirement`,
+`BreakRequirement`, `FirmwareEvents`, `ParadigmType` and the group's light QC
+result. A generation-2 group has no row: it has no Test. `pr_light_events.csv`
+lists every Test light event, with a `Counted` column showing which ones make
+up the breaking point; on firmware 4.0.0 each event also carries the
+`Requirement` it met, the `FirmwareEvents` since the previous one and its
+`Phase`. Use it to check any group by hand.
 
 ### 5.7 Sucrose persistence
 
@@ -490,7 +610,15 @@ only from each other.
 
 **Breaking point by treatment** (reports). One point per group, with mean ±
 SEM. **Open symbols are censored**: the true value is at least that high.
-If one treatment has many open symbols, its mean understates it.
+If one treatment has many open symbols, its mean understates it. Under a
+fixed ratio the section is titled *Fixed ratio: activations earned*, and
+the points are the activations each fly earned before its first long pause.
+
+**Light behaviour** (reports). One point per paired chamber for each of the
+light table's headline measures — light events (Activations), lit time,
+the firmware's feeding bouts and the end of Acclimation — by treatment,
+with the treatment comparisons. On an older recording only lit time is
+there.
 
 **Still-responding curve** (`pr_still_responding.png`). For each treatment,
 the fraction of paired flies that reached each ratio: 1.0 at ratio 0,
@@ -550,15 +678,32 @@ optogenetic light QC's figure: one row per group, with its wells and its
 optogenetic verdict in the strip. The left panel is the group's lit time
 per bin, 10 minutes when basic analysis draws it: grey-blue where a lick or
 touch at the paired sucrose well explains it, and red where nothing does.
-The right panel, drawn when `Program.txt` is in `data/`, is orange where
-the firmware read the paired sucrose well as touched while pyflic saw
-nothing.
+The right panel is orange where the firmware saw contact and pyflic saw
+nothing: on an older recording, drawn when `Program.txt` is in `data/`, the
+time pyflic's re-run of the firmware's test read the well as touched; on a
+firmware 4.0.0 recording, the light of the light events the firmware
+switched on with no lick or touch at their onset.
 
 - Red beside orange in the same bins is a drifting well: the light
   followed the sensor.
 - Red with no orange is light the firmware had no reason to switch on.
 - [Checking your data](qc-user-guide.md), section 6.7, covers the other
   colours.
+
+**Program timeline** (`qc/program/program_timeline_dfm<id>.png`; firmware
+4.0.0 recordings, or older ones with `Program.txt`). For one DFM, the
+program it ran — a band of intervals coloured by Paradigm, such as the
+ClosedLoop opening and then `PR10` — above one lane per well. Each paired
+sucrose well's lane shows its Acclimation shaded, its light events as ticks
+and its light as a blue strip; its yoked partner's lane should show the same
+strip and no ticks.
+
+- The shading should end in the first interval: that is the training end.
+  A well shaded to the end never finished training.
+- Ticks thin out as the requirement rises. A dense comb of ticks while the
+  paired fly's licks are flat is self-triggered light.
+- A yoked lane with ticks, or a different strip, is broken yoking.
+- [Checking your data](qc-user-guide.md), section 6.8, covers the rest.
 
 ---
 
@@ -667,6 +812,13 @@ the same device, or in the same recording, as independent.
 |---|---|---|
 | Every group removed, with "training never completed" | a v2 file or no light data: no training flags | check the DFM files are version 3 with `OptoCol1` |
 | "no training flag on any well of group *g*" | same as above, or the run never entered training | as above |
+| "no training information: recorded with DFM firmware older than 4.0.0" | PyMCU 4.0.0 recorded a DFM whose firmware was not updated: there is no record of Training | nothing is removed; each group is one `Recording` phase with no breaking point. Update the DFM's firmware for the next recording |
+| "firmware 4.0.0 recording without Program.txt" | the program was not copied into `data/` | copy the `Program.txt` PyMCU exported for this recording and run again; without it a fixed ratio is taken as progressive |
+| "paired Sucrose Well W*n* never reached Phase M under a ratio Paradigm" | the fly never finished Acclimation, or the ratio Paradigm never ran | check the Program timeline; the group is removed like any group that never finished training |
+| "Training was empty" | the ratio Paradigm had no Acclimation and nothing ran before it | nothing: Training ended at the start, and every light event is Test |
+| "Paradigm restarted at Program Interval *k*" | a later interval named a different Paradigm, so the firmware started the well afresh | check the program was the one you meant; only the first ratio run is the Test |
+| A group failed for **broken yoking** | the yoked chamber's light differed from the paired chamber's, or a yoked well counted light events of its own | check the lid's wiring and the program's linkage; the yoked fly did not get its partner's light |
+| "the firmware counted rising Events per light event; pyflic's licks did not follow" | the fly worked to the schedule, and pyflic's detection missed some of its feeding | look at the paired sucrose well's baselined trace and the detection parameters |
 | A group failed for **self-triggered light** | the sucrose well's resting level drifted, so the light fired on its own | look at *Sucrose Well resting level*; the group is correctly excluded |
 | A group failed for **implausible training** | training was completed by the sensor, not the fly | check the well and the fly; the group is correctly excluded |
 | Almost every breaking point is censored (`n+`) | the Test window is short compared with `pr_break_gap_min` | record longer, or reconsider the gap; don't shorten the gap to get a result |

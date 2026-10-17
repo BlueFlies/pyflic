@@ -36,9 +36,9 @@ The last facet always runs to the end of the recording, so nothing is lost at th
 ## Named phases
 
 An Experiment Type can name its phases. Progressive Ratio's Facets are `Training` and
-`Test` — and for that type alone the boundary is not a minute in the config but each
-chamber group's own training end, read from the data. Its config never states
-`facet_cutoffs`; the `Facet` column still carries one label per row, so every plot and
+`Test` — and for that type the boundary is not a minute in the config but each chamber
+group's own training end, read from the data. Its config never states `facet_cutoffs` or
+`facet_source`; the `Facet` column still carries one label per row, so every plot and
 statistic that reads Facets works unchanged. See
 [Experiment types](concepts-experiment-types.md).
 
@@ -52,12 +52,74 @@ global:
   facet_labels: [Early, Late]
 ```
 
+## Program Facets
+
+An optogenetic recording can take its Facets from its program instead of from minutes. Set
+`facet_source` in the design:
+
+```yaml
+global:
+  facet_source: program
+```
+
+| `facet_source` | Facets |
+|---|---|
+| `cutoffs` (the default) | `facet_cutoffs`: the same minute windows on every DFM |
+| `program` | one per **Program Interval** of each DFM's program, its Cycles pooled |
+| `program_cycles` | one per Program Interval and Cycle |
+
+Every metric is then split by what the program ran: the feeding summary, the
+[light table](concepts-optogenetics.md#the-light-table), the reports and the faceted
+figures.
+
+**Labels.** A Facet is named after its Paradigm, such as `Closed` or `PR10`. When any DFM
+runs the same Paradigm in two Program Intervals, that Paradigm's labels add the interval,
+`I<k>`, on every DFM: a program of open-loop light on, then off, gives `I1 Open` and
+`I2 Open`. Under `program_cycles` the
+label adds the Cycle, `C<n>`, as in `PR10 C1`. A label depends on the Paradigm and the
+interval only, never on the DFM, so pooling a Facet across DFMs, or across the members of a
+Project, pools chambers that ran the same Paradigm.
+
+**Pooled Cycles.** A Repeating program runs its intervals again and again. Under `program`
+each interval's Cycles form one Facet of several separate windows, and `FacetRange` lists
+them all. `program_cycles` keeps each pass apart.
+
+**Each DFM has its own windows.** Two DFMs running different programs have different Facets.
+A Facet a DFM's program never ran has no rows for that DFM. The Facet list is every label
+any DFM has, in the order they began.
+
+**What belongs to no Facet.** The baseline before the program's first instruction reached
+the DFM, and rows recorded under an instruction outside the program. Whole-recording tables
+still include them.
+
+**By generation.** A firmware 4.0.0 recording (generation 3) states its Program Interval
+and Cycle on every row, so its Facets are exact. An older recording does not, so its Facets
+are laid out from the program's clock schedule. `summary.txt` notes each such DFM as
+*Program Facets from the clock schedule: approximate*, and the report's cover says so.
+
+**Errors.** `pyflic lint` reports each of these, and the loader refuses the config:
+
+- `facet_source: program` or `program_cycles` without a `data/Program.txt`, or with a
+  `Program.txt` that has no section for a DFM in the config;
+- `facet_cutoffs` stated beside `facet_source: program`: the two cannot both decide the
+  Facets;
+- a `facet_source` that is not one of the three values;
+- `facet_source` under the Progressive Ratio type, which owns its Facets.
+
+`facet_labels` is ignored under Program Facets, with a warning: the Paradigm names the
+Facets.
+
+The Project Design dialog and the Config Editor have a **Facet source** picker. See
+[Optogenetic experiments](concepts-optogenetics.md#program-facets).
+
 ## Facets in a Project
 
-`facet_cutoffs` (with `facet_labels`) sits in the design's `global:` block — the Project
-Design dialog's **Facet cutoffs** and **Phase names** fields — and is part of the design, so every member in a Project is windowed
-identically by construction. There is nothing to reconcile at pooling time — which is the
-whole point.
+`facet_cutoffs` (with `facet_labels`) and `facet_source` sit in the design's `global:` block
+— the Project Design dialog's **Facet source**, **Facet cutoffs** and **Phase names** fields
+— and are part of the design, so every member in a Project is windowed by the same rule by
+construction. There is nothing to reconcile at pooling time — which is the whole point.
+Program Facets pool by label: every member's `PR10` Facet is one Facet in the Combined
+Analysis.
 
 Facets are also what make the faceted publication figures possible: a plot with one panel
 per phase has no meaning while windows are directories. See

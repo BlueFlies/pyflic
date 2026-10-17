@@ -250,7 +250,10 @@ In outline:
 1. **Make a folder for the recording**, outside the pyflic folder, with a `data`
    folder inside it. Copy the DFM files from the rig into `data`. For an optogenetic
    recording, copy the `Program.txt` the MCU exported into `data` as well: pyflic uses it
-   to check that the light followed the flies.
+   to check that the light followed the flies. pyflic reads both kinds of `Program.txt`,
+   the one PyMCU 4.0.0 writes (with a `Paradigms:` block) and the older one. A recording
+   from DFM firmware 4.0.0 needs it most: without it the kind of each light rule is
+   unknown, and pyflic warns.
 
    ```
    my_experiment/

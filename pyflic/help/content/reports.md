@@ -17,11 +17,30 @@ control section stands on the chambers that remain.
 
 | Section | What is in it |
 |---|---|
-| **Cover** | What was recorded (DFMs, dates, hours), the treatments with their chamber counts, design factors, wells, Facets, whether licks are transformed; **At a glance** — data integrity, exclusions and the type's own QC verdicts as coloured callouts; the contents |
-| **1 Quality control** | Data integrity per DFM (samples, hours, data breaks, firmware error flags, a continuous sample index); for two-well layouts, simultaneous feeding per chamber and the largest bleeding response between wells; every excluded chamber and why; for an optogenetic experiment, the optogenetic light QC — the program as read, the verdict per linkage group and the figure per DFM; then the Experiment Type's own checks |
-| **2 Results** | The figures the assay is read by, each with its treatment statistics |
+| **Cover** | What was recorded (DFMs, dates, hours), the **Generation** of each DFM's data file, and for an optogenetic member where its **Lit time** came from; the treatments with their chamber counts, design factors, wells, Facets, whether licks are transformed; **At a glance** — data integrity, exclusions and the type's own QC verdicts as coloured callouts; the contents |
+| **1 Quality control** | Data integrity per DFM; for two-well layouts, simultaneous feeding per chamber and the largest bleeding response between wells; the Program timeline of each DFM that has one; every excluded chamber and why; for an optogenetic experiment, the optogenetic light QC — the program as read, the verdict per linkage group and the figure per DFM; then the Experiment Type's own checks |
+| **2 Results** | The figures the assay is read by, each with its treatment statistics; for an optogenetic member, **Light behaviour** after them |
 | **Appendix A** | Every feeding-summary metric by treatment, for reference |
 | **Appendix B** | The detection parameters and the `constants:` block the analysis used |
+
+**The cover.** The **Generation** line says what shape of file each DFM wrote: 1 for 27
+columns from older firmware, 2 for 90 columns with the firmware 4.0.0 columns empty, 3 for
+firmware 4.0.0 data (see [Generations](concepts-optogenetics.md#generations)). DFMs that
+differ are listed separately. **Lit time from** reads *OnMs, exact* for a firmware 4.0.0 DFM
+and *OptoCol1, sampled at 5 Hz* otherwise. *At a glance* warns about a firmware 4.0.0
+recording whose `Program.txt` is missing, and about a recording with no training
+information.
+
+**Quality control.**
+
+- **Data integrity** gives each DFM its samples, start, hours, whether the sample index is
+  continuous, the **Lost records** its index skipped, its data breaks and its firmware error
+  flags. A DFM is *ok* with none of these, otherwise *warning*.
+- **Simultaneous feeding** shows each chamber's samples licked on both wells at once
+  *before* the dual-feeding correction — the crosstalk found — beside the count *after* it,
+  which the correction drives to zero. With the correction off the two agree.
+- **Program timeline**: one figure per DFM with a `Program.txt` section or firmware 4.0.0
+  data. See [Program timeline](plots-catalog.md#program-timeline).
 
 **Results by type.** A two-well experiment gets **Preference** — the preference index and
 event PI by treatment, per Facet, and PI over time — then **Consumption** (licks, events and
@@ -32,9 +51,18 @@ fly with its own yoked control, with the **cumulative difference curve**, the **
 yoked difference** in the Test phase, tested between treatments and against zero within each
 treatment, and the **breaking point**: the lick-backed Test light events each paired fly
 completed before its first pause longer than `pr_break_gap_min`, with the still-responding
-curve, its per-group table and the per-DFM licks-per-light-period plots. Its Quality control
-section adds the training table and the
+curve, its per-group table and the per-DFM licks-per-light-period plots. On firmware 4.0.0
+data the table shows `BreakRequirement`, the Requirement the last counted event met, beside
+it. When every group's Test Paradigm is a FixedRatio the section is titled **Fixed ratio:
+activations earned**. Its Quality control section adds the training table and the
 [light QC](concepts-progressive-ratio.md#light-qc) with its three figures per DFM.
+
+**Light behaviour.** An optogenetic member of any type gets this section after the feeding
+results, from its [light table](concepts-optogenetics.md#the-light-table): a dot plot per
+headline metric — Activations, lit time, Firmware Events and the end of Acclimation — by
+treatment, per Facet when there are Facets, with the treatment comparisons. A metric no
+Paradigm of the recording defines is left out and named. A Progressive Ratio member compares
+its paired chambers only.
 
 **Statistics.** Under each figure: two treatments, Welch's t-test; more, Tukey HSD on every
 pair; p < 0.05 highlighted. One observation per chamber (per chamber group for a
@@ -54,10 +82,24 @@ builds the Combined Analysis first when there is none.
 | Section | What is in it |
 |---|---|
 | **Cover** | The Project, its members, pooled chambers and treatments, factors and Facets; **At a glance** — missing members, exclusions, the type's QC flags; the contents |
-| **1 Members** | One row per member: DFMs, chambers analysed and excluded, whether its analysis is current, whether it has a report |
+| **1 Members** | One row per member: DFMs, the **Generation** of its recordings, chambers analysed and excluded, whether its analysis is current, whether it has a report, and a **Note** for a member with no training information |
 | **2 Quality control** | Every excluded chamber across members with its reason; every group a light QC flagged — Progressive Ratio chamber groups and optogenetic linkage groups, marked by source — and whether the pooled numbers include it |
-| **3 Results** | The type's pooled figures (the Plot Editor's styles), the type's own pooled figures (Progressive Ratio: the breaking point, led by its still-responding curve, and the paired − yoked difference), and the statistics as tables — pooled test and linear mixed model (DFM nested within experiment) side by side, with the log-rank test for the breaking point and the paired − yoked difference tested against zero |
+| **3 Results** | The type's pooled figures (the Plot Editor's styles), the type's own pooled figures (Progressive Ratio: the breaking point, led by its still-responding curve, and the paired − yoked difference), and the statistics as tables — pooled test and linear mixed model (DFM nested within experiment) side by side, with the log-rank test for the breaking point and the paired − yoked difference tested against zero; then **Light behaviour** for a Project with optogenetic members |
 | **Appendix** | The Design's detection parameters and constants |
+
+The **Generation** column is read from each member's saved outputs, so it needs no load. The
+**Note** column appears only when some member needs one: *no training information*, for a
+member recorded with DFM firmware older than 4.0.0.
+
+**Light behaviour** pools every optogenetic member's light table
+(`<project>_LightSummary.csv`) the way the feeding metrics are pooled: a faceted figure per
+headline metric and the treatment comparisons, per chamber. Members recorded before firmware
+4.0.0 contribute lit time only.
+
+For a Progressive Ratio Project the breaking point section adds the median
+`BreakRequirement` per treatment beside the median breaking point, when any member recorded
+one. When every pooled group ran a FixedRatio Test, the section is titled **Fixed ratio:
+activations earned**.
 
 An optional AI summary follows the results when one has been written; it is marked as
 written by a language model.

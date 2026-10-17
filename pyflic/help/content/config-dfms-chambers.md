@@ -59,6 +59,29 @@ DFM that ran without an Optolid, say. It takes `auto`, `true` or `false`; left o
 inherits. It is a fact about the recording, so it stays free inside a Project. See
 [Optogenetic experiments](concepts-optogenetics.md#turning-it-on).
 
+## Roles are read, not written
+
+On an optogenetic DFM every chamber gets a **Role** — Paired, Yoked, Mutual, Self, Open or
+Unlit — that says what it was to the light. pyflic reads it from `Program.txt`'s linkage and
+thresholds, or on a firmware 4.0.0 recording from the data. You never write it, and it is
+not a treatment: do not declare it as a design factor. It appears as a `Role` column beside
+`Treatment`. A Progressive Ratio DFM is the one case you state, with `paired_chambers`, and
+the program is checked against it. See
+[Optogenetic experiments](concepts-optogenetics.md#roles).
+
+## DFM 99 is the Environmental Monitor
+
+ID 99 belongs to the Environmental Monitor, which records the rig's temperature, humidity
+and light, not to a DFM. pyflic never reads it as one:
+
+- a new member's `dfms:` block never gets an entry for it;
+- a config that names `99` under `dfms:` is refused, and `pyflic lint` reports it, with
+  *DFM 99 is the Environmental Monitor, not a DFM*. Remove the entry;
+- its file is left alone. PyMCU names it `EnvMon_<n>.csv`, and a `DFM99_<n>.csv` is not read
+  either.
+
+Each DFM's own rows already carry the monitor's readings (`Temp`, `Humid`, `LUX`).
+
 ## How chambers map to wells
 
 Chamber numbering depends on the chamber layout, which the Experiment Type fixes (or a

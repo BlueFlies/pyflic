@@ -40,7 +40,8 @@ An Experiment Type adds its own — a Progressive Ratio experiment writes its di
 table, light QC, breaking point and figures too
 ([Progressive Ratio experiments](concepts-progressive-ratio.md#outputs)). An optogenetic
 experiment of any type also gets the optogenetic light QC, in `qc/opto/`: was the light
-where the licks were? See [Optogenetic experiments](concepts-optogenetics.md).
+where the licks were? It also gets the light table, `analysis/light_summary.csv`: what each
+chamber's light did. See [Optogenetic experiments](concepts-optogenetics.md).
 
 **PDF report** on the same panel writes `analysis/experiment_report.pdf`: quality control,
 the type's results with statistics, and the parameters used. See [Reports](reports.md).
