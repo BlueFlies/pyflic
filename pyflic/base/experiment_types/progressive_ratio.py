@@ -105,22 +105,31 @@ def paired_from_program(dfm_program, chamber_sets=None, pi_direction: str = "lef
     Opto Program: in each Chamber Group, the chamber holding the program's
     Trigger Well is the Paired one.
 
+    The trigger chambers are the ones :func:`~pyflic.base.opto_roles.chamber_roles`
+    gives a trigger Role (Paired, Mutual or Self) from the section's
+    :class:`~pyflic.base.opto_roles.LinkageView`; with the usual linkage (a
+    Chamber Group's four wells as one Linkage Group) that Role is Paired and
+    the partner's is Yoked.
+
     *chamber_sets* and *pi_direction* are the DFM's (its wells per chamber,
     left first, and the side of well A).  *problems* say why no answer could be
     given — a group with no trigger well, or one in both chambers; *notes* flag
     a trigger well that is well B, since the Sucrose Well is always well A.
     """
     from ..opto_program import wells_label
+    from ..opto_roles import TRIGGER_ROLES, chamber_map, chamber_roles, linkage_view
 
     sets = [tuple(int(w) for w in row)
             for row in (chamber_sets if chamber_sets is not None else _DEFAULT_CHAMBER_SETS)]
-    chamber_of = {w: i + 1 for i, row in enumerate(sets) for w in row}
-    triggers = set(dfm_program.trigger_wells())
+    chamber_of = chamber_map(sets)
+    view = linkage_view(dfm_program, None, None)
+    roles = chamber_roles(view, chamber_of)
+    triggers = set(view.trigger_wells)
     paired: list[int] = []
     problems: list[str] = []
     notes: list[str] = []
     for g, (a, b) in CHAMBER_GROUPS.items():
-        hit = sorted({chamber_of[w] for w in triggers if chamber_of.get(w) in (a, b)})
+        hit = sorted(c for c in (a, b) if roles.get(c) in TRIGGER_ROLES)
         if len(hit) == 1:
             paired.append(hit[0])
         elif not hit:
