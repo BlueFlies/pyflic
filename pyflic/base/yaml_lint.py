@@ -261,6 +261,7 @@ def lint_flic_config(path: str | Path) -> list[LintIssue]:
                                         where=f"dfms.{dfm_id}.{_opto.SETTING_KEY}")
         if problem:
             _emit(issues, "error", problem, path=f"dfms.{dfm_id}.{_opto.SETTING_KEY}")
+        _lint_program_present(issues, path, g, dfm_id, dfm, program)
 
         chambers = dfm.get("chambers") or dfm.get("Chambers")
         ## Per-DFM constraints the Experiment Type imposes (Progressive
@@ -315,6 +316,54 @@ def lint_flic_config(path: str | Path) -> list[LintIssue]:
                         )
 
     return issues
+
+
+#: Rows of a DFM's first data file read to tell its Generation.  The
+#: firmware fills ``Phase`` on every 4.0.0 row, the lead-in included, so the
+#: first rows say what the whole file is without loading it.
+_GENERATION_SAMPLE_ROWS = 300
+
+
+def _file_generation(data_dir: Path, dfm_id: int) -> int | None:
+    """The Generation of *dfm_id*'s data, from the header and first rows of
+    its first ``DFM<id>_*.csv``; ``None`` when there is none or it cannot
+    be read (the loader reports that)."""
+    import pandas as pd
+
+    from .paradigm_state import detect_generation
+    from .utils import natural_sorted
+
+    files = natural_sorted(Path(data_dir).glob(f"DFM{int(dfm_id)}_*.csv"))
+    if not files:
+        return None
+    try:
+        head = pd.read_csv(files[0], nrows=_GENERATION_SAMPLE_ROWS)
+    except (OSError, ValueError):
+        return None
+    return detect_generation(head)
+
+
+def _lint_program_present(issues: list[LintIssue], path: Path, g: dict, dfm_id: int,
+                          dfm: dict, program) -> None:
+    """Decision 4: a firmware 4.0.0 recording (generation 3) names each
+    Paradigm row by row, but only ``Program.txt`` gives its type and
+    settings, so a DFM without its section is warned of loudly.  Not for a
+    DFM whose light QC is switched off (``optogenetics: no``), which reads
+    no Paradigm."""
+    from . import opto_program as _opto
+    from .opto_light import lacking_program, no_program_warning
+
+    setting = dfm.get(_opto.SETTING_KEY)
+    if setting is None:
+        setting = g.get(_opto.SETTING_KEY)
+    try:
+        if _opto.normalize_setting(setting) == _opto.SETTING_NO:
+            return
+    except ValueError:
+        pass                                   # reported as an error above
+    generation = _file_generation(path.parent / "data", dfm_id)
+    if generation is not None and lacking_program({dfm_id: generation}, program):
+        _emit(issues, "warning", no_program_warning([dfm_id]), path=f"dfms.{dfm_id}")
 
 
 def _lint_facet_source(issues: list[LintIssue], path: Path, g: dict, dfm_items,

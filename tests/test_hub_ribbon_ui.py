@@ -345,6 +345,39 @@ def test_the_pr_curve_buttons_use_the_bin_size_spinbox(hub, monkeypatch):
     assert sent[1] == {"action": "plot_pr_light_events"}
 
 
+def test_the_program_timeline_uses_the_bin_size_spinbox(hub, monkeypatch):
+    sent: list[dict] = []
+    monkeypatch.setattr(hub, "_run_experiment_action", sent.append)
+    _load_fake(hub)
+    hub.spin_binsize.setValue(5.0)
+    hub._run_plot_action("plot_program_timeline")
+    hub._run_plot_action("plot_opto_light")
+    assert sent == [{"action": "plot_program_timeline", "binsize": 5.0},
+                    {"action": "plot_opto_light", "binsize": 5.0}]
+
+
+def test_view_qc_plots_opens_the_program_timeline(hub, tmp_path):
+    """The Program timeline a run saved in qc/program/ opens beside the
+    signal plots and the light QC's figure."""
+    from PyQt6.QtGui import QColor, QPixmap
+
+    from pyflic.base.program_timeline import timeline_path
+
+    _load_fake(hub)
+    hub.experiment.experiment_dir = str(tmp_path)
+    hub.experiment.dfms = {1: None, 2: None}
+    pixmap = QPixmap(8, 8)
+    pixmap.fill(QColor("white"))
+    for png in (timeline_path(tmp_path / "qc", 1),
+                tmp_path / "qc" / "opto" / "opto_light_dfm1.png"):
+        png.parent.mkdir(parents=True, exist_ok=True)
+        assert pixmap.save(str(png), "PNG")
+    hub._view_qc_plots()
+    titles = [hub.dock.tabText(i) for i in range(hub.dock.count())]
+    assert "DFM1 Program timeline" in titles and "DFM1 Light explained" in titles
+    assert not any(t.startswith("DFM2") for t in titles)
+
+
 def test_well_comparison_is_offered_only_on_a_two_well_layout(hub):
     _load_fake_of_type(hub, None, layout="two_well")
     button, = hub._two_well_plot_buttons

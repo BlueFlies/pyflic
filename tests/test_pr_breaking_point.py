@@ -248,7 +248,7 @@ def test_the_summary_counts_until_the_fly_stops(bexp):
     assert list(s.columns) == ["Treatment", "Genotype", "DFM", "Group", "PairedChamber",
                                "BreakingPoint", "BreakMin", "Censored", "TestMinutes",
                                "LargestRequirement", "BreakRequirement", "FirmwareEvents",
-                               "LickFreeLightEvents", "LightQC"]
+                               "LickFreeLightEvents", "LightQC", "ParadigmType"]
     ## The firmware's record exists on generation 3 only (tests/test_pr_v4.py).
     assert s["BreakRequirement"].isna().all() and s["FirmwareEvents"].isna().all()
     working, stopped = _row(s, 1, 1), _row(s, 2, 1)
@@ -259,6 +259,24 @@ def test_the_summary_counts_until_the_fly_stops(bexp):
     sensor = _row(s, 1, 2)
     assert sensor.BreakingPoint == 0 and sensor.LickFreeLightEvents > 0
     assert "self-triggered light" in sensor.LightQC
+
+
+def test_a_legacy_program_makes_the_test_paradigm_progressive(bexp, tmp_path):
+    """``ParadigmType``: the firmware that wrote a legacy Program.txt had no
+    ratio Paradigm but the progressive one; without a program it is NA."""
+    from opto_fixtures import pr_program
+
+    assert bexp.breaking_point_summary()["ParadigmType"].isna().all()
+    root = make_pr_failure_dir(tmp_path / "exp", constants={"pr_break_gap_min": 5})
+    (root / "data" / "Program.txt").write_text(pr_program({1: (1, 3, 5), 2: (1, 3, 5)}),
+                                               encoding="utf-8")
+    e = load_experiment_yaml(root, parallel=False, use_disk_cache=False)
+    assert e.opto_program.grammar == "legacy"
+    s = e.breaking_point_summary()
+    assert len(s) and (s["ParadigmType"] == "ProgressiveRatio").all()
+    out = pd.read_csv(e.write_breaking_point(tmp_path / "bp.csv"))
+    assert list(out.columns)[-1] == "ParadigmType"
+    assert (out["ParadigmType"] == "ProgressiveRatio").all()
 
 
 def test_the_ledger_marks_what_the_breaking_point_counts(bexp):

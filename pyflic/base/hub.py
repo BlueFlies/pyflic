@@ -76,6 +76,8 @@ from . import project as project_mod
 from .gui_env import sanitize_input_method_environment
 from .light_summary import NO_TRAINING_INFORMATION
 from .light_summary import no_training_information as _no_training_information
+from .opto_light import dfms_without_program as _dfms_without_program
+from .opto_light import no_program_warning as _no_program_warning
 from .ui import (
     Category,
     OutputLog,
@@ -1844,7 +1846,7 @@ class AnalysisHubWindow(QMainWindow):
             if metric:
                 step["metric"] = metric
         if action in ("plot_pr_cumulative_diff", "plot_pr_cumulative_licks",
-                      "plot_opto_light"):
+                      "plot_opto_light", "plot_program_timeline"):
             ## These read the bin from the step, not the context, so a script
             ## keeps its own default; from the Hub the spinbox rules.
             step["binsize"] = self.spin_binsize.value()
@@ -2534,6 +2536,7 @@ class AnalysisHubWindow(QMainWindow):
         """
         if not self._require_experiment():
             return
+        from .program_timeline import timeline_path
         from .ui import ZoomableImageView
 
         qc_dir = self._member_qc_dir()
@@ -2541,9 +2544,11 @@ class AnalysisHubWindow(QMainWindow):
         for dfm_id in sorted(self.experiment.dfms):
             pngs = [(qc_dir / subdir / f"DFM{dfm_id}_{suffix}.png", label)
                     for subdir, suffix, label in self._QC_PLOT_KINDS]
-            ## The optogenetic light QC's figure, when a run wrote one.
+            ## The optogenetic light QC's figure and the Program timeline,
+            ## when a run wrote them.
             pngs.append((qc_dir / "opto" / f"opto_light_dfm{dfm_id}.png",
                          "Light explained"))
+            pngs.append((timeline_path(qc_dir, dfm_id), "Program timeline"))
             for png, label in pngs:
                 if not png.is_file():
                     continue
@@ -3277,6 +3282,10 @@ class AnalysisHubWindow(QMainWindow):
         ## row would go to the tooltip when a Batch is open.
         if self.experiment is not None and _no_training_information(self.experiment):
             loaded = f"{loaded} · {NO_TRAINING_INFORMATION}"
+        ## Decision 4: a firmware 4.0.0 DFM without its Program.txt section.
+        lacking = _dfms_without_program(self.experiment) if self.experiment is not None else []
+        if lacking:
+            loaded = f"{loaded} · {_no_program_warning(lacking)}"
         rows.append(("Loaded", loaded))
         self.readout.set_rows(rows)
 

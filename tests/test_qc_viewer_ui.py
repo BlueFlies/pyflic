@@ -214,6 +214,29 @@ def test_the_tab_opens_on_the_worst_group_and_says_why(opto_window):
     assert tab._figure_key[1] is None                  # the whole DFM
 
 
+def _detail_headers(tab, label: str) -> list[str]:
+    table = tab._hosts[label].itemAt(0).widget()
+    return [table.horizontalHeaderItem(c).text() for c in range(table.columnCount())]
+
+
+def test_the_detail_tables_drop_columns_with_nothing_in_them(opto_window):
+    """Generation 1 records none of the firmware's own columns: the
+    Intervals and Light events tables leave them out, as Program does."""
+    tab = opto_window._opto_tab
+    opto = opto_window._opto_tab._exp.opto
+    selected = tab._selected()
+    for label, frame in (("Intervals", opto.interval_table()),
+                         ("Light events", opto.events_table())):
+        rows = frame[(frame["DFM"] == selected["DFM"]) & (frame["Group"] == selected["Group"])]
+        kept = [c for c in rows.columns if c not in ("DFM", "Group") and rows[c].notna().any()]
+        headers = _detail_headers(tab, label)
+        assert headers == kept, label
+        assert len(kept) < len(rows.columns) - 2, label
+    assert "ProgramInterval" not in _detail_headers(tab, "Intervals")
+    assert not {"Phase", "RequirementMet", "FirmwareEvents"} & \
+        set(_detail_headers(tab, "Light events"))
+
+
 def test_the_buttons_tick_chambers_but_save_nothing(opto_window, tmp_path):
     win = opto_window
     tab = win._opto_tab
@@ -305,6 +328,13 @@ def test_a_generation_3_member_gets_the_program_sub_tab(v4_window):
     win._on_params_recompute({"feeding_threshold": 25.0})
     QApplication.processEvents()
     assert panel.table is not None and panel.table is not table
+
+
+def test_a_generation_3_group_keeps_the_firmwares_columns(v4_window):
+    tab = v4_window._opto_tab
+    assert {"ProgramInterval", "Cycle", "Paradigm"} <= set(_detail_headers(tab, "Intervals"))
+    assert {"Phase", "RequirementMet", "FirmwareEvents"} <= \
+        set(_detail_headers(tab, "Light events"))
 
 
 def test_the_integrity_sub_tab_lists_the_dfms_messages(v4_window):

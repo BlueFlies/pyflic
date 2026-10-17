@@ -44,6 +44,43 @@ ROW_COLUMNS: tuple[str, ...] = ("OptoLightQC", "OptoUnexplainedFraction")
 _VERDICT_RANK = {VERDICT_OK: 0, VERDICT_WARNING: 1, VERDICT_FAILED: 2}
 _UNEXPLAINED_FLAGS = (oq.UNEXPLAINED, oq.PARTLY_UNEXPLAINED, oq.UNEXPLAINED_NO_PROGRAM)
 
+#: Decision 4's loud warning, for a DFM recorded with firmware 4.0.0
+#: (generation 3) that has no ``Program.txt`` section: its rows name each
+#: Paradigm but not its type or settings.  ``pyflic lint``, the experiment
+#: report's "At a glance" and the Hub's status line give it in these words;
+#: ``summary.txt`` says it at more length (:meth:`OptoLightQC.experiment_notes`).
+NO_PROGRAM_WARNING = ("firmware 4.0.0 recording without Program.txt: "
+                      "Paradigm types and settings unknown")
+
+
+def no_program_warning(dfm_ids) -> str:
+    """:data:`NO_PROGRAM_WARNING` for *dfm_ids*: ``"DFM 1, 2: firmware …"``."""
+    return f"DFM {', '.join(str(int(d)) for d in dfm_ids)}: {NO_PROGRAM_WARNING}"
+
+
+def lacking_program(generations: dict[int, int], program: op.OptoProgram | None) -> list[int]:
+    """The DFMs of *generations* (``{dfm: Generation}``) recorded with
+    firmware 4.0.0 whose Paradigm types *program* cannot give: all of them
+    without a program, else those without a section.  A ``***ALL DFM***``
+    export lacks nothing: it says every well was Off."""
+    firmware4 = sorted(int(d) for d, g in generations.items() if g == GENERATION_PARADIGM)
+    if program is None:
+        return firmware4
+    if program.grammar == op.GRAMMAR_SIMPLE:
+        return []
+    return [d for d in firmware4 if program.section(d) is None]
+
+
+def dfms_without_program(exp) -> list[int]:
+    """:func:`lacking_program` for a loaded experiment, over the DFMs its
+    light QC covers (as ``summary.txt`` says it); ``[]`` for anything that
+    cannot say, so a status line never fails on it."""
+    opto = getattr(exp, "opto", None)
+    try:
+        return list(opto.dfms_without_program()) if opto is not None else []
+    except Exception:  # noqa: BLE001 - a status line or a cover must not fail
+        return []
+
 
 def recording_origin(raw: pd.DataFrame | None) -> datetime | None:
     """The clock time of recording minute 0, from the first row's ``Date``,
@@ -445,6 +482,12 @@ class OptoLightQC:
             out[dfm_id] = int(getattr(dfm, "generation", GENERATION_FLAG) or GENERATION_FLAG)
         return out
 
+    def dfms_without_program(self) -> list[int]:
+        """The covered DFMs recorded with firmware 4.0.0 that have no
+        ``Program.txt`` section (:func:`lacking_program`), for
+        :data:`NO_PROGRAM_WARNING`."""
+        return lacking_program(self.generations(), self.program)
+
     def experiment_notes(self) -> list[str]:
         """Notes about the experiment as a whole: the program's parse warnings,
         what the loader derived from it, a program whose paradigm is not the
@@ -488,20 +531,18 @@ class OptoLightQC:
                 f"DFM {', '.join(str(d) for d in ids)} generation {g} "
                 f"({GENERATION_DESCRIPTIONS.get(g, 'unknown')})"
                 for g, ids in sorted(by_generation.items())))
-        firmware4 = [d for d, g in generations.items() if g == GENERATION_PARADIGM]
-        if firmware4 and program is None:
-            notes.append(f"no Program.txt for DFM {', '.join(str(d) for d in firmware4)}, "
+        lacking = lacking_program(generations, program)
+        if lacking and program is None:
+            notes.append(f"no Program.txt for DFM {', '.join(str(d) for d in lacking)}, "
                          f"recorded with DFM firmware 4.0.0: the rows name each Paradigm "
                          f"but not its type, settings or thresholds, so the type-dependent "
                          f"light checks are not made; copy the Program.txt PyMCU exported "
                          f"for this recording into data/")
-        elif firmware4 and program.grammar != op.GRAMMAR_SIMPLE:
-            lacking = [d for d in firmware4 if program.section(d) is None]
-            if lacking:
-                notes.append(f"Program.txt has no usable section for DFM "
-                             f"{', '.join(str(d) for d in lacking)}, recorded with DFM "
-                             f"firmware 4.0.0: the type-dependent light checks are not "
-                             f"made there")
+        elif lacking:
+            notes.append(f"Program.txt has no usable section for DFM "
+                         f"{', '.join(str(d) for d in lacking)}, recorded with DFM "
+                         f"firmware 4.0.0: the type-dependent light checks are not "
+                         f"made there")
         notes.extend(getattr(exp, "program_notes", None) or [])
         return notes
 

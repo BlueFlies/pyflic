@@ -1374,10 +1374,10 @@ class OptoTab(QtWidgets.QWidget):
             ("Light events", opto.events_table(), True),
             ("Program", opto.program_table(), False),
         ):
-            shown = rows_of(frame, by_group=by_group)
-            if label == "Program":
-                ## A setting none of this DFM's Paradigms has is noise here.
-                shown = shown.dropna(axis=1, how="all")
+            ## A column with nothing for this group is noise here: a setting
+            ## none of the DFM's Paradigms has, or on generations 1 and 2 the
+            ## firmware's own columns (Program Interval, Phase, Requirement).
+            shown = rows_of(frame, by_group=by_group).dropna(axis=1, how="all")
             layout = self._hosts[label]
             if shown.empty:
                 layout.addWidget(QtWidgets.QLabel(f"No {label.lower()} for this group."))

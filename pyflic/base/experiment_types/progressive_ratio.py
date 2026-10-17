@@ -126,6 +126,16 @@ def break_requirement_view(frame) -> Any:
     return pd.DataFrame(rows)
 
 
+def all_fixed_ratio(frame) -> bool:
+    """Whether every row of a stacked ``pr_breaking_point.csv`` ran a
+    FixedRatio Test Paradigm (``ParadigmType``), so its count is the
+    activations earned at a constant requirement (decision 14).  False for
+    an empty table and for one written before the column existed."""
+    if frame is None or frame.empty or "ParadigmType" not in frame.columns:
+        return False
+    return bool((frame["ParadigmType"].astype("string") == "FixedRatio").fillna(False).all())
+
+
 #: The two-well chamber_sets default: chamber c is wells (2c-1, 2c).
 _DEFAULT_CHAMBER_SETS: tuple[tuple[int, int], ...] = tuple(
     (2 * c - 1, 2 * c) for c in range(1, 7))
@@ -384,7 +394,8 @@ class ProgressiveRatioExperimentType(ExperimentType):
             return lambda: rc.dot_plot(frame, column, y_label=label, factors=factors,
                                        hline_at=hline)
 
-        blocks: list = [rl.Heading("Breaking point", level=2)]
+        blocks: list = [rl.Heading("Fixed ratio: activations earned" if all_fixed_ratio(bp)
+                                   else "Breaking point", level=2)]
         if bp is None:
             blocks.append(rl.Callout(
                 "No member has a breaking point table (pr_breaking_point.csv): their "

@@ -27,6 +27,7 @@ import pandas as pd
 import pytest
 import yaml
 
+from pyflic.base import light_summary as ls
 from pyflic.base import opto_program as op
 from pyflic.base import pr_light_qc as lqc
 from pyflic.base import report_layout as rl
@@ -455,6 +456,56 @@ def test_without_a_program_the_type_is_unknown_and_taken_as_progressive(tmp_path
     ## Judged as progressive: the trend check runs, and the rows still show 5.
     assert not table["Notes"].str.contains("fixed ratio").any()
     assert (e.breaking_point_summary()["BreakRequirement"] == 5).all()
+    ## Its type is NA in the breaking point table, not a guess.
+    assert e.breaking_point_summary()["ParadigmType"].isna().all()
+
+
+def test_the_breaking_point_table_names_the_test_paradigms_type(gen3, fr):
+    progressive, fixed_ratio = gen3[0].breaking_point_summary(), fr[0].breaking_point_summary()
+    assert list(progressive.columns)[-1] == "ParadigmType"
+    assert (progressive["ParadigmType"] == "ProgressiveRatio").all()
+    assert (fixed_ratio["ParadigmType"] == "FixedRatio").all()
+
+
+def test_the_project_report_titles_a_fixed_ratio_pool_as_activations_earned(gen3, fr):
+    from pyflic.base.experiment_types import get_experiment_type
+
+    etype = get_experiment_type("ProgressiveRatio")
+
+    def heading(bp) -> str:
+        project = SimpleNamespace(combined_diff_frame=lambda: None,
+                                  combined_breaking_point_frame=lambda: bp,
+                                  design_global={}, _mixed_p=None)
+        blocks = etype.project_results_blocks(project)
+        return next(b.text for b in blocks if isinstance(b, rl.Heading))
+
+    fixed_ratio = fr[0].breaking_point_summary()
+    progressive = gen3[0].breaking_point_summary()
+    assert heading(fixed_ratio) == "Fixed ratio: activations earned"
+    ## A pool with any progressive or unknown row, or written before the
+    ## column existed, keeps the breaking point's title.
+    assert heading(pd.concat([fixed_ratio, progressive])) == "Breaking point"
+    assert heading(fixed_ratio.assign(ParadigmType=None)) == "Breaking point"
+    assert heading(fixed_ratio.drop(columns="ParadigmType")) == "Breaking point"
+
+
+def test_the_faceted_rows_carry_each_windows_light_and_activations(gen3):
+    """Training and Test rows each carry LitSec and Activations over their
+    own window, where the whole-recording summary puts them."""
+    e, _results = gen3
+    facet = e.feeding_summary_facet()
+    whole = e.feeding_summary()
+    assert list(facet.columns[2:]) == list(whole.columns)
+    light = ls.light_summary_facet(e).set_index(["Facet", "DFM", "Chamber"])
+    for row in facet.itertuples(index=False):
+        key = (row.Facet, row.DFM, row.Chamber)
+        assert row.LitSec == pytest.approx(light.loc[key, "LitSec"])
+        assert row.Activations == light.loc[key, "Activations"]
+    ## The Facets partition the recording, so their Activations add up.
+    summed = facet.groupby(["DFM", "Chamber"])["Activations"].sum()
+    pd.testing.assert_series_equal(
+        summed, whole.set_index(["DFM", "Chamber"])["Activations"].sort_index())
+    assert set(facet["Role"]) == {"paired", "yoked"}
 
 
 # ---------------------------------------------------------------------------
