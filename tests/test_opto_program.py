@@ -16,6 +16,9 @@ from pyflic.base import opto_program as op
 from pyflic.base.experiment_types.progressive_ratio import paired_from_program
 
 FIXTURE = Path(__file__).parent / "fixtures" / "Program.txt"
+#: A closed loop with no hold, for intervals built by hand.
+CLOSED = op.Paradigm("Closed", op.CLOSED_LOOP, 40, 8, hold_ms=0, max_on_ms=0,
+                     event_gap_ms=100)
 
 
 @pytest.fixture(scope="module")
@@ -51,7 +54,7 @@ def test_the_echoed_interval_is_decoded(sample):
     iv = sample.section(1).intervals[0]
     assert iv.start == datetime(2025, 7, 28, 12, 1, 0)
     assert iv.dark is False and iv.duration_min == pytest.approx(1440.0)
-    p = iv.params
+    p = iv.paradigm.legacy
     assert (p.frequency, p.pulse_width, p.decay, p.delay, p.max_time_on) == \
         (5160, 8, 500, 1000, 1000000000000)
     assert p.frequency_hz == 40 and p.acclimation_events == 10
@@ -85,8 +88,8 @@ def test_the_top_bit_of_the_pulse_width_is_non_feeding_activation():
 
 
 def test_a_zero_threshold_is_open_loop_and_all_negative_is_off():
-    iv = op.ProgramInterval(1, None, False, (0, -1, 20, -1) + (-1,) * 8,
-                            op.OptoParams(40, 8, 0, 0, 0), 10.0)
+    iv = op.ProgramInterval(1, None, False, (op.ON, op.OFF, 20, op.OFF) + (op.OFF,) * 8,
+                            CLOSED, 10.0)
     assert iv.group_mode((1, 2)) == op.OPEN_LOOP            # any member at 0
     assert iv.group_mode((2, 4)) == op.LIGHTS_OFF
     assert iv.group_mode((3, 4)) == op.CLOSED_LOOP
@@ -100,7 +103,7 @@ def test_a_zero_threshold_is_open_loop_and_all_negative_is_off():
 def _section(kind: str, durations: list[float], stamps=None) -> op.DFMProgram:
     intervals = tuple(
         op.ProgramInterval(i + 1, None if stamps is None else stamps[i], False,
-                           (20,) + (-1,) * 11, op.OptoParams(40, 8, 0, 0, 0), d)
+                           (20,) + (op.OFF,) * 11, CLOSED, d)
         for i, d in enumerate(durations))
     return op.DFMProgram(1, op.DEFAULT_LINKAGE, kind, intervals)
 
@@ -169,7 +172,7 @@ def test_a_bad_section_is_dropped_and_the_rest_kept():
 def test_the_authored_nineteen_value_interval_is_read_too():
     authored = GOOD.replace("F:40,P:8,D:1000,L:0,M:0,60.0min.", "40,8,500,1000,200,30")
     iv = op.parse_program(_text(authored)).section(1).intervals[0]
-    assert iv.params.paradigm == op.PROGRESSIVE_RATIO and iv.duration_min == 30.0
+    assert iv.paradigm.type == op.PROGRESSIVE_RATIO and iv.duration_min == 30.0
 
 
 def test_a_file_with_no_readable_section_is_refused():
@@ -242,7 +245,7 @@ def test_paired_chambers_come_from_the_trigger_wells(sample):
 def test_a_group_without_one_trigger_well_cannot_be_derived():
     section = _section("Linear", [60])
     both = op.DFMProgram(1, op.DEFAULT_LINKAGE, "Linear", (op.ProgramInterval(
-        1, None, False, (20, -1, 20) + (-1,) * 9, op.OptoParams(40, 8, 0, 0, 0), 60),))
+        1, None, False, (20, op.OFF, 20) + (op.OFF,) * 9, CLOSED, 60),))
     paired, problems, _notes = paired_from_program(both)
     assert paired is None and any("both chambers of group 1" in p for p in problems)
     paired, problems, _notes = paired_from_program(section)

@@ -149,7 +149,8 @@ p = exp.opto.plot_dfm(1, binsize_min=10)
 from pyflic.base.opto_program import read_program
 program = read_program("data/Program.txt")
 program.section(1).linkage_groups()          # {1: (1, 2, 3, 4), ...}
-program.section(1).intervals[0].params.paradigm
+program.section(1).intervals[0].paradigm.describe()   # "PR10 (ProgressiveRatio): ..."
+program.grammar                              # "legacy", "v4" or "simple"
 ```
 
 See [Optogenetic experiments](concepts-optogenetics.md).

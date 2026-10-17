@@ -177,12 +177,30 @@ OPTO_EVENT_COLUMNS: tuple[str, ...] = (
     "UnexplainedSec", "Explained", "OverrunSec",
 )
 #: ``qc/opto/opto_program.csv`` — one row per DFM interval of the program.
-#: ``F`` and ``P`` are the values the MCU echoed; ``FrequencyHz``,
-#: ``AcclimationEvents``, ``PulseWidthMs`` and ``NonFeeding`` decode them.
+#: ``Paradigm`` is the Paradigm's name and ``ParadigmType`` PyMCU's spelling of
+#: its type; the settings columns are the Paradigm's, ``NA`` where its type has
+#: no such setting.  ``LegacyF`` and ``LegacyP`` are the raw frequency and
+#: pulse width a pre-4.0.0 export echoed (``NA`` for the 4.0.0 grammar).
 OPTO_PROGRAM_COLUMNS: tuple[str, ...] = (
-    "DFM", "Interval", "Start", "DurationMin", "ProgramType", "Paradigm", "Dark",
-    "F", "FrequencyHz", "AcclimationEvents", "P", "PulseWidthMs", "NonFeeding",
-    "DecayMs", "Delay", "MaxTimeOn", "Linkage", "TriggerWells", "OpenLoopWells",
+    "DFM", "Interval", "Start", "DurationMin", "ProgramType", "Paradigm",
+    "ParadigmType", "Generated", "Dark", "FrequencyHz", "PulseWidthMs", "HoldMs",
+    "MaxOnMs", "ActivationMs", "LockoutMs", "OnDelayMs", "EventGapMs", "Acclimation",
+    "Series", "FirstRequirement", "Step", "Scale", "Rate", "Cap", "Ratio", "Linkage",
+    "TriggerWells", "OpenLoopWells", "LegacyF", "LegacyP",
+)
+#: The program table's whole-number columns, held as nullable integers.
+OPTO_PROGRAM_INTEGER_COLUMNS: tuple[str, ...] = (
+    "DFM", "Interval", "FrequencyHz", "PulseWidthMs", "HoldMs", "MaxOnMs",
+    "ActivationMs", "LockoutMs", "OnDelayMs", "EventGapMs", "Acclimation",
+    "FirstRequirement", "Step", "Cap", "Ratio", "LegacyF", "LegacyP",
+)
+#: The Paradigm fields behind the program table's settings columns.
+_PROGRAM_SETTING_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("HoldMs", "hold_ms"), ("MaxOnMs", "max_on_ms"), ("ActivationMs", "activation_ms"),
+    ("LockoutMs", "lockout_ms"), ("OnDelayMs", "on_delay_ms"),
+    ("EventGapMs", "event_gap_ms"), ("Series", "series"),
+    ("FirstRequirement", "first_requirement"), ("Step", "step"), ("Scale", "scale"),
+    ("Rate", "rate"), ("Cap", "cap"), ("Ratio", "ratio"),
 )
 
 
@@ -428,7 +446,7 @@ def _program_windows(section: op.DFMProgram, program: op.OptoProgram,
 def decay_profile(dfm_id: int, minutes: np.ndarray, samples_per_second: float,
                   origin: datetime | None, program: op.OptoProgram | None,
                   settings: OptoQCSettings) -> np.ndarray:
-    """Per sample, the light decay in samples: the program's interval decay
+    """Per sample, the light decay in samples: the program's interval Hold
     where one of *dfm_id*'s intervals applies, else ``opto_default_decay_ms``."""
     minutes = np.asarray(minutes, dtype=float)
     sps = float(samples_per_second)
@@ -444,7 +462,7 @@ def decay_profile(dfm_id: int, minutes: np.ndarray, samples_per_second: float,
                       feeding=np.zeros((0, op.N_WELLS), int), origin=origin)
     for w in _program_windows(section, program, probe, anchor):
         if w.i1 > w.i0:
-            out[w.i0:w.i1] = decay_samples_for(w.interval.params.decay_ms, sps)
+            out[w.i0:w.i1] = decay_samples_for(w.interval.hold_ms, sps)
     return out
 
 
@@ -530,7 +548,7 @@ def analyze_dfm(inp: DFMInputs, *, program: op.OptoProgram | None, setting: str,
         linkage_source = "inferred"
     for w in windows:
         if w.interval is not None and w.i1 > w.i0:
-            decay_by_sample[w.i0:w.i1] = decay_samples_for(w.interval.params.decay_ms, sps)
+            decay_by_sample[w.i0:w.i1] = decay_samples_for(w.interval.hold_ms, sps)
 
     ## ---- the firmware's baseline, for the Emulated Trigger ----
     emulate = section is not None and raw is not None
@@ -575,12 +593,21 @@ def analyze_dfm(inp: DFMInputs, *, program: op.OptoProgram | None, setting: str,
         for w in windows:
             if w.interval is None or w.i1 <= w.i0:
                 continue
-            params = w.interval.params
+            paradigm = w.interval.paradigm
+            legacy = paradigm.legacy
+            ## A legacy export echoed raw values the data may carry either
+            ## decoded or as written; a 4.0.0 Paradigm states them plainly.
+            if legacy is not None:
+                frequencies = (legacy.frequency_hz, legacy.frequency)
+                pulse_widths = (legacy.pulse_width_ms, legacy.pulse_width)
+            else:
+                frequencies = (paradigm.frequency_hz,)
+                pulse_widths = (paradigm.pulse_width_ms,)
             checks = (
-                ("OptoFreq", inp.data_frequency, (params.frequency_hz, params.frequency),
-                 f"{params.frequency_hz} Hz"),
-                ("OptoPW", inp.data_pulse_width, (params.pulse_width_ms, params.pulse_width),
-                 f"{params.pulse_width_ms} ms"),
+                ("OptoFreq", inp.data_frequency, frequencies,
+                 f"{paradigm.frequency_hz} Hz"),
+                ("OptoPW", inp.data_pulse_width, pulse_widths,
+                 f"{paradigm.pulse_width_ms} ms"),
                 ("Dark", inp.data_dark, (1.0 if w.interval.dark else 0.0,),
                  "on" if w.interval.dark else "off"),
             )
@@ -657,7 +684,7 @@ def analyze_dfm(inp: DFMInputs, *, program: op.OptoProgram | None, setting: str,
             if w.interval is not None:
                 mode = w.interval.group_mode(wells)
                 trig = w.interval.trigger_wells(wells)
-                decay_ms = w.interval.params.decay_ms
+                decay_ms = w.interval.hold_ms
             else:
                 mode = op.UNKNOWN_PARADIGM
                 trig = tuple(wells)
@@ -717,8 +744,10 @@ def analyze_dfm(inp: DFMInputs, *, program: op.OptoProgram | None, setting: str,
                 if emulate and trig:
                     contact = np.zeros(w.i1 - w.i0, dtype=bool)
                     for t in trig:
-                        thr = float(w.interval.threshold(t))
-                        contact |= (raw[full, t - 1] - base[t - 1]) > thr
+                        level = w.interval.threshold(t)
+                        if not op.is_trigger(level):
+                            continue
+                        contact |= (raw[full, t - 1] - base[t - 1]) > float(level)
                     contact_all[full] |= contact
                     act_close = activity_near(tuple(trig), tol, tol)[full]
                     alone = contact & ~act_close
@@ -912,47 +941,63 @@ def analyze_dfm(inp: DFMInputs, *, program: op.OptoProgram | None, setting: str,
 # ---------------------------------------------------------------------------
 
 def program_rows(program: op.OptoProgram, dfm_ids=None) -> list[dict]:
-    """One row per interval of every DFM section (or of *dfm_ids*)."""
+    """One row per interval of every DFM section (or of *dfm_ids*): the
+    Paradigm by name and type with its settings, ``NaN`` where the type has no
+    such setting (:data:`OPTO_PROGRAM_COLUMNS`)."""
     rows: list[dict] = []
     ids = sorted(program.dfms) if dfm_ids is None else [d for d in sorted(dfm_ids)
                                                         if d in program.dfms]
     for dfm_id in ids:
         section = program.dfms[dfm_id]
         for iv in section.intervals:
-            triggers = iv.trigger_wells()
-            open_wells = iv.open_wells()
-            if triggers:
-                paradigm = iv.params.paradigm
-            elif open_wells:
-                paradigm = op.OPEN_LOOP
-            else:
-                paradigm = op.LIGHTS_OFF
-            p = iv.params
-            rows.append({
+            p = iv.paradigm
+            legacy = p.legacy
+            row = {
                 "DFM": dfm_id, "Interval": iv.index,
                 "Start": iv.start.strftime("%Y-%m-%d %H:%M:%S") if iv.start else "",
                 "DurationMin": float(iv.duration_min),
-                "ProgramType": section.program_type, "Paradigm": paradigm,
-                "Dark": bool(iv.dark), "F": int(p.frequency),
-                "FrequencyHz": p.frequency_hz,
-                "AcclimationEvents": p.acclimation_events, "P": int(p.pulse_width),
-                "PulseWidthMs": p.pulse_width_ms, "NonFeeding": bool(p.inverted),
-                "DecayMs": p.decay_ms,
-                "Delay": p.delay, "MaxTimeOn": p.max_time_on,
+                "ProgramType": section.program_type, "Paradigm": p.name,
+                "ParadigmType": p.type_name, "Generated": bool(p.generated),
+                "Dark": bool(iv.dark), "FrequencyHz": int(p.frequency_hz),
+                "PulseWidthMs": int(p.pulse_width_ms),
+            }
+            for column, attr in _PROGRAM_SETTING_COLUMNS:
+                value = getattr(p, attr)
+                row[column] = np.nan if value is None else value
+            ## Acclimation is a count every Paradigm has (0 when unused), but
+            ## only the types that take it print it.
+            row["Acclimation"] = (int(p.acclimation) if p.type in op.ACCLIMATION_PARADIGMS
+                                  or p.acclimation else np.nan)
+            row.update({
                 "Linkage": op.linkage_label(section),
-                "TriggerWells": op.wells_label(triggers),
-                "OpenLoopWells": op.wells_label(open_wells),
+                "TriggerWells": op.wells_label(iv.trigger_wells()),
+                "OpenLoopWells": op.wells_label(iv.open_wells()),
+                "LegacyF": int(legacy.frequency) if legacy is not None else np.nan,
+                "LegacyP": int(legacy.pulse_width) if legacy is not None else np.nan,
             })
+            rows.append(row)
     return rows
 
 
+def program_frame(program: op.OptoProgram | None, dfm_ids=None) -> pd.DataFrame:
+    """:func:`program_rows` as a table (``qc/opto/opto_program.csv``), its
+    whole-number columns nullable integers so that a setting a type lacks
+    reads ``NA`` beside whole numbers, not a float."""
+    rows = [] if program is None else program_rows(program, dfm_ids)
+    frame = pd.DataFrame(rows, columns=list(OPTO_PROGRAM_COLUMNS))
+    for column in OPTO_PROGRAM_INTEGER_COLUMNS:
+        frame[column] = pd.array(pd.to_numeric(frame[column]), dtype="Int64")
+    return frame
+
+
 def paradigms_in(program: op.OptoProgram) -> set[str]:
-    """Every paradigm a Trigger Well runs under anywhere in *program*."""
+    """Every mode a Trigger Well runs under anywhere in *program*, and open
+    loop for an interval whose only lit wells are ``On``."""
     out: set[str] = set()
     for section in program.dfms.values():
         for iv in section.intervals:
             if iv.trigger_wells():
-                out.add(iv.params.paradigm)
+                out.add(iv.paradigm.mode)
             elif iv.open_wells():
                 out.add(op.OPEN_LOOP)
     return out
