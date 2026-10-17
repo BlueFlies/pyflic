@@ -880,6 +880,11 @@ class AnalysisHubWindow(QMainWindow):
              "Per DFM: each linkage group's lit time, explained by a trigger-well "
              "lick or touch and unexplained, and the time the emulated firmware "
              "trigger saw contact that pyflic did not."),
+            ("Program timeline", "plot",
+             lambda: self._run_plot_action("plot_program_timeline"),
+             "Per DFM: the Program Intervals by Paradigm, and for each well its "
+             "Acclimation, its Activations and the light it received.  Writes "
+             "qc/program/; needs firmware 4.0.0 data or data/Program.txt."),
         ):
             button = ActionButton(label, Category.QC, icon_name)
             button.setToolTip(tip)

@@ -5,7 +5,8 @@ Laid out by :mod:`pyflic.base.report_layout` on fixed US Letter pages:
 * **Cover** — what was recorded and how it was analysed, the quality-control
   verdicts at a glance, and the contents.
 * **1 Quality control** — per-DFM data integrity, two-well cross-talk
-  (simultaneous feeding, bleeding), the chambers excluded and why, then the
+  (simultaneous feeding, bleeding), the Program timeline of each DFM with a
+  program or a Paradigm state, the chambers excluded and why, then the
   Experiment Type's own checks (:meth:`Experiment.report_qc_blocks`;
   Progressive Ratio: training and the light QC).
 * **2 Results** — the inference figures with their statistics, chosen by the
@@ -261,13 +262,16 @@ def _integrity_frame(experiment: Experiment, qc: dict) -> pd.DataFrame:
         index_ok = integrity.get("index_increments_by_one")
         breaks = int(r.get("data_breaks_count", 0) or 0)
         errors = _error_flags(experiment, dfm_id)
-        verdict = "ok" if (breaks == 0 and errors == 0 and index_ok is not False) else "warning"
+        lost = integrity.get("lost_records")
+        verdict = "ok" if (breaks == 0 and errors == 0 and index_ok is not False
+                           and not lost) else "warning"
         rows.append({
             "DFM": dfm_id,
             "Samples": int(integrity.get("n_rawdata") or len(experiment.dfms[dfm_id].raw_df)),
             "Start": start.strftime("%Y-%m-%d %H:%M") if start is not None and pd.notna(start) else "–",
             "Hours": (float(span) / 60.0) if span is not None else np.nan,
             "Index continuous": ("–" if index_ok is None else ("yes" if index_ok else "NO")),
+            "Lost records": np.nan if lost is None else int(lost),
             "Data breaks": breaks,
             "Error flags": errors,
             "Verdict": verdict,
@@ -283,7 +287,10 @@ def _integrity_callout(experiment: Experiment, qc: dict) -> rl.Callout:
                           "sample index on every DFM.", tone="ok", title="Data integrity")
     detail = "; ".join(
         f"DFM {int(r.DFM)}: {int(r['Data breaks'])} data break(s), "
-        f"{int(r['Error flags'])} error flag(s)" for _, r in bad.iterrows())
+        f"{int(r['Error flags'])} error flag(s)"
+        + (f", {int(r['Lost records'])} lost record(s)"
+           if pd.notna(r["Lost records"]) and r["Lost records"] > 0 else "")
+        for _, r in bad.iterrows())
     return rl.Callout(detail + ".  See Quality control.", tone="warning",
                       title="Data integrity")
 
@@ -335,8 +342,11 @@ def _crosstalk_blocks(experiment: Experiment, qc: dict) -> list[Any]:
                 "DFM": dfm_id, "Chamber": index,
                 "Treatment": _treatment_label(experiment, dfm_id, index),
                 "Lick samples, left well": a, "Lick samples, right well": b,
-                "Both at once": both,
-                "Both, % of lick samples": (100.0 * both / union) if union > 0 else 0.0,
+                ## Decision 23: the count before the dual-feeding correction
+                ## beside the one after it, which the correction drives to 0.
+                "Both at once, before correction": float(r.get("Both_pre", np.nan)),
+                "Both at once, after": both,
+                "Both after, % of lick samples": (100.0 * both / union) if union > 0 else 0.0,
             })
     blocks: list[Any] = []
     if rows:
@@ -349,13 +359,15 @@ def _crosstalk_blocks(experiment: Experiment, qc: dict) -> list[Any]:
                 "register a lick on both are cross-talk between the wells or a fly "
                 "bridging them.  "
                 + ("The dual-feeding correction was applied (correct_for_dual_feeding), "
-                   "which gives each such sample to the stronger well."
+                   "which gives each such sample to the stronger well: the count before "
+                   "it is the cross-talk found, the count after it what remains."
                    if corrected else
                    "The dual-feeding correction was not applied "
-                   "(correct_for_dual_feeding is off).")),
+                   "(correct_for_dual_feeding is off), so the counts before and after it "
+                   "agree.")),
             rl.Table(pd.DataFrame(rows), caption="Lick samples per well and on both wells "
                                                  "at once, per chamber",
-                     formats={"Both, % of lick samples": "{:.2f}"}),
+                     formats={"Both after, % of lick samples": "{:.2f}"}),
         ]
     bleed_rows = []
     threshold = None
@@ -391,18 +403,45 @@ def _crosstalk_blocks(experiment: Experiment, qc: dict) -> list[Any]:
     return blocks
 
 
+def _timeline_blocks(experiment: Experiment) -> list[Any]:
+    """The Program timeline of every DFM that has one
+    (:mod:`pyflic.base.program_timeline`)."""
+    from . import program_timeline
+
+    ids = program_timeline.timeline_dfms(experiment)
+    if not ids:
+        return []
+    blocks: list[Any] = [
+        rl.Heading("Program timeline", level=2),
+        rl.Paragraph(
+            "What each DFM's program ran and what each well did: the Program Intervals, "
+            "coloured by Paradigm type, above one lane per well with its Acclimation "
+            "(Phase A) shaded, its Activations as ticks and the share of each bin its LED "
+            "was on.  A firmware 4.0.0 recording states all of this row by row; an older "
+            "one is laid out from Program.txt's clock times and shows the sampled light "
+            "only."),
+    ]
+    ## The figure titles itself ("DFM n — Program timeline").
+    for dfm_id in ids:
+        blocks.append(rl.Plot(lambda d=dfm_id: program_timeline.plot_dfm(experiment, d),
+                              height=5.4))
+    return blocks
+
+
 def _qc_blocks(experiment: Experiment, qc: dict) -> list[Any]:
     blocks: list[Any] = [
         rl.Heading("Data integrity", level=2),
         rl.Paragraph("Per DFM: samples recorded, gaps in the sample clock longer than "
                      f"{qc.get(next(iter(qc), 0), {}).get('data_breaks_multiplier', 4.0):g}× "
                      "the sampling interval (data breaks), non-zero firmware error codes, "
-                     "and whether the sample index runs without a gap."),
+                     "and whether the sample index runs without a gap, with the records "
+                     "its gaps lost."),
         rl.Table(_integrity_frame(experiment, qc), caption="Data integrity by DFM",
                  formats={"Hours": "{:.1f}"}, status={"Verdict": rl.tone_of}),
     ]
     if _is_two_well(experiment):
         blocks += _crosstalk_blocks(experiment, qc)
+    blocks += _timeline_blocks(experiment)
     exclusions = _exclusion_frame(experiment)
     blocks.append(rl.Heading("Excluded chambers", level=2))
     if exclusions.empty:

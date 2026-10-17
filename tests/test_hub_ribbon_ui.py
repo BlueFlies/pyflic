@@ -240,7 +240,7 @@ def test_unloading_hides_every_type_specific_group(hub):
 
 _PR_QC = {"Light QC table", "Licks per light event (QC)",
           "Sucrose Well resting level (QC)"}
-_OPTO_QC = {"Opto light QC table", "Light explained by licks (QC)"}
+_OPTO_QC = {"Opto light QC table", "Light explained by licks (QC)", "Program timeline"}
 
 
 def _shown(group) -> set[str]:
@@ -309,11 +309,11 @@ def test_the_qc_card_buttons_run_their_actions(hub, monkeypatch):
                hub._type_qc_groups["optogenetics"].findChildren(ActionButton)}
     for label in ("Light QC table", "Licks per light event (QC)",
                   "Sucrose Well resting level (QC)", "Opto light QC table",
-                  "Light explained by licks (QC)"):
+                  "Light explained by licks (QC)", "Program timeline"):
         buttons[label].click()
     assert [step["action"] for step in sent] == [
         "pr_light_qc", "plot_pr_light_events", "plot_pr_resting_level",
-        "opto_light_qc", "plot_opto_light"]
+        "opto_light_qc", "plot_opto_light", "plot_program_timeline"]
 
 
 def test_the_pr_curve_buttons_use_the_bin_size_spinbox(hub, monkeypatch):

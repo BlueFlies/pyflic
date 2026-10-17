@@ -16,6 +16,7 @@ from .paradigm_state import (
     GENERATION_EMPTY,
     GENERATION_FLAG,
     GENERATION_PARADIGM,
+    RECORD_MS,
     ParadigmState,
     detect_generation,
     split_paradigm_columns,
@@ -32,6 +33,25 @@ from .utils import (
 
 #: ``DFM.training_info`` by Generation: where a recording keeps its Training.
 TRAINING_INFO = {GENERATION_FLAG: "flag", GENERATION_EMPTY: "none", GENERATION_PARADIGM: "phase"}
+
+#: Error bits 2-7 mean the same on every V3 firmware (``DFMV3_V2/README.md``,
+#: "DFM error codes"); the names are the ones the integrity report has always
+#: printed.
+_ERROR_BITS_COMMON: tuple[tuple[int, str], ...] = (
+    (0x04, "PacketType Error"), (0x08, "DMA_TX Error"), (0x10, "DMA_RX Error"),
+    (0x20, "PacketSize Error"), (0x40, "AIInterrupt Error"), (0x80, "OInterrupt Error"),
+)
+#: ``(mask, label)`` of the ``Error`` byte's bits by Generation, as the
+#: integrity report counts them.  Bits 0 and 1 changed meaning: the two
+#: firmware 2.0.0 builds put the missing ACK on one or the other and nothing
+#: in a generation-1 file says which build wrote it, so generation 1 counts
+#: them together; from 3.5.0 (PyMCU's ``DFMErrors.V3_ERROR_DISPLAY``) 0x01 is
+#: the missing ACK and 0x02 a status-buffer overflow.
+ERROR_BITS: dict[int, tuple[tuple[int, str], ...]] = {
+    GENERATION_FLAG: ((0x03, "No ACK / overflow"), *_ERROR_BITS_COMMON),
+    GENERATION_EMPTY: ((0x01, "No Ack"), (0x02, "Overflow"), *_ERROR_BITS_COMMON),
+    GENERATION_PARADIGM: ((0x01, "No Ack"), (0x02, "Overflow"), *_ERROR_BITS_COMMON),
+}
 
 
 # ── DFM CSV loading (formerly io.py) ────────────────────────────────────────
@@ -61,6 +81,42 @@ class _LoadedDFM:
     generation: int = GENERATION_FLAG
     #: The Paradigm state on generation 3, row for row with *df*; else None.
     paradigm: ParadigmState | None = None
+    #: Rows dropped because their ``Index`` was already in the file.
+    repeated_records: int = 0
+    #: What the loader changed in the data, for the integrity text and
+    #: ``summary.txt``.
+    notes: tuple[str, ...] = ()
+
+
+def _index_blocks(values: np.ndarray, limit: int = 3) -> str:
+    """``1001-1020, 4000-4003`` for the sorted unique *values*, the first
+    *limit* runs and a count of the rest."""
+    values = np.unique(values.astype(np.int64))
+    if not values.size:
+        return ""
+    breaks = np.flatnonzero(np.diff(values) != 1) + 1
+    runs = [(int(r[0]), int(r[-1])) for r in np.split(values, breaks)]
+    text = ", ".join(f"{a}" if a == b else f"{a}-{b}" for a, b in runs[:limit])
+    return text + (f" and {len(runs) - limit} more block(s)" if len(runs) > limit else "")
+
+
+def _repeated_index_rows(df: pd.DataFrame) -> np.ndarray:
+    """(n,) bool: rows whose ``Index`` and time stamp an earlier row already
+    has.
+
+    ``Index`` counts the DFM's records from 1 and rises by 1, so a record
+    seen before is one PyMCU wrote again when it retried a file write; the
+    first copy is the one kept.  The time stamp (``Date``, ``Time``,
+    ``MSec``) is part of the match so that a DFM that restarted, and counts
+    its ``Index`` from 1 again with new records, loses nothing.  A missing
+    ``Index`` is never a repeat."""
+    if "Index" not in df.columns or len(df) < 2:
+        return np.zeros(len(df), dtype=bool)
+    index = pd.to_numeric(df["Index"], errors="coerce")
+    if bool((np.diff(index.to_numpy(dtype=float)) > 0).all()):
+        return np.zeros(len(df), dtype=bool)          # the usual file: nothing repeats
+    key = [c for c in ("Index", "Date", "Time", "MSec") if c in df.columns]
+    return (df.duplicated(subset=key, keep="first") & index.notna()).to_numpy(dtype=bool)
 
 
 def _elapsed_seconds_from_date_time(df: pd.DataFrame) -> np.ndarray:
@@ -125,6 +181,19 @@ def _load_dfm_csvs(dfm_id: int, data_dir: str | Path = ".", range_minutes: Seque
         state = ParadigmState.from_frame(
             paradigm_columns, minutes=df["Minutes"].to_numpy(dtype=float),
             index=df["Index"] if "Index" in df.columns else None)
+    ## A retried file write leaves records in the file twice: keep the first
+    ## copy of each Index, in the data and in the Paradigm state alike.
+    repeated = _repeated_index_rows(df)
+    n_repeated = int(repeated.sum())
+    notes: tuple[str, ...] = ()
+    if n_repeated:
+        blocks = _index_blocks(pd.to_numeric(df["Index"], errors="coerce")
+                               .to_numpy(dtype=float)[repeated])
+        notes = (f"{n_repeated} repeated record(s) dropped at load (Index {blocks}): rows a "
+                 f"retried file write wrote again; the first copy of each was kept.",)
+        df = df[~repeated]
+        if state is not None:
+            state = state.subset(~repeated)
     if range_is_specified(range_minutes):
         a, b = range_bounds(range_minutes)
         keep = ((df["Minutes"] > a) & (df["Minutes"] < b)).to_numpy(dtype=bool)
@@ -132,7 +201,8 @@ def _load_dfm_csvs(dfm_id: int, data_dir: str | Path = ".", range_minutes: Seque
         if state is not None:
             state = state.subset(keep)
     return _LoadedDFM(df=df.reset_index(drop=True), version=version, source_files=files,
-                      generation=generation, paradigm=state)
+                      generation=generation, paradigm=state, repeated_records=n_repeated,
+                      notes=notes)
 
 
 @dataclass(slots=True)
@@ -153,6 +223,11 @@ class DFM:
     #: in the signal), ``"none"`` (generation 2, no Training information) or
     #: ``"phase"`` (generation 3, each well's Phase).
     training_info: str = "flag"
+    #: Records the loader dropped because their ``Index`` was already in the
+    #: file (a retried file write), and what it said about them: the
+    #: integrity report and ``summary.txt`` show the notes.
+    repeated_records: int = 0
+    load_notes: tuple[str, ...] = ()
 
     well_names: dict[str, str] | None = None  # e.g. {"A": "Sucrose", "B": "Yeast"}
 
@@ -168,6 +243,9 @@ class DFM:
     intervals: dict[str, pd.DataFrame | int] | None = None
     tasting_durations: dict[str, pd.DataFrame | int] | None = None
     tasting_intervals: dict[str, pd.DataFrame | int] | None = None
+    #: The simultaneous-feeding matrix (:meth:`_check_for_simultaneous_feeding`)
+    #: of the licks **before** the dual-feeding correction; two-well only.
+    #: :meth:`simultaneous_feeding_matrix` is the one after it.
     lick_matrix: np.ndarray | None = None
     dual_feeding_data: pd.DataFrame | None = None
     in_training_data: pd.DataFrame | None = None
@@ -195,6 +273,8 @@ class DFM:
             generation=int(loaded.generation),
             paradigm=loaded.paradigm,
             training_info=TRAINING_INFO[int(loaded.generation)],
+            repeated_records=int(loaded.repeated_records),
+            load_notes=tuple(loaded.notes),
         )
 
         if correct_for_dual_feeding is None:
@@ -233,6 +313,8 @@ class DFM:
             ## Shared, not copied: nothing writes to a ParadigmState.
             paradigm=self.paradigm,
             training_info=self.training_info,
+            repeated_records=self.repeated_records,
+            load_notes=self.load_notes,
             well_names=self.well_names,
             in_training_data=(None if self.in_training_data is None
                               else self.in_training_data.copy()),
@@ -627,12 +709,60 @@ class DFM:
         out.insert(0, "BreakIndex", idx + 1)
         return out.reset_index(drop=True)
 
+    def lost_record_gaps(self) -> list[tuple[int, int, float]] | None:
+        """``(last Index before, records missing, minute)`` for each gap in
+        ``Index``, which starts at 1 and rises by 1 a record: the records
+        lost between the DFM and the file.  The minute is that of the last
+        row before the gap.  :meth:`ParadigmState.index_gaps` on generation
+        3, a plain diff of ``Index`` otherwise; ``None`` without an ``Index``
+        column (a v2 file) or with fewer than two values."""
+        if self.paradigm is not None:
+            return self.paradigm.index_gaps()
+        raw = self.raw_df
+        if "Index" not in raw.columns:
+            return None
+        index = pd.to_numeric(raw["Index"], errors="coerce").to_numpy(dtype=float)
+        valid = np.isfinite(index)
+        if valid.sum() < 2:
+            return None
+        index = index[valid]
+        minutes = pd.to_numeric(raw["Minutes"], errors="coerce").to_numpy(dtype=float)[valid]
+        step = np.diff(index)
+        return [(int(index[i]), int(step[i]) - 1, float(minutes[i]))
+                for i in np.flatnonzero(step > 1)]
+
+    def paradigm_sequence(self) -> list[dict[str, object]] | None:
+        """The Paradigms the rows were recorded under, in order: one entry
+        per run of rows with the same name (``Paradigm``, ``FirstMin``,
+        ``LastMin``, ``Rows``), the ``Idle`` lead-in included and an unknown
+        name as ``NA``.  ``None`` without a Paradigm state (generations 1
+        and 2)."""
+        state = self.paradigm
+        if state is None:
+            return None
+        n = len(state)
+        if not n:
+            return []
+        codes, _ = pd.factorize(state.paradigm, use_na_sentinel=True)
+        change = (np.flatnonzero(codes[1:] != codes[:-1]) + 1).tolist()
+        names = state.paradigm.to_numpy(dtype=object, na_value=None)
+        return [{"Paradigm": "NA" if names[a] is None else str(names[a]),
+                 "FirstMin": float(state.minutes[a]), "LastMin": float(state.minutes[b - 1]),
+                 "Rows": int(b - a)}
+                for a, b in zip([0, *change], [*change, n])]
+
     def integrity_report(self) -> dict[str, object]:
-        """Port of ReportDFMIntegrity() from QC.R."""
-        _ERROR_BIT_NAMES = [
-            "I2C Error", "ID Error", "PacketType Error", "DMA_TX Error",
-            "DMA_RX Error", "PacketSize Error", "AIInterrupt Error", "OInterrupt Error",
-        ]
+        """Port of ReportDFMIntegrity() from QC.R, by Generation.
+
+        Prints the report and returns its numbers.  Beyond R's: the Error
+        byte's bits under the labels of the file's Generation
+        (:data:`ERROR_BITS`); records lost (gaps in ``Index``) and records
+        repeated (dropped at load, :attr:`load_notes`); on generation 3 the
+        rows under an unknown instruction after the lead-in, the late
+        records (some ``OnMs`` above 200) and the Paradigm sequence; and the
+        ``Error`` rows of the recording's ``Messages.csv`` for this DFM and
+        the MCU.  A count that does not apply to the Generation is ``None``.
+        """
         raw = self.raw_df
         n = len(raw)
         print("\n==============================")
@@ -693,15 +823,15 @@ class DFM:
                     codes = pd.to_numeric(v, errors="coerce").astype("Int64")
                     codes = codes[flagged].dropna().astype(int)
                     if len(codes) > 0:
-                        bit_mat = np.vstack([((codes.to_numpy() & (1 << i)) > 0) for i in range(8)]).T
-                        type_counts = bit_mat.sum(axis=0)
+                        values = codes.to_numpy()
                         print("  Error-type counts (among flagged rows):")
-                        for name, cnt in zip(_ERROR_BIT_NAMES, type_counts, strict=False):
-                            print(f"    {name}: {int(cnt)}")
+                        for mask, name in ERROR_BITS.get(self.generation, ERROR_BITS[GENERATION_PARADIGM]):
+                            print(f"    {name}: {int(((values & mask) != 0).sum())}")
                 print()
 
         print("## Index increment check")
         index_ok = None
+        gaps = self.lost_record_gaps()
         if "Index" not in raw.columns:
             print("No `Index` column found in RawData.\nSkipping increment-by-one analysis.\n")
         else:
@@ -711,7 +841,30 @@ class DFM:
             else:
                 d = np.diff(ix.to_numpy(dtype=float))
                 index_ok = bool(np.all(d == 1))
-                print("Index increments by exactly 1 for all consecutive rows.\n" if index_ok else "Index does NOT always increment by 1.\n")
+                print("Index increments by exactly 1 for all consecutive rows." if index_ok else "Index does NOT always increment by 1.")
+                self._print_lost_and_repeated(gaps or [])
+        lost = None if gaps is None else int(sum(missing for _, missing, _ in gaps))
+
+        state = self.paradigm
+        unknown = late = sequence = None
+        if state is not None:
+            unknown = int(state.unknown_rows().sum())
+            late = int(state.late_rows().sum())
+            sequence = self.paradigm_sequence()
+            print("## Paradigm state")
+            print(f"Lead-in rows (Interval 0, before the first instruction): {state.lead_in_rows()}")
+            print(f"Rows under an unknown instruction (after the lead-in): {unknown}")
+            print(f"Late records (some OnMs above {RECORD_MS} ms): {late}")
+            print("Paradigm sequence:")
+            width = max((len(s["Paradigm"]) for s in sequence), default=0)
+            for s in sequence:
+                print(f"  {s['Paradigm']:<{width}}  minutes {s['FirstMin']:.2f}-{s['LastMin']:.2f}"
+                      f"  {s['Rows']} rows")
+            print()
+        elif self.generation == GENERATION_EMPTY:
+            print("## Paradigm state")
+            print("None: every Paradigm column is NA (DFM firmware older than 4.0.0).\n")
+        self._print_message_errors()
 
         return {
             "dfm_id": self.id,
@@ -723,7 +876,44 @@ class DFM:
             "elapsed_minutes_from_minutes_col": elapsed_minutes_from_minutes_col,
             "error_columns": err_cols,
             "index_increments_by_one": index_ok,
+            "lost_records": lost,
+            "lost_record_gaps": gaps,
+            "repeated_records": int(self.repeated_records),
+            "unknown_instruction_rows": unknown,
+            "late_records": late,
+            "paradigm_sequence": sequence,
         }
+
+    def _print_lost_and_repeated(self, gaps: list[tuple[int, int, float]]) -> None:
+        """The integrity text's lost and repeated records, then a blank line."""
+        lost = sum(missing for _, missing, _ in gaps)
+        print(f"Lost records: {lost}" + (f" in {len(gaps)} gap(s)" if gaps else ""))
+        period = 1.0 / float(self.params.samples_per_second)
+        for after, missing, minute in gaps:
+            print(f"  after Index {after} (minute {minute:.2f}): {missing} record(s), "
+                  f"{missing * period:.1f} s")
+        print(f"Repeated records: {int(self.repeated_records)}")
+        for note in self.load_notes:
+            print(f"  {note}")
+        print()
+
+    def _print_message_errors(self) -> None:
+        """The ``Error`` rows of the recording's ``Messages.csv`` for this DFM
+        and the MCU (DFM 0); nothing when the recording has no such file."""
+        from . import messages
+
+        if not self.source_files:
+            return
+        data_dir = Path(self.source_files[0]).parent
+        if messages.find_messages(data_dir) is None:
+            return
+        found = messages.errors(messages.for_dfm(messages.read(data_dir), self.id))
+        print(f"## {messages.MESSAGES_FILENAME} errors (DFM {self.id} and the MCU)")
+        if found.empty:
+            print("None.")
+        for _, row in found.iterrows():
+            print(f"  {messages.describe(row)}")
+        print()
 
     def simultaneous_feeding_matrix(self) -> np.ndarray:
         """Port of CheckForSimultaneousFeeding.DFM() from QC.R (two-well only)."""
