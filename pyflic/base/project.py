@@ -1301,6 +1301,17 @@ class Project:
                            "group)")
                 out.append(f"Chamber groups pooled : {len(breaking)} "
                            f"({censored} censored)")
+                ## Firmware 4.0.0 records the Requirement each light event met
+                ## (stream 4): BreakRequirement beside BreakingPoint, medians.
+                from .experiment_types.progressive_ratio import break_requirement_view
+
+                req = break_requirement_view(breaking)
+                if req is not None:
+                    out.append("Break requirement     : " + "; ".join(
+                        f"{r['Treatment']} BreakingPoint {r['Breaking point']:g}, "
+                        f"BreakRequirement {r['Break requirement']:g} "
+                        f"(median, {r['With a requirement']} group(s))"
+                        for _, r in req.iterrows()))
                 out.append("p_logrank: pairwise log-rank test on the ratio reached, "
                            "treating a censored count as a lower bound; p_pooled and "
                            "p_mixed enter it as observed.")

@@ -7,14 +7,27 @@ Vocabulary is fixed in ``CONTEXT.md`` under *Progressive Ratio*:
   that shares one light circuit, one Treatment and one training end;
 * the **Paired** chamber's feeding at the **Sucrose Well** (always well A)
   drives the light; the **Yoked** chamber is lit at the same moments;
-* **Training** ends, per group, at the last minute the paired chamber's
-  sucrose well is flagged in training by the firmware (raw sample > 40000);
-  the **Test** phase is everything after.
+* **Training** ends, per group, at the paired chamber's Sucrose Well's
+  training end; the **Test** phase is everything after.
+
+How a recording says where Training ends depends on its **Generation**
+(``CONTEXT.md``; ``docs/v4-data-plan.md``, decisions 11-15):
+
+* generation 1: the last minute the firmware flags the Sucrose Well in
+  training (raw sample > 40000); a Light Event is an onset of the chamber's
+  ``OptoCol1`` light, the OR of its two wells' bits (the data sets all four
+  bits of a group together);
+* generation 2 (a DFM older than firmware 4.0.0 recorded by PyMCU 4.0.0):
+  nowhere.  Each group has one Facet, ``Recording``, ``TrainingComplete`` is
+  NA, and there is no Test phase, Breaking Point or Sucrose Persistence;
+* generation 3: the Sucrose Well's first row in Phase ``M`` under a ratio
+  Paradigm.  A Light Event is the Sucrose Well's own **Activation**, which
+  carries the Requirement it met and the Firmware Events it took, light
+  seconds come from ``OnMs``, and the Test window ends where the ratio
+  Paradigm's run ends.
 
 Everything here is derived from the ordinary two-well machinery plus one config
-key per DFM, ``paired_chambers``.  The light-on state of a chamber is the OR of
-its two wells' ``OptoCol1`` bits (the data sets all four bits of a group
-together).
+key per DFM, ``paired_chambers``.
 """
 
 from __future__ import annotations
@@ -41,12 +54,28 @@ from .experiment_types.progressive_ratio import (
     parse_paired_chambers,
     partner_of,
 )
+from .opto_program import FIXED_RATIO, RATIO_PARADIGMS
+from .paradigm_state import GENERATION_PARADIGM, ParadigmState
 from .two_well_experiment import TwoWellExperiment
 from .utils import range_bounds, range_is_specified
 
 TRAINING_LABEL = "Training"
 TEST_LABEL = "Test"
 FACET_LABELS = (TRAINING_LABEL, TEST_LABEL)
+#: The one Facet of a generation-2 DFM, which records no Training: the whole
+#: recording, never pooled into Test (decision 15).
+RECORDING_LABEL = "Recording"
+#: Every Facet this type makes, in the order its tables list them.
+_FACET_ORDER = (TRAINING_LABEL, TEST_LABEL, RECORDING_LABEL)
+
+#: What ``summary.txt``, the report, the Hub and the Project Report say of a
+#: generation-2 DFM (:meth:`ProgressiveRatioExperiment.training_information`).
+NO_TRAINING_INFORMATION = ("no training information: recorded with DFM firmware "
+                           "older than 4.0.0")
+#: Generation 3: a ratio Paradigm that is the first Interval and has no
+#: Acclimation leaves nothing to call Training (decision 11).
+EMPTY_TRAINING_NOTE = ("Training was empty: the ratio Paradigm had no Acclimation "
+                       "and no Interval before it")
 
 #: Per-chamber metrics the Paired-Yoked Difference table carries, as ``d<name>``.
 #: ``PersistA`` is Sucrose Persistence, measured from training end (ADR-0014),
@@ -67,15 +96,22 @@ _FLAG_TOLERANCE_MIN = 0.1
 BREAKING_POINT_COLUMNS: tuple[str, ...] = ("Minutes", "CumLicks", "DeltaMinutes",
                                            "DeltaLicks")
 #: The Light Event Ledger columns a Paired chamber's table adds (light QC).
+#: The last three are the firmware's own record of each Activation
+#: (generation 3; NA otherwise): the ``Requirement`` it met, the
+#: ``FirmwareEvents`` it took and its ``Phase`` (``A`` or ``M``).
 LEDGER_COLUMNS: tuple[str, ...] = ("MinutesSincePrev", "LicksSincePrev", "Explained",
-                                   "LickFree", "RestingLevel")
+                                   "LickFree", "RestingLevel", "Requirement",
+                                   "FirmwareEvents", "Phase")
 #: One row per Chamber Group — ``analysis/pr_light_qc.csv``.
+#: ``TrendRhoFirmware`` is the trend of Firmware Events per Light Event
+#: (generation 3; NA otherwise).
 LIGHT_QC_COLUMNS: tuple[str, ...] = (
     "DFM", "Group", "PairedChamber", "YokedChamber", "SucroseWell", "Treatment",
     "TrainingComplete", "TrainingMinutes", "TrainingLightEvents", "TrainingLicks",
     "TestLightEvents", "LickFreeEvents", "LongestLickFreeRun", "LickFreeRunStartMin",
-    "TrendRho", "TrendSlope", "RestingStart", "RestingMax", "RestingEnd",
-    "RestingRise", "RestingRatio", "Flags", "Verdict", "Excluded", "Notes",
+    "TrendRho", "TrendSlope", "TrendRhoFirmware", "RestingStart", "RestingMax",
+    "RestingEnd", "RestingRise", "RestingRatio", "Flags", "Verdict", "Excluded",
+    "Notes",
 )
 #: What the light QC adds to every per-chamber summary row.
 LIGHT_QC_ROW_COLUMNS: tuple[str, ...] = ("LightQC", "LickFreeLightEvents")
@@ -87,9 +123,12 @@ PERSIST_COLUMNS: tuple[str, ...] = ("PersistA", "PersistACensored")
 #: whether the Light Event is one the group's Breaking Point counts.
 COUNTED_COLUMN = "Counted"
 #: ``analysis/pr_breaking_point.csv``, after ``Treatment`` and the factors.
+#: ``BreakRequirement`` and ``FirmwareEvents`` are the firmware's record of
+#: the counted Light Events (generation 3; NA otherwise; ADR-0014 addendum).
 BREAKING_POINT_SUMMARY_COLUMNS: tuple[str, ...] = (
     "DFM", "Group", "PairedChamber", "BreakingPoint", "BreakMin", "Censored",
-    "TestMinutes", "LargestRequirement", "LickFreeLightEvents", "LightQC",
+    "TestMinutes", "LargestRequirement", "BreakRequirement", "FirmwareEvents",
+    "LickFreeLightEvents", "LightQC",
 )
 
 
@@ -112,11 +151,21 @@ class GroupTraining:
     yoked_chamber: int
     sucrose_well: int
     training_end: float | None     # minutes; None = never completed
-    notes: tuple[str, ...] = ()    # per-well flag disagreements (QC, never fatal)
+    notes: tuple[str, ...] = ()    # QC notes, never fatal
+    #: False when the recording carries no Training information at all
+    #: (generation 2): then nothing completed and nothing failed to.
+    known: bool = True
 
     @property
     def complete(self) -> bool:
+        """Training ended, so the group has a Test phase."""
         return self.training_end is not None
+
+    @property
+    def training_complete(self) -> bool | None:
+        """The ``TrainingComplete`` cell: :attr:`complete`, or ``None`` (NA)
+        when the recording has no Training information (decision 15)."""
+        return self.complete if self.known else None
 
 
 @dataclass(slots=True)
@@ -216,7 +265,10 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
 
     def group_training(self, dfm_id: int, group: int) -> GroupTraining:
         """The group's training end, read from the paired chamber's sucrose
-        well, plus per-well notes where the other wells' flags disagree."""
+        well, plus notes: on generation 1 where the other wells' flags
+        disagree, on generation 3 in Phase and Acclimation terms
+        (:meth:`_phase_training_notes`), and on generation 2 that there is
+        no Training information at all."""
         dfm_id, group = int(dfm_id), int(group)
         cache = self._pr_training if self._pr_training is not None else {}
         key = (dfm_id, group)
@@ -229,6 +281,18 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
         yoked = partner_of(paired)
         sucrose = self._sucrose_well(dfm, paired)
         end = dfm.training_end_minutes(sucrose)
+
+        if dfm.training_info == "none" or self._reads_phase(dfm):
+            known = dfm.training_info != "none"
+            notes = (self._phase_training_notes(dfm, sucrose, end) if known
+                     else [NO_TRAINING_INFORMATION])
+            result = GroupTraining(dfm_id=dfm_id, group=group, paired_chamber=paired,
+                                   yoked_chamber=yoked, sucrose_well=sucrose,
+                                   training_end=end if known else None,
+                                   notes=tuple(notes), known=known)
+            cache[key] = result
+            self._pr_training = cache
+            return result
 
         notes: list[str] = []
         any_flag = False
@@ -280,9 +344,112 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
         self._pr_training = cache
         return result
 
+    @staticmethod
+    def _reads_phase(dfm: DFM) -> bool:
+        """Whether *dfm* records the firmware's Paradigm state (generation
+        3), so Training, Light Events and light come from it."""
+        return dfm.generation == GENERATION_PARADIGM and dfm.paradigm is not None
+
+    def _phase_training_notes(self, dfm: DFM, sucrose: int, end: float | None) -> list[str]:
+        """Generation 3's notes on one group's Training, in Phase and
+        Acclimation terms.
+
+        Only the Paired Sucrose Well is read: the group's other three wells
+        are ``Off`` and read Phase ``M`` throughout, so they carry nothing to
+        disagree about, unlike generation 1's per-well flags.  Noted: a
+        training that never completed and why, an empty one (decision 11), a
+        Paradigm that restarted (a later run in Acclimation) and a later ratio
+        run, which falls outside the Test window (decision 12).
+        """
+        state = dfm.paradigm
+        w = int(sucrose) - 1
+        notes: list[str] = []
+        if end is None:
+            if not state.ratio_rows(sucrose).any():
+                why = "never ran a ratio Paradigm"
+            elif len(state) and state.phase_a[-1, w]:
+                why = "was still in Acclimation (Phase A) when the recording ended"
+            else:
+                why = "never reached Phase M under a ratio Paradigm"
+            notes.append(f"paired Sucrose Well W{sucrose} {why} — training never completed")
+        elif (dfm.training_flag_state(sucrose) == "never_flagged"
+              and (state.training_end(sucrose) or 0) > 0):
+            ## Row 0 is a range filter starting inside Test: Training lies
+            ## before the rows loaded, not nowhere.
+            notes.append(EMPTY_TRAINING_NOTE)
+        test_run = self._test_ratio_run(state, sucrose)
+        later = ([run for run in _true_runs(state.ratio_rows(sucrose)) if run[0] >= test_run[1]]
+                 if test_run is not None else [])
+        restarted: set[int] = set()
+        for i0, _i1 in state.acclimation_runs(sucrose)[1:]:
+            note = f"Paradigm restarted at Program Interval {_interval_at(state, i0)}"
+            run = next((r for r in later if r[0] <= i0 < r[1]), None)
+            if run is not None:
+                restarted.add(run[0])
+                note += " (after the Test window, which is the first ratio run only)"
+            notes.append(note)
+        for i0, _i1 in later:
+            if i0 not in restarted:
+                notes.append(f"a ratio Paradigm ran again from Program Interval "
+                             f"{_interval_at(state, i0)}, after the Test window (the "
+                             f"first ratio run only)")
+        return notes
+
+    @staticmethod
+    def _test_ratio_run(state: ParadigmState, well: int) -> tuple[int, int] | None:
+        """``[i0, i1)`` of the run of rows in which *well* is under a ratio
+        Paradigm that holds its training end: the Test (decision 12).
+        ``None`` when training never ended."""
+        end = state.training_end(well)
+        if end is None:
+            return None
+        return next((run for run in _true_runs(state.ratio_rows(well))
+                     if run[0] <= end < run[1]), None)
+
+    def test_paradigm(self, dfm_id: int, group: int) -> tuple[str | None, Any]:
+        """``(name, paradigm)`` of the group's **Test Paradigm**, the Paired
+        Sucrose Well's Paradigm on its training-end row (generation 3), with
+        its :class:`~pyflic.base.opto_program.Paradigm` from ``Program.txt``
+        — ``None`` when the program does not define it or there is none, so
+        its type is unknown.  ``(None, None)`` on generations 1 and 2 and for
+        a group whose training never ended."""
+        dfm = self.dfms[int(dfm_id)]
+        gt = self.group_training(dfm_id, group)
+        if not self._reads_phase(dfm) or not gt.complete:
+            return None, None
+        row = dfm.paradigm.training_end(gt.sucrose_well)
+        if row is None:
+            return None, None
+        name = dfm.paradigm.paradigm[row]
+        if pd.isna(name):
+            return None, None
+        program = getattr(self, "opto_program", None)
+        paradigms = getattr(program, "paradigms", None) or {}
+        return str(name), paradigms.get(str(name))
+
+    def _fixed_ratio(self, dfm_id: int, group: int) -> bool:
+        """Whether the group's Test Paradigm is a FixedRatio (decision 14).
+        Without its type (no program) it is taken as progressive."""
+        _name, paradigm = self.test_paradigm(dfm_id, group)
+        return paradigm is not None and paradigm.type == FIXED_RATIO
+
+    def training_information(self) -> str | None:
+        """:data:`NO_TRAINING_INFORMATION` when DFMs of this experiment
+        recorded no Training (generation 2, decision 15), prefixed with
+        those DFMs when only some did not; ``None`` when every DFM did.  For
+        ``summary.txt``, the report, the Hub status and the Project Report."""
+        missing = sorted(int(d) for d, dfm in self.dfms.items()
+                         if dfm.training_info == "none")
+        if not missing:
+            return None
+        if len(missing) == len(self.dfms):
+            return NO_TRAINING_INFORMATION
+        return f"DFM {', '.join(str(d) for d in missing)}: {NO_TRAINING_INFORMATION}"
+
     def training_table(self) -> pd.DataFrame:
         """One row per Chamber Group: ``DFM, Group, PairedChamber, YokedChamber,
-        SucroseWell, TrainingEndMin, TrainingComplete, Notes``."""
+        SucroseWell, TrainingEndMin, TrainingComplete, Notes``.
+        ``TrainingComplete`` is NA on a DFM that records no Training."""
         rows = []
         for dfm_id in sorted(self.dfms):
             for group in CHAMBER_GROUPS:
@@ -294,15 +461,20 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
                     "SucroseWell": gt.sucrose_well,
                     "TrainingEndMin": (np.nan if gt.training_end is None
                                        else float(gt.training_end)),
-                    "TrainingComplete": bool(gt.complete),
+                    "TrainingComplete": gt.training_complete,
                     "Notes": "; ".join(gt.notes),
                 })
         return pd.DataFrame(rows)
 
     def training_warnings(self) -> list[str]:
-        """Human-readable per-well flag disagreements, for the summary and QC."""
+        """Human-readable Training notes, for the summary and QC: per-well
+        flag disagreements on generation 1, Phase and Acclimation notes on
+        generation 3, and one line per DFM that records no Training."""
         out: list[str] = []
         for dfm_id in sorted(self.dfms):
+            if self.dfms[dfm_id].training_info == "none":
+                out.append(f"DFM {dfm_id}: {NO_TRAINING_INFORMATION}")
+                continue
             for group in CHAMBER_GROUPS:
                 gt = self.group_training(dfm_id, group)
                 for note in gt.notes:
@@ -317,8 +489,13 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
     # ------------------------------------------------------------------
 
     def _chamber_light(self, dfm: DFM, chamber: int) -> pd.Series:
-        """Boolean per-sample light state for *chamber*: either well's bit."""
+        """Boolean per-sample light state for *chamber*: either well's bit
+        in ``OptoCol1``, or on generation 3 either well's LED active at some
+        point in the record (``OnMs`` above 0)."""
         w1, w2 = self._chamber_wells(dfm, chamber)
+        if self._reads_phase(dfm):
+            lit = dfm.paradigm.on_ms[:, [w1 - 1, w2 - 1]].max(axis=1) > 0
+            return pd.Series(lit, index=dfm.lick_df.index)
         lights = dfm.lights_df
         if lights is None or f"W{w1}" not in lights.columns:
             return pd.Series(False, index=lights.index if lights is not None else [])
@@ -326,6 +503,19 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
 
     def _light_on_seconds(self, dfm: DFM, chamber: int,
                           range_minutes: Sequence[float]) -> float:
+        """``LightOn_sec`` over the (a, b] window.  Generation 3: the
+        record-by-record larger of the chamber's two wells' ``OnMs``, summed
+        and in seconds — exact, and the two wells' light counted once
+        (decision 31).  Otherwise the lit ``OptoCol1`` samples, one sample
+        period each."""
+        if self._reads_phase(dfm):
+            w1, w2 = self._chamber_wells(dfm, chamber)
+            on_ms = dfm.paradigm.on_ms[:, [w1 - 1, w2 - 1]].max(axis=1)
+            if range_is_specified(range_minutes):
+                a, b = range_bounds(range_minutes)
+                mins = dfm.paradigm.minutes
+                on_ms = on_ms[(mins > a) & (mins <= b)]
+            return float(on_ms.sum()) / 1000.0
         on = self._chamber_light(dfm, chamber)
         if range_is_specified(range_minutes):
             a, b = range_bounds(range_minutes)
@@ -419,9 +609,13 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
         """Every Light Event of one Chamber Group, Training and Test.
 
         Light and licks are the Paired chamber's: its Sucrose Well is the one
-        the firmware watches.  Columns:
+        the firmware watches.  A Light Event is an onset of the chamber's
+        ``OptoCol1`` light, or on generation 3 an Activation of the Sucrose
+        Well (:meth:`_activation_events`; an Acclimation Activation is a
+        Training Light Event).  Columns:
 
-        * ``Phase`` — Training or Test (onset after the group's training end);
+        * ``Facet`` — Training or Test (onset after the group's training end;
+          ``Recording`` on a DFM that records no Training);
         * ``RecordingMinute`` — the onset, in recording minutes;
         * ``Minutes`` — the onset in minutes since training end (NaN when
           training never ended);
@@ -437,7 +631,13 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
           light QC defines it;
         * ``LickFree`` — ``LicksSincePrev == 0`` and not ``Explained``;
         * ``RestingLevel`` — the Sucrose Well's Resting Level in the onset's
-          minute.
+          minute;
+        * ``Requirement``, ``FirmwareEvents``, ``Phase`` — the firmware's
+          record of the Activation (generation 3; NA otherwise): the
+          Requirement it met, the Firmware Events it took (from the previous
+          onset, exclusive, to this one, inclusive) and the Sucrose Well's
+          Phase, ``A`` or ``M``, on its onset row
+          (:meth:`_firmware_columns`).
         """
         cache = self._light_cache(dfm_id)
         key = ("events", int(group))
@@ -447,8 +647,11 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
         gt = self.group_training(dfm_id, group)
         mins = pd.to_numeric(dfm.lick_df["Minutes"], errors="coerce").to_numpy(dtype=float)
         licks = dfm.lick_df[f"W{gt.sucrose_well}"].to_numpy(dtype=bool)
-        light = self._chamber_light(dfm, gt.paired_chamber).to_numpy(dtype=bool)
-        onsets, ends = lqc.light_events(light)
+        if self._reads_phase(dfm):
+            onsets, ends = self._activation_events(dfm.paradigm, gt.sucrose_well)
+        else:
+            light = self._chamber_light(dfm, gt.paired_chamber).to_numpy(dtype=bool)
+            onsets, ends = lqc.light_events(light)
         on_min = mins[onsets]
         end = float(gt.training_end) if gt.complete else np.inf
         cum = np.cumsum(licks & (mins > end))
@@ -469,8 +672,12 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
             rest = levels[column].reindex(np.floor(on_min).astype(int)).to_numpy(dtype=float)
         else:
             rest = np.full(onsets.size, np.nan)
+        if gt.known:
+            facet = np.where(on_min > end, TEST_LABEL, TRAINING_LABEL)
+        else:
+            facet = np.full(onsets.size, RECORDING_LABEL)
         table = pd.DataFrame({
-            "Phase": np.where(on_min > end, TEST_LABEL, TRAINING_LABEL),
+            "Facet": facet,
             "RecordingMinute": on_min,
             "Minutes": (on_min - end) if gt.complete else np.full(onsets.size, np.nan),
             "CumLicks": cum[onsets].astype(float),
@@ -479,9 +686,71 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
             "Explained": explained,
             "LickFree": (counts == 0) & ~explained,
             "RestingLevel": rest,
+            **self._firmware_columns(dfm, gt.sucrose_well, onsets),
         })
         cache[key] = table
         return table
+
+    @staticmethod
+    def _activation_events(state: ParadigmState, well: int) -> tuple[np.ndarray, np.ndarray]:
+        """``(onsets, ends)`` of *well*'s Activations, as row indices: each
+        starts on the row where Activations rose and ends on the first later
+        row where the well's ``OnMs`` is 0, or at the next onset, whichever
+        comes first (``len(state)`` for one lit to the end)."""
+        onsets = state.activation_onsets(well).astype(int)
+        n = len(state)
+        if not onsets.size:
+            return onsets, onsets.copy()
+        ## The first dark row after each onset; n where none follows.
+        dark = np.append(np.flatnonzero(state.on_ms[:, int(well) - 1] == 0), n)
+        first_dark = dark[np.searchsorted(dark[:-1], onsets, side="right")]
+        following = np.append(onsets[1:], n)
+        return onsets, np.minimum(first_dark, following).astype(int)
+
+    def _firmware_columns(self, dfm: DFM, well: int, onsets: np.ndarray) -> dict[str, Any]:
+        """``Requirement``, ``FirmwareEvents`` and ``Phase`` for Light Events
+        starting at *onsets* — the firmware's record on generation 3
+        (decision 13), all NA otherwise.
+
+        ``Requirement`` is :meth:`ParadigmState.requirement_met`; for an
+        Activation on the first row of a new Paradigm, whose Requirement no
+        row shows, it is the program's ``requirement_for(k)`` when
+        ``Program.txt`` defines that ratio Paradigm (k counts the Main
+        Activations of the row), and NA otherwise.  An Acclimation
+        Activation meets none.  ``FirmwareEvents`` counts rows from the
+        previous onset, exclusive, to this one, inclusive: the Events that
+        built the Progress and the one that completed it, so under a ratio
+        Paradigm in Main it equals the Requirement met.
+        """
+        n = int(np.asarray(onsets).size)
+        if not self._reads_phase(dfm):
+            return {"Requirement": pd.array([pd.NA] * n, dtype="Int64"),
+                    "FirmwareEvents": pd.array([pd.NA] * n, dtype="Int64"),
+                    "Phase": pd.array([pd.NA] * n, dtype="string")}
+        state = dfm.paradigm
+        w = int(well) - 1
+        names = state.paradigm
+        program = getattr(self, "opto_program", None)
+        paradigms = getattr(program, "paradigms", None) or {}
+        requirement: list[int | None] = []
+        events: list[int] = []
+        previous, same_row = -1, 0
+        for onset in np.asarray(onsets, dtype=int):
+            same_row = same_row + 1 if onset == previous else 0
+            met = state.requirement_met(well, int(onset))
+            if (met is None and 0 < onset < len(state) and not state.phase_a[onset, w]
+                    and _new_paradigm(names, int(onset))):
+                paradigm = paradigms.get(str(names[onset])) if not pd.isna(names[onset]) else None
+                if paradigm is not None and paradigm.type in RATIO_PARADIGMS:
+                    met = paradigm.requirement_for(1 + same_row)
+            requirement.append(met)
+            events.append(state.firmware_events_between(well, previous + 1, int(onset) + 1))
+            previous = int(onset)
+        phase = np.where(state.phase_a[np.asarray(onsets, dtype=int), w], "A", "M") \
+            if n else np.zeros(0, dtype=object)
+        return {"Requirement": pd.array(requirement, dtype="Int64"),
+                "FirmwareEvents": pd.array(events, dtype="Int64"),
+                "Phase": pd.array(list(phase), dtype="string")}
 
     def _events_explained(self, dfm_id: int, activity: np.ndarray,
                           onsets: np.ndarray, ends: np.ndarray) -> np.ndarray:
@@ -508,8 +777,8 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
         dfm = self.dfms[int(dfm_id)]
         gt = self.group_training(dfm_id, group)
         events = self.light_events_table(dfm_id, group)
-        test = events[events["Phase"] == TEST_LABEL]
-        training = events[events["Phase"] == TRAINING_LABEL]
+        test = events[events["Facet"] == TEST_LABEL]
+        training = events[events["Facet"] == TRAINING_LABEL]
         mins = pd.to_numeric(dfm.lick_df["Minutes"], errors="coerce").to_numpy(dtype=float)
         licks = dfm.lick_df[f"W{gt.sucrose_well}"].to_numpy(dtype=bool)
         end = float(gt.training_end) if gt.complete else np.inf
@@ -520,9 +789,10 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
                    else lqc.resting_summary(pd.Series(dtype=float)))
         reference = self.resting_reference(dfm_id, gt.sucrose_well)
         reference_level = float(reference.median()) if not reference.empty else np.nan
+        phase = self._reads_phase(dfm)
         verdict = lqc.judge_group(
             settings,
-            training_complete=gt.complete,
+            training_complete=gt.training_complete,
             training_light_events=len(training),
             training_licks=training_licks,
             test_counts=test["LicksSincePrev"].to_numpy(),
@@ -530,7 +800,17 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
             reference_level=reference_level,
             any_light=len(events) > 0,
             lick_free=test["LickFree"].to_numpy(dtype=bool),
+            firmware_events=(test["FirmwareEvents"].to_numpy(dtype=float, na_value=np.nan)
+                             if phase else None),
+            check_trend=not self._fixed_ratio(dfm_id, group),
+            light_source=("Activations at the paired Sucrose Well" if phase
+                          else "OptoCol1 light bits"),
         )
+        notes = list(verdict.notes)
+        name, paradigm = self.test_paradigm(dfm_id, group)
+        if name is not None and paradigm is None:
+            notes.append(f"the Test Paradigm {name}'s type is unknown without its "
+                         f"Program.txt entry, so it is judged as a progressive ratio")
         run_start = (float(test["Minutes"].iloc[verdict.lick_free_run_start])
                      if verdict.lick_free_run_start is not None else np.nan)
         row = {
@@ -538,16 +818,18 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
             "PairedChamber": gt.paired_chamber, "YokedChamber": gt.yoked_chamber,
             "SucroseWell": gt.sucrose_well,
             "Treatment": self._group_treatment(dfm_id, group),
-            "TrainingComplete": bool(gt.complete),
+            "TrainingComplete": gt.training_complete,
             "TrainingMinutes": float(gt.training_end) if gt.complete else np.nan,
-            "TrainingLightEvents": int(len(training)),
-            "TrainingLicks": training_licks,
-            "TestLightEvents": int(len(test)),
+            ## A recording without Training has neither phase to count in.
+            "TrainingLightEvents": int(len(training)) if gt.known else np.nan,
+            "TrainingLicks": training_licks if gt.known else np.nan,
+            "TestLightEvents": int(len(test)) if gt.known else np.nan,
             "LickFreeEvents": int(verdict.lick_free_events) if gt.complete else np.nan,
             "LongestLickFreeRun": int(verdict.longest_lick_free_run) if gt.complete else np.nan,
             "LickFreeRunStartMin": run_start,
             "TrendRho": verdict.trend_rho,
             "TrendSlope": verdict.trend_slope,
+            "TrendRhoFirmware": verdict.trend_rho_firmware,
             "RestingStart": resting["start"],
             "RestingMax": resting["max"],
             "RestingEnd": resting["end"],
@@ -556,7 +838,7 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
             "Flags": ", ".join(verdict.flags),
             "Verdict": verdict.verdict,
             "Excluded": bool(verdict.failed and settings.exclude),
-            "Notes": "; ".join(verdict.notes),
+            "Notes": "; ".join(notes),
         }
         cache[key] = row
         return row
@@ -605,7 +887,7 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
                 if not self.group_training(dfm_id, group).complete:
                     continue
                 events = self.light_events_table(dfm_id, group)
-                series.append(events.loc[events["Phase"] == TEST_LABEL,
+                series.append(events.loc[events["Facet"] == TEST_LABEL,
                                          "LicksSincePrev"].to_numpy())
         return lqc.estimate_increment(series)
 
@@ -696,7 +978,7 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
             if r["Notes"]:
                 if not reasons:
                     lines.append(f"{where}:")
-                lines.extend(f"    · {note}" for note in str(r["Notes"]).split("; "))
+                lines.extend(f"    · {note}" for note in _split_notes(r["Notes"]))
         return lines
 
     def _light_qc_summary_lines(self) -> list[str]:
@@ -719,10 +1001,18 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
         show.columns = ["DFM", "Group", "Paired", "Treatment", "TrainEv",
                         "TrainLicks", "TestEv", "LickFree", "Run", "Rho",
                         "Rise", "Ratio", "Verdict"]
-        for col, fmt in (("Rho", "{:.2f}"), ("Rise", "{:.0f}"), ("Ratio", "{:.1f}")):
+        formats = [("Rho", "{:.2f}"), ("Rise", "{:.0f}"), ("Ratio", "{:.1f}")]
+        if table["TrendRhoFirmware"].notna().any():
+            ## Generation 3: the trend of the firmware's own Events beside it.
+            show.insert(list(show.columns).index("Rho") + 1, "RhoFW", table["TrendRhoFirmware"])
+            formats.append(("RhoFW", "{:.2f}"))
+        for col, fmt in formats:
             show[col] = show[col].map(lambda v, f=fmt: "—" if pd.isna(v) else f.format(v))
         for col in ("LickFree", "Run"):
             show[col] = show[col].map(lambda v: "—" if pd.isna(v) else f"{int(v)}")
+        for col in ("TrainEv", "TrainLicks", "TestEv"):
+            if show[col].isna().any():      # a DFM that records no Training
+                show[col] = show[col].map(lambda v: "—" if pd.isna(v) else f"{int(v)}")
         out.append(show.to_string(index=False))
         out.append("")
         inc = self.estimated_increment()
@@ -822,7 +1112,8 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
             ## groups by it.  A group that never finished has no such moment,
             ## and both its rows stay NA.
             tmins.append(float(gt.training_end) if gt.complete else np.nan)
-            tdone.append(bool(gt.complete))
+            ## NA, not false, where the recording has no Training at all.
+            tdone.append(gt.training_complete)
             rng = (float(row.get("StartMin", 0.0)), float(row.get("EndMin", 0.0)))
             light.append(self._light_on_seconds(self.dfms[dfm_id], chamber, rng))
         pos = list(df.columns).index("Chamber") + 1
@@ -883,13 +1174,21 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
         return []
 
     def facet_labels(self):
-        return list(FACET_LABELS)
+        """The ordered union of every DFM's Facets: Training and Test, and
+        ``Recording`` for a DFM that records no Training (decision 15)."""
+        present = {label for dfm in self.dfms.values()
+                   for label in ((RECORDING_LABEL,) if dfm.training_info == "none"
+                                 else FACET_LABELS)}
+        return [label for label in _FACET_ORDER if label in present] or list(FACET_LABELS)
 
     def group_windows(self, dfm_id: int, group: int) -> list[tuple[str, tuple]]:
         """``[(label, (start, end)), ...]`` for one Chamber Group.  A group
         that never completed training has only a Training window, spanning
-        the whole recording."""
+        the whole recording; a group on a DFM that records no Training has
+        one ``Recording`` window."""
         gt = self.group_training(dfm_id, group)
+        if not gt.known:
+            return [(RECORDING_LABEL, (0.0, float("inf")))]
         if not gt.complete:
             return [(TRAINING_LABEL, (0.0, float("inf")))]
         ## Rounded to the hundredth of a minute so the FacetRange cell and the
@@ -927,7 +1226,7 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
         if not frames:
             return pd.DataFrame()
         out = pd.concat(frames, ignore_index=True)
-        order = {TRAINING_LABEL: 0, TEST_LABEL: 1}
+        order = {label: i for i, label in enumerate(_FACET_ORDER)}
         out["_o"] = out["Facet"].map(order)
         out = out.sort_values(["_o", "DFM", "Chamber"], kind="stable").drop(columns="_o")
         return out.reset_index(drop=True)
@@ -971,7 +1270,7 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
                 "PairedChamber": int(p["Chamber"]), "YokedChamber": int(y["Chamber"]),
                 "StartMin": float(p["StartMin"]), "EndMin": float(p["EndMin"]),
                 "TrainingMinutes": p["TrainingMinutes"],
-                "TrainingComplete": bool(p["TrainingComplete"]),
+                "TrainingComplete": _flag(p["TrainingComplete"]),
                 "LightOn_sec": float(p["LightOn_sec"]),
                 "LightQC": p.get("LightQC", ""),
                 "LickFreeLightEvents": p.get("LickFreeLightEvents", np.nan),
@@ -1231,7 +1530,9 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
                 v = row.get(col)
                 if max_events is not None and pd.notna(v) and float(v) > float(max_events):
                     reasons.append(f"{col}={float(v):.6g} > max_events_cutoff={max_events}")
-            if require_training and not bool(row.get("TrainingComplete", True)):
+            ## Only a group known not to have trained: on a DFM that records no
+            ## Training, TrainingComplete is NA and removes nothing.
+            if require_training and _flag(row.get("TrainingComplete", True)) is False:
                 reasons.append(
                     f"training never completed in chamber group {int(row['Group'])} "
                     f"(require_training_complete)")
@@ -1485,8 +1786,9 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
         curves = self.cumulative_curve_data(binsize_min=binsize_min, well="A", qc=True)
         curves = curves[curves["DFM"] == dfm_id] if not curves.empty else curves
         if curves.empty:
-            return p9.ggplot() + p9.labs(
-                title=f"DFM {dfm_id} — no chamber group completed training")
+            why = (NO_TRAINING_INFORMATION if self.dfms[dfm_id].training_info == "none"
+                   else "no chamber group completed training")
+            return p9.ggplot() + p9.labs(title=f"DFM {dfm_id} — {why}")
         curves = curves.copy()
         panel = {}
         for group in CHAMBER_GROUPS:
@@ -1505,7 +1807,7 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
             if group not in present:
                 continue
             events = self.light_events_table(dfm_id, group)
-            free = events[(events["Phase"] == TEST_LABEL) & events["LickFree"]]
+            free = events[(events["Facet"] == TEST_LABEL) & events["LickFree"]]
             if not free.empty:
                 rings.append(pd.DataFrame({"Minutes": free["Minutes"].to_numpy(),
                                            "CumLicks": free["CumLicks"].to_numpy(),
@@ -1552,7 +1854,7 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
         panel = {}
         for group in CHAMBER_GROUPS:
             events = self.light_events_table(dfm_id, group)
-            test = events[events["Phase"] == TEST_LABEL]
+            test = events[events["Facet"] == TEST_LABEL]
             if test.empty:
                 continue
             panel[group] = self._qc_panel_label(
@@ -1745,17 +2047,28 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
                      settings: pbp.BreakSettings) -> float | None:
         """The group's Test window in minutes since training end — to the end
         of the recording, capped at ``pr_test_window_min`` — or ``None`` when
-        training never ended."""
+        training never ended.
+
+        On generation 3 the window ends with the last row of the Paired
+        Sucrose Well's ratio Paradigm run that holds its training end, not at
+        the end of the recording (decision 12): a ClosedLoop Interval after it
+        is no part of the Test, and a later ratio run is noted
+        (:meth:`group_training`) and left to Program Facets."""
         gt = self.group_training(dfm_id, group)
         if not gt.complete:
             return None
         dfm = self.dfms[int(dfm_id)]
-        return settings.test_end(self._recording_end(dfm) - float(gt.training_end))
+        end = self._recording_end(dfm)
+        if self._reads_phase(dfm):
+            run = self._test_ratio_run(dfm.paradigm, gt.sucrose_well)
+            if run is not None:
+                end = float(dfm.paradigm.minutes[run[1] - 1])
+        return settings.test_end(end - float(gt.training_end))
 
     def _test_events(self, dfm_id: int, group: int) -> pd.DataFrame:
         """The Test-phase rows of :meth:`light_events_table`."""
         events = self.light_events_table(dfm_id, group)
-        return events[events["Phase"] == TEST_LABEL]
+        return events[events["Facet"] == TEST_LABEL]
 
     def group_break(self, dfm_id: int, group: int,
                     settings: pbp.BreakSettings | None = None) -> pbp.GapBreak | None:
@@ -1840,7 +2153,9 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
             out = pd.DataFrame({"Minutes": test["Minutes"].to_numpy(dtype=float),
                                 "CumLicks": test["CumLicks"].to_numpy(dtype=float)})
             for col in LEDGER_COLUMNS:
-                out[col] = test[col].to_numpy()
+                ## The Series, not its values: Requirement and FirmwareEvents
+                ## are nullable integers and Phase nullable text.
+                out[col] = test[col].reset_index(drop=True)
             result = self.group_break(dfm_id, role.group)
             out[COUNTED_COLUMN] = (result.counted if result is not None
                                    else np.zeros(len(out), dtype=bool))
@@ -1849,8 +2164,14 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
             well_a = self._sucrose_well(dfm, chamber)
             licks = dfm.lick_df[f"W{well_a}"].to_numpy(dtype=float)
             cum = np.cumsum(np.where(mins > end, licks, 0.0))
-            onsets, _ends = lqc.light_events(
-                self._chamber_light(dfm, chamber).to_numpy(dtype=bool))
+            if self._reads_phase(dfm):
+                ## The group's Light Events are its Paired Sucrose Well's
+                ## Activations, which no light of the Yoked chamber's own
+                ## records: the Yoked rows are the same onsets.
+                onsets, _ends = self._activation_events(dfm.paradigm, gt.sucrose_well)
+            else:
+                onsets, _ends = lqc.light_events(
+                    self._chamber_light(dfm, chamber).to_numpy(dtype=bool))
             onsets = onsets[mins[onsets] > end]
             out = pd.DataFrame({"Minutes": mins[onsets] - end, "CumLicks": cum[onsets]})
         if out.empty:
@@ -1971,22 +2292,38 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
             qc_bleeding_cutoff=qc_bleeding_cutoff)
         buf = ["", "Progressive Ratio — training by chamber group",
                "--------------------------------------------"]
+        information = self.training_information()
+        if information:
+            buf.append(information)
         table = self.training_table()
         if table.empty:
             buf.append("(no DFMs)")
         else:
             show = table.drop(columns=["Notes"]).copy()
-            show["TrainingEndMin"] = show["TrainingEndMin"].map(
-                lambda v: "never" if pd.isna(v) else f"{v:.1f}")
+            unknown = show["TrainingComplete"].isna()
+            show["TrainingEndMin"] = [
+                "n/a" if missing else "never" if pd.isna(v) else f"{v:.1f}"
+                for v, missing in zip(show["TrainingEndMin"], unknown)]
+            if unknown.any():
+                show["TrainingComplete"] = ["NA" if missing else str(bool(v))
+                                            for v, missing in zip(show["TrainingComplete"], unknown)]
             buf.append(show.to_string(index=False))
         warnings = self.training_warnings()
         buf.append("")
-        buf.append("Training-flag notes (QC, not errors)")
-        buf.append("------------------------------------")
+        ## Generation 1 keeps its words; Phase and the missing information
+        ## have no flags to speak of.
+        if any(dfm.training_info == "flag" for dfm in self.dfms.values()):
+            buf.append("Training-flag notes (QC, not errors)")
+            buf.append("------------------------------------")
+            quiet = "  (all four wells of every group cleared together)"
+        else:
+            buf.append("Training notes (QC, not errors)")
+            buf.append("-------------------------------")
+            quiet = "  (none)"
         if warnings:
             buf.extend(f"  {w}" for w in warnings)
         else:
-            buf.append("  (all four wells of every group cleared together)")
+            buf.append(quiet)
         buf.extend(self._light_qc_summary_lines())
         buf.extend(self._breaking_point_summary_lines())
         return text + "\n".join(buf) + "\n"
@@ -2005,11 +2342,18 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
         when none); ``Censored`` true when no such gap came before the Test
         window ended, so the count is a lower bound; ``TestMinutes`` the window
         the rule saw (recording end minus training end, capped at
-        ``pr_test_window_min``); ``LargestRequirement`` the most Sucrose Well
-        licks credited to one counted event, descriptive only;
-        ``LickFreeLightEvents`` and ``LightQC`` the group's light QC count and
-        flags.  A group the light QC excluded is not here; one it failed but
-        kept (``exclude_failed_pr_groups: false``) is, whole, with its flags.
+        ``pr_test_window_min``; on generation 3 the end of the ratio
+        Paradigm's run); ``LargestRequirement`` the most Sucrose Well licks
+        credited to one counted event, descriptive only, and on generation 3
+        the recorded ``BreakRequirement``; ``BreakRequirement`` the
+        Requirement the last counted Light Event met and ``FirmwareEvents``
+        the Firmware Events credited to the counted ones (generation 3, NA
+        otherwise; :meth:`_break_requirement`); ``LickFreeLightEvents`` and
+        ``LightQC`` the group's light QC count and flags.  A group the light QC
+        excluded is not here; one it failed but kept
+        (``exclude_failed_pr_groups: false``) is, whole, with its flags.  A
+        group with no Test phase, which includes every group on a DFM that
+        records no Training, has no row: its light QC notes say why.
         """
         factors = list(self.design_factors or [])
         cols = ["Treatment", *factors, *BREAKING_POINT_SUMMARY_COLUMNS]
@@ -2024,8 +2368,12 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
                 if result is None:
                     continue
                 gt = self.group_training(dfm_id, group)
-                credited = self._test_events(dfm_id, group)["LicksSincePrev"] \
-                    .to_numpy(dtype=float)[result.counted]
+                test = self._test_events(dfm_id, group)
+                credited = test["LicksSincePrev"].to_numpy(dtype=float)[result.counted]
+                largest = int(credited.max()) if credited.size else 0
+                recorded = self._reads_phase(self.dfms[dfm_id])
+                requirement, firmware = self._break_requirement(
+                    dfm_id, group, test, result.counted)
                 qc = by_group.get((int(dfm_id), int(group)), {})
                 rows.append({
                     "Treatment": self.design.treatment_for(dfm_id, gt.paired_chamber),
@@ -2035,13 +2383,45 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
                     "BreakMin": float(result.last_min),
                     "Censored": bool(result.censored),
                     "TestMinutes": float(self._test_window(dfm_id, group, settings)),
-                    "LargestRequirement": int(credited.max()) if credited.size else 0,
+                    "LargestRequirement": requirement if recorded else largest,
+                    "BreakRequirement": requirement,
+                    "FirmwareEvents": firmware,
                     "LickFreeLightEvents": qc.get("LickFreeEvents", np.nan),
                     "LightQC": qc.get("Flags", ""),
                 })
         if not rows:
             return pd.DataFrame(columns=cols)
-        return self._append_factor_columns(pd.DataFrame(rows))[cols].reset_index(drop=True)
+        out = pd.DataFrame(rows)
+        for col in ("BreakRequirement", "FirmwareEvents"):
+            out[col] = pd.array(out[col].tolist(), dtype="Int64")
+        if out["LargestRequirement"].isna().any():
+            out["LargestRequirement"] = pd.array(out["LargestRequirement"].tolist(),
+                                                 dtype="Int64")
+        return self._append_factor_columns(out)[cols].reset_index(drop=True)
+
+    def _break_requirement(self, dfm_id: int, group: int, test: pd.DataFrame,
+                           counted: np.ndarray) -> tuple[int | None, int | None]:
+        """``(BreakRequirement, FirmwareEvents)`` of a group's Breaking Point
+        from its Test Light Events and the mask of those counted.
+
+        ``BreakRequirement`` is the Requirement the last counted Light Event
+        met, read from the row before the one where ``Activations`` rose
+        (ADR-0014 addendum), or under a FixedRatio Test Paradigm its Ratio
+        (decision 14); NA when nothing was counted or the rows do not show
+        it.  ``FirmwareEvents`` sums the Firmware Events credited to the
+        counted events.  ``(None, None)`` off generation 3.
+        """
+        if not self._reads_phase(self.dfms[int(dfm_id)]):
+            return None, None
+        counted = np.asarray(counted, dtype=bool)
+        firmware = int(test["FirmwareEvents"][counted].sum())
+        if not counted.any():
+            return None, firmware
+        _name, paradigm = self.test_paradigm(dfm_id, group)
+        if paradigm is not None and paradigm.type == FIXED_RATIO and paradigm.ratio is not None:
+            return int(paradigm.ratio), firmware
+        last = test["Requirement"][counted].iloc[-1]
+        return (None if pd.isna(last) else int(last)), firmware
 
     def breaking_point_sensitivity(self, gaps: Sequence[float] | None = None) -> pd.DataFrame:
         """Every group of :meth:`breaking_point_summary` under other values of
@@ -2096,6 +2476,12 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
             "LargestReq": summary["LargestRequirement"],
             "LightQC": [_light_qc_verdict_text(f) for f in summary["LightQC"]],
         })
+        if summary["BreakRequirement"].notna().any():
+            ## Generation 3: the Requirement the firmware recorded, beside the
+            ## count it belongs to.
+            show.insert(list(show.columns).index("BreakingPoint") + 1, "BreakReq",
+                        [_count_text(v) for v in summary["BreakRequirement"]])
+            show["LargestReq"] = [_count_text(v) for v in summary["LargestRequirement"]]
         lines.append(show.to_string(index=False))
         sens = self.breaking_point_sensitivity()
         table = pd.DataFrame({"DFM": sens["DFM"], "Group": sens["Group"]})
@@ -2114,13 +2500,21 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
         return lines
 
     def _breaking_point_summary_lines(self) -> list[str]:
-        return ["", "Progressive ratio breaking point",
-                "--------------------------------",
-                "The paired fly's lick-backed Test light events before its first pause",
-                "longer than pr_break_gap_min; a lick-free light event neither counts",
-                "nor ends a pause.  '+' marks a censored count: no such pause came",
-                "before the Test window ended, so the count is a lower bound.",
-                *self.breaking_point_lines(), ""]
+        lines = ["", "Progressive ratio breaking point",
+                 "--------------------------------",
+                 "The paired fly's lick-backed Test light events before its first pause",
+                 "longer than pr_break_gap_min; a lick-free light event neither counts",
+                 "nor ends a pause.  '+' marks a censored count: no such pause came",
+                 "before the Test window ended, so the count is a lower bound."]
+        if any(self._reads_phase(dfm) for dfm in self.dfms.values()):
+            lines += ["BreakReq is the Requirement the last counted light event met, as",
+                      "the firmware recorded it; a fixed ratio's is its Ratio."]
+        missing = sorted(int(d) for d, dfm in self.dfms.items() if dfm.training_info == "none")
+        if missing:
+            lines.append(f"DFM {', '.join(str(d) for d in missing)}: no Breaking Point or "
+                         f"Sucrose Persistence — {NO_TRAINING_INFORMATION}, so there is "
+                         f"no Test phase.")
+        return [*lines, *self.breaking_point_lines(), ""]
 
     # ------------------------------------------------------------------
     # Experiment report hooks (pyflic.base.pdf_report)
@@ -2154,10 +2548,19 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
             text += (f"  {len(warned)} warning(s): {rc.join_groups(warned)} — "
                      f"see Quality control.")
             tone = "warning" if tone == "ok" else tone
+        ## Only groups known not to have trained: TrainingComplete is NA on a
+        ## DFM that records no Training, which has its own callout.
         incomplete = [(int(r.DFM), int(r.Group)) for r in table.itertuples()
-                      if not r.TrainingComplete]
+                      if _flag(r.TrainingComplete) is False]
         blocks = [rl.Callout(text, tone=tone,
                              title="Light QC — did the paired fly earn its light?")]
+        information = self.training_information()
+        if information:
+            ## The line verbatim: the Hub and the Project Report say the same.
+            blocks.append(rl.Callout(
+                f"{information}.  Each chamber group is one Recording facet, kept "
+                f"whole: no Test phase, Breaking Point or Sucrose Persistence.",
+                tone="warning", title="Training"))
         if incomplete:
             required = _truthy((self.global_constants or {}).get(
                 "require_training_complete", True))
@@ -2180,26 +2583,42 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
             "Yoked chamber": training["YokedChamber"],
             "Sucrose Well": [f"W{int(w)}" for w in training["SucroseWell"]],
             "Training end (min)": training["TrainingEndMin"],
-            "Training": ["complete" if c else "never completed"
+            "Training": ["no information" if _flag(c) is None else
+                         "complete" if c else "never completed"
                          for c in training["TrainingComplete"]],
         })
 
         def training_tone(value: Any) -> str | None:
-            return "ok" if value == "complete" else "failed"
+            return ("ok" if value == "complete" else
+                    "warning" if value == "no information" else "failed")
 
+        kinds = {dfm.training_info for dfm in self.dfms.values()}
+        where = []
+        if "flag" in kinds:
+            where.append("at the last minute the firmware flags the paired chamber's "
+                         "Sucrose Well as in training")
+        if "phase" in kinds:
+            where.append("at the paired chamber's Sucrose Well's first row in Phase M "
+                         "under a ratio Paradigm (the end of its Acclimation, or of the "
+                         "Interval before the ratio Paradigm)")
+        lead = (f"Training ends, per chamber group, {' or '.join(where)}; the Test phase is "
+                f"everything after it, and Progressive Ratio time axes run from there."
+                if where else "")
+        information = self.training_information()
+        if information:
+            lead += f"  ({information} — one Recording facet per chamber group.)"
         blocks: list[Any] = [
             rl.Heading("Progressive ratio: training", level=2),
-            rl.Paragraph(
-                "Training ends, per chamber group, at the last minute the firmware flags "
-                "the paired chamber's Sucrose Well as in training; the Test phase is "
-                "everything after it, and Progressive Ratio time axes run from there."),
+            rl.Paragraph(lead.strip()),
             rl.Table(training_view, caption="Training by chamber group",
                      formats={"Training end (min)": "{:.1f}"},
                      status={"Training": training_tone}),
         ]
         notes = self.training_warnings()
         if notes:
-            blocks.append(rl.Paragraph("Training-flag notes (QC, not errors):",
+            blocks.append(rl.Paragraph(("Training-flag notes (QC, not errors):"
+                                        if "flag" in kinds else
+                                        "Training notes (QC, not errors):"),
                                        size=rl.SIZE_SMALL, color=rl.MUTED))
             blocks.append(rl.Bullets(notes, size=rl.SIZE_SMALL, color=rl.MUTED))
 
@@ -2218,6 +2637,13 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
             "Verdict": [("excluded" if ex else v)
                         for v, ex in zip(table["Verdict"], table["Excluded"])],
         })
+        firmware = ""
+        if table["TrendRhoFirmware"].notna().any():
+            view.insert(list(view.columns).index("Trend rho") + 1, "Firmware trend rho",
+                        table["TrendRhoFirmware"])
+            firmware = ("  The firmware records each light event's Activation, so the "
+                        "trend is also read on its Firmware Events; one that rises while "
+                        "the licks do not is a note on pyflic's detection, not a warning.")
         blocks += [
             rl.Heading("Progressive ratio: light QC", level=2),
             rl.Paragraph(
@@ -2229,10 +2655,11 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
                 f"{settings.lick_free_run} or more lick-free Test light events) and "
                 "implausible training (training light events with no sucrose lick) fail a "
                 "group; no increasing trend in licks per light event and a rising or "
-                "elevated resting level are warnings.  Computed over the whole recording."),
+                "elevated resting level are warnings.  Computed over the whole recording."
+                + firmware),
             rl.Table(view, caption="Light QC by chamber group",
-                     formats={"Trend rho": "{:.2f}", "Resting rise": "{:.0f}",
-                              "Resting ratio": "{:.1f}"},
+                     formats={"Trend rho": "{:.2f}", "Firmware trend rho": "{:.2f}",
+                              "Resting rise": "{:.0f}", "Resting ratio": "{:.1f}"},
                      status={"Verdict": rl.tone_of}),
             rl.Paragraph(f"Thresholds: {settings.describe()}.", size=rl.SIZE_SMALL,
                          color=rl.MUTED),
@@ -2355,8 +2782,23 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
         window = ("" if settings.test_window_min is None else
                   f"  Every Test window is capped at {settings.test_window_min:g} minutes "
                   f"(pr_test_window_min).")
+        ## A FixedRatio Test Paradigm runs the same first-gap rule; what it
+        ## measures is activations earned at a constant requirement (decision 14).
+        tested = [(d, g) for d in sorted(self.dfms) for g in CHAMBER_GROUPS
+                  if self.group_training(d, g).complete]
+        fixed = bool(tested) and all(self._fixed_ratio(d, g) for d, g in tested)
+        recorded = summary["BreakRequirement"].notna().any() if not summary.empty else False
+        extra = ""
+        if fixed:
+            extra = ("  The Test Paradigm is a fixed ratio: every activation needed the "
+                     "same number of Firmware Events, its Ratio, so the count is the "
+                     "activations earned before the first pause.")
+        elif recorded:
+            extra = ("  The firmware recorded the Requirement each light event met; the "
+                     "break requirement is the last counted one's.")
         blocks += [
-            rl.Heading("Breaking point", level=2),
+            rl.Heading("Fixed ratio: activations earned" if fixed else "Breaking point",
+                       level=2),
             rl.Paragraph(
                 f"The breaking point is the number of lick-backed Test light events the "
                 f"paired fly completed before its first pause longer than "
@@ -2364,7 +2806,7 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
                 f"neither counts nor ends a pause.  A group still responding when its Test "
                 f"window ended is censored: its count is a lower bound, drawn open, and the "
                 f"curve and the log-rank test treat it so.  The yoked fly has no breaking "
-                f"point: its light is its partner's.{window}"),
+                f"point: its light is its partner's.{window}{extra}"),
         ]
         if summary.empty:
             blocks.append(rl.Callout("No chamber group in the analysis has a Test phase.",
@@ -2393,6 +2835,9 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
                 "Largest requirement": summary["LargestRequirement"],
                 "Light QC": [_light_qc_verdict_text(f) for f in summary["LightQC"]],
             })
+            if recorded:
+                view.insert(list(view.columns).index("Breaking point") + 1,
+                            "Break requirement", summary["BreakRequirement"])
             blocks.append(rl.Table(view, caption="Breaking point by chamber group "
                                                  "(+: censored, a lower bound)",
                                    formats={"Break (min)": "{:.0f}",
@@ -2440,6 +2885,9 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
         light = self.write_light_qc()
         result.update(light)
         print(f"  Done → {light['pr_light_qc']}", flush=True)
+        information = self.training_information()
+        if information:
+            print(f"  {information}", flush=True)
         for line in self.light_qc_lines():
             print(f"  {line}", flush=True)
         print("[PR] Breaking point...", flush=True)
@@ -2469,6 +2917,46 @@ def _flag(value) -> bool | None:
     except (TypeError, ValueError):
         pass
     return _truthy(value)
+
+
+def _true_runs(mask: np.ndarray) -> list[tuple[int, int]]:
+    """``[i0, i1)`` of each run of True in *mask*, in order."""
+    m = np.asarray(mask, dtype=bool)
+    if not m.size:
+        return []
+    edges = np.flatnonzero(np.diff(np.concatenate(([False], m, [False])).astype(np.int8)))
+    return [(int(a), int(b)) for a, b in zip(edges[::2], edges[1::2])]
+
+
+def _interval_at(state: ParadigmState, row: int) -> str:
+    """The Program Interval recorded on *row*, as text (``unknown`` for an
+    instruction outside the Program)."""
+    value = state.program_interval[int(row)]
+    return "unknown" if pd.isna(value) else str(int(value))
+
+
+def _new_paradigm(names, row: int) -> bool:
+    """Whether *row* records a different Paradigm name from the row before
+    (``NA`` counts as a name of its own), so the firmware reset every Well."""
+    here, before = names[row], names[row - 1]
+    if pd.isna(here) or pd.isna(before):
+        return bool(pd.isna(here) != pd.isna(before))
+    return str(here) != str(before)
+
+
+def _split_notes(text: Any) -> list[str]:
+    """A ``Notes`` cell back into its notes.  They are joined with ``"; "``,
+    which :data:`pyflic.base.pr_light_qc.FIRMWARE_TREND_NOTE` also holds, so
+    that one note is kept whole."""
+    hold = "\x00"
+    joined = str(text).replace(lqc.FIRMWARE_TREND_NOTE,
+                               lqc.FIRMWARE_TREND_NOTE.replace("; ", hold))
+    return [note.replace(hold, "; ") for note in joined.split("; ")]
+
+
+def _count_text(value: Any) -> str:
+    """A nullable count as text, ``NA`` when missing."""
+    return "NA" if value is None or pd.isna(value) else str(int(value))
 
 
 def _light_qc_verdict_text(flags: Any) -> str:
