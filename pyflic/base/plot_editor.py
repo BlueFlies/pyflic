@@ -508,7 +508,8 @@ class PlotEditorWindow(QMainWindow):
         self.plot_combo.clear()
         layout = self.project.chamber_layout if self.project else "two_well"
         type_name = (self.project.experiment_type.name if self.project else None)
-        for plot_id in pubfigures.plots_for_layout(layout, type_name):
+        light = pubfigures.has_light_table(self.project)
+        for plot_id in pubfigures.plots_for_layout(layout, type_name, light=light):
             self.plot_combo.addItem(pubfigures.PLOT_TYPES[plot_id]["display"],
                                     plot_id)
         self.style_combo.clear()
@@ -674,13 +675,15 @@ class PlotEditorWindow(QMainWindow):
             if source is None or source.empty:
                 return None
             return pubfigures.breaking_point_data(source)
-        source = self._facet_frame
+        ## A light figure draws from the stacked light table, every other
+        ## faceted one from the Combined Analysis facet table.
+        source = (self._facet_frame if pubfigures.source_of(plot_id) == "facet"
+                  else pubfigures.frame_for(plot_id, self._facet_frame,
+                                            self._binned_frame, self.project))
         if source is None or source.empty:
             return None
-        order = None
-        if "Facet" in source.columns:
-            order = list(dict.fromkeys(source["Facet"].astype(str)))
-        return pubfigures.faceted_data(source, info["metric"], order)
+        return pubfigures.faceted_data(source, info["metric"],
+                                       pubfigures.facet_order(source))
 
     def _apply_content(self, *_args) -> None:
         if self._loading:
@@ -832,6 +835,10 @@ class PlotEditorWindow(QMainWindow):
             elif source == "binned":
                 message = ("No binned data saved yet — run a binned CSV in "
                            "each member.")
+            elif source == pubfigures.SOURCE_LIGHT:
+                message = ("No light data for this measure — its Paradigm type "
+                           "does not define it, or the combined analysis has no "
+                           "light table yet.")
             else:
                 message = ("No combined analysis yet — build it from the "
                            "Hub's Project panel.")

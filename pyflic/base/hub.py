@@ -74,6 +74,8 @@ from . import batch as batch_mod
 from . import layout as layout_mod
 from . import project as project_mod
 from .gui_env import sanitize_input_method_environment
+from .light_summary import NO_TRAINING_INFORMATION
+from .light_summary import no_training_information as _no_training_information
 from .ui import (
     Category,
     OutputLog,
@@ -880,6 +882,13 @@ class AnalysisHubWindow(QMainWindow):
              "Per DFM: each linkage group's lit time, explained by a trigger-well "
              "lick or touch and unexplained, and the time the emulated firmware "
              "trigger saw contact that pyflic did not."),
+            ("Light summary CSV", "csv",
+             lambda: self._run_experiment_action({"action": "light_summary"}),
+             "The light table: per chamber (light_summary.csv) and per well "
+             "(light_wells.csv), lit time, Activations, Acclimation, Firmware Events "
+             "and the Paradigm type's own measures, with the Treatment, factor and "
+             "Role columns, written into analysis/ (and per Facet when faceted).  "
+             "Basic analysis writes it too."),
         ):
             button = ActionButton(label, Category.QC, icon_name)
             button.setToolTip(tip)
@@ -3258,7 +3267,12 @@ class AnalysisHubWindow(QMainWindow):
                                    f"{self.project.chamber_layout}"))
         else:
             rows.append(("Project", "none open"))
-        rows.append(("Loaded", self.experiment_name or "no member loaded"))
+        loaded = self.experiment_name or "no member loaded"
+        ## On the member's own line, which the strip always shows: a fifth
+        ## row would go to the tooltip when a Batch is open.
+        if self.experiment is not None and _no_training_information(self.experiment):
+            loaded = f"{loaded} · {NO_TRAINING_INFORMATION}"
+        rows.append(("Loaded", loaded))
         self.readout.set_rows(rows)
 
     def closeEvent(self, event) -> None:  # noqa: N802 (Qt override)

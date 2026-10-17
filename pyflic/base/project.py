@@ -267,6 +267,15 @@ LIGHT_QC_SOURCES: tuple[tuple[str, tuple[str, ...]], ...] = (
 #: The switch that decides whether a Source's failed groups leave.
 _EXCLUDE_SWITCH = {"PR": "exclude_failed_pr_groups", "Opto": "exclude_failed_opto_chambers"}
 
+#: The light tables an optogenetic Member writes into ``analysis/``
+#: (:mod:`pyflic.base.light_summary`), stacked into ``<project>_<key>.csv``.
+LIGHT_TABLES: dict[str, str] = {
+    "LightSummary": "light_summary.csv",
+    "LightSummary_Facet": "light_summary_facet.csv",
+    "LightWells": "light_wells.csv",
+    "LightWells_Facet": "light_wells_facet.csv",
+}
+
 
 def flagged_light_qc_groups(light_qc: pd.DataFrame) -> pd.DataFrame:
     """The groups a stacked light QC table (``<project>_LightQC.csv``: an
@@ -889,6 +898,71 @@ class Project:
                 frames.append(df)
         return pd.concat(frames, ignore_index=True) if frames else None
 
+    def combined_light_frames(self) -> dict[str, pd.DataFrame]:
+        """The stacked Members' light tables (:data:`LIGHT_TABLES`), each with
+        an ``Experiment`` first column, keyed ``LightSummary``,
+        ``LightSummary_Facet``, ``LightWells`` and ``LightWells_Facet``; a
+        table no Member wrote is absent."""
+        out: dict[str, pd.DataFrame] = {}
+        for key, filename in LIGHT_TABLES.items():
+            frames = []
+            for name in self.member_names:
+                path = os.path.join(self.member_dir(name), "analysis", filename)
+                if os.path.isfile(path):
+                    df = pd.read_csv(path)
+                    df.insert(0, "Experiment", name)
+                    frames.append(df)
+            if frames:
+                out[key] = pd.concat(frames, ignore_index=True)
+        return out
+
+    def member_generations(self, name: str) -> list[int]:
+        """The Generations of a Member's DFMs, from its saved outputs (no data
+        load): the light table's ``Generation`` column, else the ``-
+        generation:`` lines of its ``summary.txt``; empty when neither says."""
+        analysis = os.path.join(self.member_dir(name), "analysis")
+        for filename in (LIGHT_TABLES["LightSummary"], LIGHT_TABLES["LightWells"]):
+            path = os.path.join(analysis, filename)
+            if os.path.isfile(path):
+                try:
+                    values = pd.to_numeric(pd.read_csv(path, usecols=["Generation"])
+                                           ["Generation"], errors="coerce").dropna()
+                    if not values.empty:
+                        return sorted({int(v) for v in values})
+                except (ValueError, KeyError, OSError):
+                    pass
+        path = os.path.join(analysis, "summary.txt")
+        if os.path.isfile(path):
+            try:
+                with open(path, encoding="utf-8") as handle:
+                    found = re.findall(r"^- generation: (\d+)", handle.read(), re.MULTILINE)
+                return sorted({int(v) for v in found})
+            except OSError:
+                pass
+        return []
+
+    def generation_2_members(self) -> list[str]:
+        """Members recorded (in part) from DFM firmware older than 4.0.0, so
+        with no Training information (decision 15): a generation-2 row in
+        their saved light table or ``summary.txt``, or a Progressive Ratio
+        Member's saved Facet ``Recording`` (the one Facet such a Member's
+        chamber groups have)."""
+        out = []
+        for name in self.member_names:
+            if 2 in self.member_generations(name):
+                out.append(name)
+                continue
+            path = os.path.join(self.member_dir(name), "analysis",
+                                "feeding_summary_facet.csv")
+            if os.path.isfile(path):
+                try:
+                    labels = set(pd.read_csv(path, usecols=["Facet"])["Facet"].astype(str))
+                except (ValueError, KeyError, OSError):
+                    labels = set()
+                if "Recording" in labels:
+                    out.append(name)
+        return out
+
     def flagged_groups(self, light_qc: pd.DataFrame | None = None) -> pd.DataFrame | None:
         """Every Chamber Group the light QC flagged, across Members
         (:func:`flagged_light_qc_groups`), or ``None`` when no Member has a
@@ -965,6 +1039,16 @@ class Project:
             path = os.path.join(self.analysis_path, f"{self.name}_BreakingPoint.csv")
             breaking.to_csv(path, index=False, na_rep="NA")
             written.append(path)
+        light = self.combined_light_frames()
+        for key in LIGHT_TABLES:
+            path = os.path.join(self.analysis_path, f"{self.name}_{key}.csv")
+            if key in light:
+                light[key].to_csv(path, index=False, na_rep="NA")
+                written.append(path)
+            elif os.path.isfile(path):
+                ## The light figures draw from whichever of these exists, so
+                ## one no Member backs any more must not outlive the rebuild.
+                os.remove(path)
         path = os.path.join(self.analysis_path, f"{self.name}_Excluded.csv")
         self.aggregated_exclusions().to_csv(path, index=False, na_rep="NA")
         written.append(path)
@@ -1171,16 +1255,27 @@ class Project:
         except Exception:  # noqa: BLE001
             return None
 
+    def _generation_2_lines(self) -> list[str]:
+        from .light_summary import NO_TRAINING_INFORMATION
+
+        return [f"  {name} [generation 2]: {NO_TRAINING_INFORMATION}"
+                for name in self.generation_2_members()]
+
     def _flagged_groups_lines(self) -> list[str]:
         """The Stats text's "Flagged Chamber Groups" block — the Progressive
-        Ratio light QC and the optogenetic light QC — or nothing when no Member
-        has a light QC table."""
+        Ratio light QC and the optogenetic light QC, and every Member without
+        Training information (generation 2, decision 15) — or nothing when no
+        Member has a light QC table or a generation-2 recording."""
         flagged = self.flagged_groups()
-        if flagged is None:
+        generation_2 = self._generation_2_lines()
+        if flagged is None and not generation_2:
             return []
         out = ["Flagged Chamber Groups (light QC: progressive ratio and optogenetic)"]
+        if flagged is None:
+            return out + generation_2 + [""]
         if flagged.empty:
-            out += ["  (none — every group's light was earned by its licks)", ""]
+            out += ["  (none — every group's light was earned by its licks)",
+                    *generation_2, ""]
             return out
         for row in flagged.itertuples(index=False):
             if row.Source == "Opto":
@@ -1201,8 +1296,29 @@ class Project:
         if retained:
             out.append(f"  {retained} failed group(s) retained by member setting ARE "
                        f"in the pooled numbers below.")
+        out.extend(generation_2)
         out.append("")
         return out
+
+    def light_comparison_rows(self, light: pd.DataFrame | None = None,
+                              light_facet: pd.DataFrame | None = None) -> list[dict]:
+        """Treatment comparisons of the light table's
+        :data:`~pyflic.base.light_summary.HEADLINE_METRICS`, one observation
+        per chamber, per Facet as the feeding metrics are (pooled test beside
+        the mixed model).  A Progressive Ratio table keeps its paired
+        chambers (:func:`~pyflic.base.light_summary.behaviour_rows`).  Reads
+        the stacked tables when not given; empty without a light table."""
+        from .light_summary import HEADLINE_METRICS, behaviour_rows
+
+        if light is None and light_facet is None:
+            frames = self.combined_light_frames()
+            light = frames.get("LightSummary")
+            light_facet = frames.get("LightSummary_Facet")
+        light = behaviour_rows(light)
+        if light is None or light.empty:
+            return []
+        frames = self._facet_frames(light, behaviour_rows(light_facet))
+        return self._compare_frames(frames, list(HEADLINE_METRICS))
 
     def stats_text(self, summary: pd.DataFrame,
                    facet: pd.DataFrame | None,
@@ -1231,7 +1347,9 @@ class Project:
         out.extend(self._flagged_groups_lines())
 
         def _table(table_rows: list[dict], *, logrank: bool = False) -> list[str]:
-            header = (f"{'Metric':<14}{'Facet':<16}{'A':<12}{'B':<12}"
+            ## Wide enough for the light table's longer names (AcclimationEndMin).
+            w = max([14, *(len(str(r["metric"])) + 1 for r in table_rows)])
+            header = (f"{'Metric':<{w}}{'Facet':<16}{'A':<12}{'B':<12}"
                       f"{'nA':>4}{'nB':>5}{'diff':>10}{'p_pooled':>11}"
                       f"{'p_mixed':>10}" + (f"{'p_logrank':>11}" if logrank else ""))
             lines = [header, "-" * len(header)]
@@ -1244,7 +1362,7 @@ class Project:
                                  else f"{row['p_logrank']:>11.4g}")
                 star = " *" if row["significant"] else ""
                 lines.append(
-                    f"{row['metric']:<14}{row['phase']:<16}{row['a']:<12}"
+                    f"{row['metric']:<{w}}{row['phase']:<16}{row['a']:<12}"
                     f"{row['b']:<12}{row['n_a']:>4}{row['n_b']:>5}"
                     f"{row['diff']:>10.4g}{row['p_pooled']:>11.4g}{p_mixed}"
                     f"{p_logrank}{star}")
@@ -1315,8 +1433,34 @@ class Project:
             out.append("")
         if not rows:
             out.append("(no comparable treatment groups found)")
-            return "\n".join(out) + "\n"
-        out.extend(_table(rows))
-        out.append("")
-        out.append("* p_pooled < 0.05")
+        else:
+            out.extend(_table(rows))
+            out.append("")
+            out.append("* p_pooled < 0.05")
+        out.extend(self._light_lines(_table))
         return "\n".join(out) + "\n"
+
+    def _light_lines(self, table) -> list[str]:
+        """The Stats text's "Light behaviour" block: the light table's
+        headline metrics compared between treatments, per Facet, or nothing
+        when no Member wrote a light table."""
+        from .light_summary import behaviour_rows
+
+        frames = self.combined_light_frames()
+        light = frames.get("LightSummary")
+        if light is None:
+            return []
+        pooled = behaviour_rows(light)
+        out = ["", "Light behaviour (optogenetic members; one observation per chamber)",
+               f"Chambers pooled : {len(pooled)}"
+               + (" (paired chambers: a yoked fly's light is its partner's)"
+                  if len(pooled) < len(light) else "")]
+        out.append("")
+        rows = self.light_comparison_rows(light, frames.get("LightSummary_Facet"))
+        if rows:
+            out.extend(table(rows))
+            out.append("")
+            out.append("* p_pooled < 0.05")
+        else:
+            out.append("(no comparable treatment groups found)")
+        return out

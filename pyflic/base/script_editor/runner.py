@@ -25,7 +25,7 @@ _PR_GATED = {"plot_breaking_point", "paired_yoked_diff", "breaking_point",
              "pr_light_qc", "plot_pr_light_events", "plot_pr_resting_level"}
 #: Steps that need an optogenetic experiment, of any type (optogenetics: yes,
 #: or auto with a Program.txt or light data).
-_OPTO_GATED = {"opto_light_qc", "plot_opto_light"}
+_OPTO_GATED = {"opto_light_qc", "plot_opto_light", "light_summary"}
 
 
 class ScriptContext:
@@ -292,6 +292,12 @@ def run_experiment_script(
             lines = exp.opto.lines()
             ctx.log("\n".join(lines) if lines
                     else "Opto light QC: every linkage group is ok.")
+
+        elif action == "light_summary":
+            from ..light_summary import write as write_light_tables
+
+            for path in write_light_tables(exp, range_minutes=rm).values():
+                ctx.log(f"Wrote: {path}")
 
         elif action == "plot_opto_light":
             bs = float(step.get("binsize", 10.0))

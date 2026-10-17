@@ -349,15 +349,19 @@ def light_phase_summary(
     """
     Per-chamber feeding metrics split by **light vs dark** phase.
 
-    Phase assignment is **global per DFM row**: a sample is classified as
-    "light" iff ``OptoCol1 != 0`` at that time point.  This treats the
-    opto signal as a room-level (or DFM-level) synchronization flag, not
-    a per-well bitmask.  If your hardware encodes independent per-well
-    light states, decode ``lights_df["W{n}"]`` columns instead.
+    Phase assignment is **per chamber** (decision 24 of
+    ``docs/v4-data-plan.md``): a sample is "light" for a chamber when one of
+    its own wells is lit — its ``OptoCol1`` bit, or on a generation-3
+    recording its ``OnMs`` above 0, light from its Linkage Group included.
+    Until firmware 4.0.0 support the phase was the whole DFM's (any
+    ``OptoCol1`` bit set), which put every chamber in "light" whenever any
+    one was lit.
 
     Returns one row per (DFM, Chamber, Phase) with Licks, Events
     (and the A/B variants for two-well).
     """
+    from .paradigm_state import GENERATION_PARADIGM
+
     if transform_licks is None:
         transform_licks = experiment.transform_licks
     rows: list[dict[str, Any]] = []
@@ -367,13 +371,17 @@ def light_phase_summary(
             chamber_to_treatment[(int(tc.dfm_id), int(tc.chamber_index))] = trt_name
 
     for dfm_id, dfm in experiment.dfms.items():
-        lights = dfm.lights_df
-        opto = lights["OptoCol1"].fillna(0).to_numpy() if "OptoCol1" in lights.columns else None
-        if opto is None:
-            continue
-        is_light = opto.astype(int) != 0
+        if dfm.generation == GENERATION_PARADIGM and dfm.paradigm is not None:
+            lit = np.asarray(dfm.paradigm.on_ms) > 0
+        else:
+            lights = dfm.lights_df
+            columns = [f"W{w}" for w in range(1, 13)]
+            if lights is None or not set(columns) <= set(lights.columns):
+                continue
+            lit = lights[columns].fillna(0).to_numpy().astype(bool)
         for chamber in dfm.chambers or []:
             ch_idx = int(chamber.index)
+            is_light = lit[:, [int(w) - 1 for w in chamber.wells]].any(axis=1)
             treatment = chamber_to_treatment.get((int(dfm_id), ch_idx), "")
             for phase_name, mask in (("light", is_light), ("dark", ~is_light)):
                 row: dict[str, Any] = {

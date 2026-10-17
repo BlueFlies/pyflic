@@ -612,6 +612,21 @@ ACTIONS: list[Action] = [
               "responding when its Test window ended) as a tick.  Writes "
               "analysis/pr_still_responding.png.",
     ),
+    Action(
+        action="light_summary",
+        label="Light summary CSV",
+        blurb="Per chamber and per well: what the light did (optogenetic)",
+        icon="csv", category=Category.ANALYZE, produces="csv",
+        params=[],
+        notes="Writes the light table into analysis/: light_summary.csv (one row per "
+              "chamber: lit time, Activations, Acclimation, Firmware Events and the "
+              "Paradigm type's own measures, with the feeding summary's Treatment, "
+              "factor and Role columns), light_wells.csv (one row per well) and, for "
+              "a faceted experiment, their _facet variants.  Firmware 4.0.0 "
+              "recordings read the firmware's own counts; older ones have the "
+              "OptoCol1 light only.  Runs on any optogenetic experiment, whatever "
+              "its type.  Skipped otherwise.",
+    ),
 ]
 
 _ACTION_INDEX: dict[str, Action] = {a.action: a for a in ACTIONS}
