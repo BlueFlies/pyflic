@@ -5,7 +5,8 @@ Cache entries live in ``experiment_dir/.pyflic_cache/`` and are keyed by:
 
   - SHA-256 of the canonicalised ``flic_config.yaml`` text
   - SHA-256 of the sorted ``(filename, mtime_ns, size)`` tuple of every
-    DFM CSV under ``experiment_dir/data/``
+    DFM CSV under ``experiment_dir/data/``, and of ``Program.txt`` and
+    ``Messages.csv`` there when present
   - The (range_minutes, transform_licks) request
 
 Cache hits skip the per-DFM feeding/tasting recomputation entirely.
@@ -23,8 +24,14 @@ import pandas as pd
 
 _CACHE_DIR_NAME = ".pyflic_cache"
 # Bump this when feeding-summary computation logic changes so stale caches
-# from prior releases are automatically invalidated.
-_CACHE_VERSION = "2"
+# from prior releases are automatically invalidated.  "3": firmware 4.0.0
+# recordings, whose light seconds come from OnMs (docs/v4-data-plan.md, 0b).
+_CACHE_VERSION = "3"
+
+#: Files beside the DFM CSVs that change what an analysis reports: the Opto
+#: Program and PyMCU's message log.  Matched case-insensitively, as
+#: ``opto_program.find_program`` finds the program.
+_SIDECAR_NAMES = ("program.txt", "messages.csv")
 
 
 def _hash_bytes(b: bytes) -> str:
@@ -46,6 +53,10 @@ def _data_hash(experiment_dir: Path) -> str:
     for f in sorted(data_dir.glob("DFM*.csv")):
         st = f.stat()
         rows.append((f.name, st.st_mtime_ns, st.st_size))
+    for f in sorted(data_dir.iterdir()):
+        if f.name.lower() in _SIDECAR_NAMES and f.is_file():
+            st = f.stat()
+            rows.append((f.name, st.st_mtime_ns, st.st_size))
     return _hash_bytes(json.dumps(rows).encode("utf-8"))
 
 

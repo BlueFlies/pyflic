@@ -17,6 +17,8 @@ from typing import Any, Iterator
 
 import yaml
 
+from .utils import ENVIRONMENTAL_MONITOR_MESSAGE, is_environmental_monitor
+
 
 _KNOWN_GLOBAL_KEYS = {
     "params", "parameters", "well_names", "constants",
@@ -218,6 +220,12 @@ def lint_flic_config(path: str | Path) -> list[LintIssue]:
         if dfm_id in seen_ids:
             _emit(issues, "error", f"DFM {dfm_id}: duplicate id")
         seen_ids.add(dfm_id)
+        if is_environmental_monitor(dfm_id):
+            ## The loader refuses it with the same words; nothing else about
+            ## the entry matters.
+            _emit(issues, "error", f"{ENVIRONMENTAL_MONITOR_MESSAGE}; remove id "
+                                   f"{dfm_id} from dfms:", path=f"dfms.{dfm_id}")
+            continue
 
         for k in dfm.keys():
             if k not in _KNOWN_DFM_KEYS:

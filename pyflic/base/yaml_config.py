@@ -17,6 +17,7 @@ from .progressive_ratio_experiment import ProgressiveRatioExperiment
 from .single_well_experiment import SingleWellExperiment
 from .treatment import Treatment
 from .two_well_experiment import TwoWellExperiment
+from .utils import ENVIRONMENTAL_MONITOR_MESSAGE, is_environmental_monitor
 
 #: Chamber Layout -> the ``Experiment`` subclass that computes its metrics
 #: (ADR-0007).  This is the *data shape* map; an Experiment Type may name a
@@ -395,6 +396,10 @@ def load_experiment_yaml(
         if not isinstance(node, Mapping):
             raise ValueError("Each dfms[] entry must be an object/mapping.")
         dfm_id = int(node.get("id", node.get("ID")))
+        if is_environmental_monitor(dfm_id):
+            raise ValueError(
+                f"{path.name}: {ENVIRONMENTAL_MONITOR_MESSAGE}; remove id "
+                f"{dfm_id} from dfms: (its DFM{dfm_id}_*.csv is not read)")
 
         dfm_params_node = node.get("params", node.get("parameters", None))
         dfm_overrides = _normalize_param_overrides(dfm_params_node)
@@ -499,21 +504,17 @@ def load_experiment_yaml(
     # ── Cross-check config DFMs vs. data directory ──────────────────────
     config_ids = {s[0] for s in dfm_specs}
 
-    # Discover DFM IDs present on disk (v3: DFM{id}_*.csv, v2: DFM_{id}[_*].csv)
+    # Discover DFM IDs present on disk (v3: DFM{id}_*.csv, v2: DFM_{id}[_*].csv).
+    # DFM99_*.csv is the Environmental Monitor, never a DFM.
     data_ids: set[int] = set()
     if data_dir.is_dir():
         for f in data_dir.iterdir():
             if not f.suffix.lower() == ".csv":
                 continue
             name = f.name
-            # v3: DFM{id}_...
-            m = _re.match(r"DFM(\d+)_", name)
-            if m:
-                data_ids.add(int(m.group(1)))
-                continue
-            # v2: DFM_{id}.csv or DFM_{id}_*.csv
-            m = _re.match(r"DFM_(\d+)(?:_|\.)", name)
-            if m:
+            # v3: DFM{id}_...; v2: DFM_{id}.csv or DFM_{id}_*.csv
+            m = _re.match(r"DFM(\d+)_", name) or _re.match(r"DFM_(\d+)(?:_|\.)", name)
+            if m and not is_environmental_monitor(m.group(1)):
                 data_ids.add(int(m.group(1)))
 
     config_only = sorted(config_ids - data_ids)

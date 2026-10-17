@@ -19,12 +19,14 @@ Two things here differ deliberately from PyTrackingAnalysis:
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 import pandas as pd
 import yaml
 
 from . import experiment_types, windowing
+from .utils import is_environmental_monitor
 
 #: The Paired-Yoked Difference columns the pooled statistics test, between
 #: treatments and against zero, when a Member's table has them.
@@ -72,8 +74,14 @@ def has_experiment_data(path) -> bool:
         entries = os.listdir(data)
     except OSError:
         return False
+    ## The Environmental Monitor's DFM99_<n>.csv alone is not a recording.
     return any(e.upper().startswith("DFM") and e.lower().endswith(".csv")
-               for e in entries)
+               and not _is_monitor_name(e) for e in entries)
+
+
+def _is_monitor_name(name: str) -> bool:
+    match = re.match(r"^DFM_?(\d+)", name, flags=re.IGNORECASE)
+    return bool(match) and is_environmental_monitor(match.group(1))
 
 
 def dfm_ids_in_data(path) -> list[int]:
@@ -83,8 +91,6 @@ def dfm_ids_in_data(path) -> list[int]:
     lets :meth:`Project.scaffold_member` reconcile a copied ``dfms:`` block
     against the recording that actually exists.
     """
-    import re
-
     data = os.path.join(str(path), "data")
     ids: set[int] = set()
     try:
@@ -93,7 +99,8 @@ def dfm_ids_in_data(path) -> list[int]:
         return []
     for entry in entries:
         match = re.match(r"^DFM(\d+)_\d+\.csv$", entry, flags=re.IGNORECASE)
-        if match:
+        ## DFM99_<n>.csv is the Environmental Monitor: never scaffolded.
+        if match and not is_environmental_monitor(match.group(1)):
             ids.add(int(match.group(1)))
     return sorted(ids)
 
