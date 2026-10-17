@@ -864,19 +864,26 @@ class Experiment:
         )
         shape_map = {g: _shape_strs[i % len(_shape_strs)] for i, g in enumerate(group_levels)}
 
+        ## Jitter across the treatment only: plotnine also jitters vertically
+        ## unless told not to, which moves every value (and spreads chambers
+        ## that all scored zero across a band around it).
         if size_col is not None:
             jitter_kwargs: dict = {
                 "mapping": aes(size=size_col),
                 "width": jitter_width,
+                "height": 0,
                 "alpha": 0.65,
                 "stroke": 0.3,
+                "random_state": 0,
             }
         else:
             jitter_kwargs = {
                 "width": jitter_width,
+                "height": 0,
                 "size": point_size,
                 "alpha": 0.65,
                 "stroke": 0.3,
+                "random_state": 0,
             }
 
         p = (
@@ -945,6 +952,20 @@ class Experiment:
         """
         return []
 
+    def feeding_plot_metrics_without_values(
+        self, *, range_minutes: Sequence[float] = (0, 0),
+        transform_licks: bool | None = None,
+    ) -> list[str]:
+        """The display labels of the :meth:`plot_feeding_summary` metrics no
+        chamber has a value for, which that figure leaves out."""
+        df = self.feeding_summary(range_minutes=range_minutes,
+                                  transform_licks=transform_licks)
+        if df is None or df.empty:
+            return []
+        return [lbl for col, lbl in self._feeding_plot_metrics()
+                if col in df.columns
+                and not pd.to_numeric(df[col], errors="coerce").notna().any()]
+
     def _feeding_summary_default_ncols(self) -> int:
         """Default number of columns for :meth:`plot_feeding_summary` facet grid."""
         return 3
@@ -1000,7 +1021,12 @@ class Experiment:
                 + _tc()
             )
 
-        metrics = [(col, lbl) for col, lbl in self._feeding_plot_metrics() if col in df.columns]
+        ## A metric no chamber has a value for (a bout duration when no
+        ## feeding event was detected) would be an empty panel: leave it out.
+        ## :meth:`feeding_plot_metrics_without_values` names what was left out.
+        metrics = [(col, lbl) for col, lbl in self._feeding_plot_metrics()
+                   if col in df.columns
+                   and pd.to_numeric(df[col], errors="coerce").notna().any()]
 
         if not metrics:
             from plotnine import annotate, theme_classic as _tc
@@ -1042,7 +1068,8 @@ class Experiment:
 
         p = (
             ggplot(df_long, aes(x=group_col, y="Value", color=group_col, shape=group_col))
-            + geom_jitter(width=0.15, size=1.8, alpha=0.65, stroke=0.3)
+            + geom_jitter(width=0.15, height=0, size=1.8, alpha=0.65, stroke=0.3,
+                          random_state=0)
             + stat_summary(
                 fun_y=np.mean,
                 geom="point",
@@ -2822,7 +2849,8 @@ class Experiment:
         ## already unless QC was skipped.
         from . import program_timeline
 
-        timeline_ids = [d for d in sorted(self.dfms) if self.dfms[d].paradigm is not None]
+        timeline_ids = [d for d in program_timeline.timeline_dfms(self)
+                        if self.dfms[d].paradigm is not None]
         if timeline_ids and self.qc_dir is not None:
             if skip_qc:
                 program_timeline.write(self, dfm_ids=timeline_ids)

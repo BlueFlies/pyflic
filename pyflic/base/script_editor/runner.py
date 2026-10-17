@@ -28,6 +28,20 @@ _PR_GATED = {"plot_breaking_point", "paired_yoked_diff", "breaking_point",
 _OPTO_GATED = {"opto_light_qc", "plot_opto_light", "light_summary"}
 
 
+def _as_list(value) -> list:
+    """A ``list_str`` / ``list_float`` step parameter as a list.  The Script
+    Editor stores a parameter nobody edited as its default text
+    (``"Licks, Events, MedDuration"``), and a hand-written script may do the
+    same: a string is split on commas, never iterated letter by letter."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [part.strip() for part in value.split(",") if part.strip()]
+    if isinstance(value, (list, tuple)):
+        return [v for v in value if not (isinstance(v, str) and not v.strip())]
+    return [value]
+
+
 class ScriptContext:
     """Everything a run needs that is not the script itself.
 
@@ -346,7 +360,7 @@ def run_experiment_script(
             res = analytics.compare_treatments(
                 exp, metric=metric, two_well_mode=str(step.get("mode", "A")),
                 model=model,
-                factors=tuple(factors) if isinstance(factors, list) else None,
+                factors=tuple(_as_list(factors)) or None,
                 range_minutes=rm)
             out = analysis_dir / f"compare_{metric}_{model}.csv"
             out.parent.mkdir(parents=True, exist_ok=True)
@@ -367,7 +381,7 @@ def run_experiment_script(
             param = str(step.get("parameter", "feeding_event_link_gap"))
             res = analytics.parameter_sensitivity(
                 exp, parameter=param,
-                values=[float(v) for v in (step.get("values") or [])],
+                values=[float(v) for v in _as_list(step.get("values"))],
                 range_minutes=rm)
             out = analysis_dir / f"param_sensitivity_{param}.csv"
             out.parent.mkdir(parents=True, exist_ok=True)
@@ -403,7 +417,7 @@ def run_experiment_script(
         elif action == "pdf_report":
             from ..pdf_report import write_experiment_report
 
-            metrics = step.get("metrics") or ("Licks", "Events", "MedDuration")
+            metrics = _as_list(step.get("metrics")) or ("Licks", "Events", "MedDuration")
             path = write_experiment_report(
                 exp, metrics=tuple(metrics),
                 binsize_min=float(step.get("binsize", ctx.binsize)),

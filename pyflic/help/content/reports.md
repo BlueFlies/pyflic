@@ -39,8 +39,9 @@ information.
 - **Simultaneous feeding** shows each chamber's samples licked on both wells at once
   *before* the dual-feeding correction — the crosstalk found — beside the count *after* it,
   which the correction drives to zero. With the correction off the two agree.
-- **Program timeline**: one figure per DFM with a `Program.txt` section or firmware 4.0.0
-  data. See [Program timeline](plots-catalog.md#program-timeline).
+- **Program timeline**: in an optogenetic experiment, one figure per DFM with a
+  `Program.txt` section or firmware 4.0.0 data. See
+  [Program timeline](plots-catalog.md#program-timeline).
 
 **Results by type.** A two-well experiment gets **Preference** — the preference index and
 event PI by treatment, per Facet, and PI over time — then **Consumption** (licks, events and
@@ -72,6 +73,14 @@ named / the second, and *Difference* is the first minus the second. The breaking
 yoked difference adds a table testing it against zero in each treatment: the paired t-test,
 which is a one-sample t-test on the differences, with the Wilcoxon signed-rank test beside
 it.
+
+**One treatment, or nothing to draw.** A design with a single treatment, such as one factor
+with one level, is reported as one: Results open with a sentence saying nothing is compared
+between treatments, and no comparison table follows. A figure whose metric no chamber has a
+value for, such as a bout duration when no feeding event was detected, becomes a grey note
+saying so and why, without its caption; Appendix A leaves such metrics out of its grid and
+names them. A red note is kept for a figure that failed. Dot plots spread points only across
+a treatment, never up or down, so chambers with equal values sit on that value.
 
 ## The Project Report
 

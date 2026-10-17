@@ -51,7 +51,11 @@ TYPE_COLORS: dict[str, str] = {
 _BASELINE = "Baseline"
 _UNKNOWN_INSTRUCTION = "Unknown instruction"
 _UNKNOWN_TYPE = "Type unknown (not in Program.txt)"
-_KIND_COLORS = {_BASELINE: "#DDDDDD", _UNKNOWN_INSTRUCTION: "#FFFFFF", _UNKNOWN_TYPE: "#999999"}
+#: PyMCU's own Paradigm: every well Off, nothing lit.  Known without a
+#: Program.txt, so never "type unknown".
+_IDLE = "Idle (no light)"
+_KIND_COLORS = {_BASELINE: "#DDDDDD", _UNKNOWN_INSTRUCTION: "#FFFFFF", _UNKNOWN_TYPE: "#999999",
+                _IDLE: "#EEEEEE"}
 _ACCLIMATION_COLOR = "#F2C879"
 _TICK_COLOR = "#222222"
 _HEAT_CMAP = "Blues"
@@ -91,8 +95,14 @@ def has_timeline(exp, dfm_id: int) -> bool:
 
 
 def timeline_dfms(exp) -> list[int]:
-    """The DFMs of *exp* that :func:`has_timeline`, in order."""
+    """The DFMs of *exp* that :func:`has_timeline`, in order, and only for an
+    optogenetic experiment.  A recording whose light never came on (every
+    well Off, as a recording without a Program is) has nothing for the
+    timeline to show, so the report and ``qc/`` leave it out, as the Hub's
+    button and the script action already do."""
     try:
+        if getattr(exp, "is_optogenetic", False) is not True:
+            return []
         ids = sorted(int(d) for d in exp.dfms)
     except Exception:  # noqa: BLE001
         return []
@@ -142,6 +152,9 @@ def _state_runs(dfm, program: op.OptoProgram | None, section: op.DFMProgram | No
             continue
         name = run.paradigm or "?"
         found = paradigms.get(name)
+        if found is None and name == "Idle":
+            out.append(_Run(a, b, name, _IDLE))
+            continue
         kind = found.type_name if found is not None else _UNKNOWN_TYPE
         label = name + (f" · C{run.cycle}" if repeating and run.cycle is not None else "")
         out.append(_Run(a, b, label, kind if kind in TYPE_COLORS else _UNKNOWN_TYPE))

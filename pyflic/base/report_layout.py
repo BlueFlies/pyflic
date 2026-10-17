@@ -211,12 +211,21 @@ class Table:
     stretch: bool | None = None     # None: stretch when the table is already wide
 
 
+class NothingToDraw(Exception):
+    """Raised by a figure builder whose data hold nothing to plot for a
+    reason that is a fact about the experiment, not a failure: a duration
+    when no feeding event was detected, a metric no chamber defines.  The
+    report shows the message as a neutral note where the figure would be,
+    not as an error."""
+
+
 @dataclass
 class Plot:
     """A figure in a box of known size.  *plot* is a plotnine ``ggplot``, a
     matplotlib ``Figure``, or a zero-argument callable returning either — a
     callable is only called while the report is laid out, so a figure that
-    fails costs that figure, not the report."""
+    fails costs that figure, not the report.  A callable that raises
+    :class:`NothingToDraw` is shown as its message, in a neutral note."""
     plot: Any
     height: float = 3.3
     title: str | None = None
@@ -898,9 +907,17 @@ class ReportDocument:
             try:
                 image, w, h = render_plot(p.plot, width, box_h, drop_title=bool(p.title))
                 rendered.append((image, w, h, None))
+            except NothingToDraw as note:
+                rendered.append((None, width, min(box_h, 0.6), ("neutral", str(note))))
             except Exception as exc:  # noqa: BLE001 - one figure, not the report
                 rendered.append((None, width, min(box_h, 0.6),
-                                 f"This figure could not be drawn: {exc}"))
+                                 ("failed", f"This figure could not be drawn: {exc}")))
+        ## A caption describes its figure; under a "nothing to draw" note it
+        ## would describe a figure that is not there.
+        captions = [[] if err is not None and err[0] == "neutral" else lines
+                    for (_img, _w, _h, err), lines in zip(rendered, captions)]
+        caption_h = max((len(c) * line_height(SIZE_SMALL) + 0.05) if c else 0.0
+                        for c in captions)
         body_h = max(h for _img, _w, h, _err in rendered)
         self._ensure(title_h + body_h + caption_h + 0.1)
         y = self._y
@@ -916,9 +933,10 @@ class ReportDocument:
                     yy += 0.05
                     yy = y + title_h
                 if err:
-                    bar, fill = TONES["failed"]
+                    tone, message = err
+                    bar, fill = TONES[tone]
                     _rect(fig, x, yy, box_w, h, fill)
-                    for j, line in enumerate(wrap_text(err, box_w - 0.2, SIZE_SMALL)):
+                    for j, line in enumerate(wrap_text(message, box_w - 0.2, SIZE_SMALL)):
                         _text(fig, x + 0.1, yy + 0.08 + j * line_height(SIZE_SMALL),
                               line, SIZE_SMALL, color=bar)
                 else:

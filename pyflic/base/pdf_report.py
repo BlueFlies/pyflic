@@ -544,18 +544,62 @@ def _value(frame: pd.DataFrame, metric: str) -> pd.Series:
     return pd.to_numeric(_resolve_metric_col(frame, metric), errors="coerce")
 
 
+#: Metrics measured on feeding events (bout durations and the gaps between
+#: them): undefined in a chamber with no feeding event.
+_EVENT_METRIC_PARTS = ("Duration", "Int", "TimeBtw", "EventPI")
+
+
+def _total(frame: pd.DataFrame, *columns: str) -> float | None:
+    present = [c for c in columns if c in frame.columns]
+    if not present:
+        return None
+    return float(sum(pd.to_numeric(frame[c], errors="coerce").fillna(0).sum()
+                     for c in present))
+
+
+def _empty_reason(frame: pd.DataFrame, metric: str) -> str | None:
+    """Why *metric* has no value in any chamber of *frame*, when the frame
+    can say: no feeding event, or no lick at all.  ``None`` when it cannot."""
+    if any(part in metric for part in _EVENT_METRIC_PARTS):
+        events = _total(frame, "Events", "EventsA", "EventsB")
+        if events == 0:
+            return ("No feeding event was detected in any chamber, so there is no bout "
+                    "to measure.")
+    if metric in ("PI", "EventPI"):
+        licks = _total(frame, "Licks", "LicksA", "LicksB")
+        if licks == 0:
+            return "No chamber licked at either well, so there is no preference to measure."
+    return None
+
+
 def _dot(experiment: Experiment, frame: pd.DataFrame, metric: str, label: str,
          facet_col: str | None, *, hline: float | None = None):
     def build():
         df = frame.copy()
         df["_Value"] = _value(df, metric)
         return rc.dot_plot(df, "_Value", y_label=label, facet_col=facet_col,
-                           hline_at=hline, factors=experiment.design_factors)
+                           hline_at=hline, factors=experiment.design_factors,
+                           empty_reason=_empty_reason(frame, metric))
     return build
 
 
 def _timecourse(experiment: Experiment, metric: str, mode: str, options: ReportOptions):
     def build():
+        ## A metric no chamber defines over the whole recording has nothing to
+        ## bin either: say why, rather than letting the binned plot fail.
+        summary = experiment.feeding_summary(range_minutes=options.range_minutes,
+                                             transform_licks=options.transform_licks)
+        try:
+            values = _value(summary, metric)
+        except Exception:  # noqa: BLE001 - an unknown metric fails in the plot below
+            values = None
+        if values is not None and not pd.to_numeric(values, errors="coerce").notna().any():
+            reason = _empty_reason(summary, metric)
+            label = (rc.metric_label(metric, experiment.well_names or {},
+                                     two_well=_is_two_well(experiment))
+                     if metric in rc.METRIC_LABELS else metric)
+            raise rl.NothingToDraw(f"No chamber has a value for {label}."
+                                   + (f"  {reason}" if reason else ""))
         return experiment.plot_binned_metric_by_treatment(
             metric=metric, two_well_mode=mode, binsize_min=options.binsize_min,
             range_minutes=options.range_minutes, transform_licks=options.transform_licks)
@@ -577,6 +621,12 @@ def _generic_results(experiment: Experiment, options: ReportOptions) -> list[Any
     tx = " (transformed)" if options.transform_licks else ""
     per = "per Facet" if facet_col else "over the whole recording"
     blocks: list[Any] = []
+    ## One treatment: say once that nothing is compared, instead of a
+    ## "no comparison was possible" line under every figure.
+    levels = rc.treatment_levels(frame)
+    compare = options.include_comparison and len(levels) != 1
+    if len(levels) == 1:
+        blocks.append(rc.single_treatment_note(levels[0]))
 
     def label(metric: str) -> str:
         return rc.metric_label(metric, names, two_well=two_well)
@@ -596,7 +646,7 @@ def _generic_results(experiment: Experiment, options: ReportOptions) -> list[Any
                              hline=0.0), title="Event PI"),
             ], height=3.0),
         ]
-        if options.include_comparison:
+        if compare:
             blocks += rc.stats_table(treatment_comparisons(frames, ["PI", "EventPI"]),
                                      caption="Treatment comparisons: preference",
                                      well_names=names, show_phase=bool(facet_col))
@@ -632,7 +682,7 @@ def _generic_results(experiment: Experiment, options: ReportOptions) -> list[Any
                          facet_col), title=label("MeanDuration")),
         ], height=3.0))
         stat_metrics = ["Licks", "Events", "MedDuration", "MeanDuration"]
-    if options.include_comparison:
+    if compare:
         blocks += rc.stats_table(treatment_comparisons(frames, stat_metrics),
                                  caption="Treatment comparisons: consumption",
                                  well_names=names, show_phase=bool(facet_col),
@@ -700,7 +750,7 @@ def _light_results(experiment: Experiment, options: ReportOptions) -> list[Any]:
             pending = []
     if pending:
         blocks.append(rl.PlotRow(pending, height=3.0))
-    if options.include_comparison and metrics:
+    if options.include_comparison and metrics and len(rc.treatment_levels(kept)) != 1:
         blocks += rc.stats_table(treatment_comparisons(frames, metrics),
                                  caption="Treatment comparisons: light behaviour",
                                  show_phase=bool(facet_col))
@@ -708,10 +758,20 @@ def _light_results(experiment: Experiment, options: ReportOptions) -> list[Any]:
 
 
 def _all_metrics(experiment: Experiment, options: ReportOptions) -> list[Any]:
+    text = ("Every feeding-summary metric by treatment, over the whole recording — "
+            "for reference; the Results section holds the ones the assay is read by.")
+    ## The figure leaves out a metric no chamber has a value for; say which.
+    missing = experiment.feeding_plot_metrics_without_values(
+        range_minutes=options.range_minutes, transform_licks=options.transform_licks)
+    if missing:
+        summary = experiment.feeding_summary(range_minutes=options.range_minutes,
+                                             transform_licks=options.transform_licks)
+        events = _total(summary, "Events", "EventsA", "EventsB")
+        text += (f"  Not drawn, because no chamber has a value: {', '.join(missing)}"
+                 + ("; no feeding event was detected, so there is no bout to measure."
+                    if events == 0 else "."))
     return [
-        rl.Paragraph("Every feeding-summary metric by treatment, over the whole recording — "
-                     "for reference; the Results section holds the ones the assay is read by.",
-                     color=rl.MUTED),
+        rl.Paragraph(text, color=rl.MUTED),
         rl.Plot(lambda: experiment.plot_feeding_summary(
             range_minutes=options.range_minutes, transform_licks=options.transform_licks),
             height=7.6),

@@ -285,6 +285,14 @@ def compare_treatments(
     factors = [f for f in factors if f in df.columns]
     if not factors:
         raise ValueError("No usable factor columns present in feeding summary")
+    ## A factor with one level has nothing to compare; say so plainly rather
+    ## than letting the model fail on an empty constraint matrix.
+    varying = [f for f in factors if df[f].nunique(dropna=True) > 1]
+    if not varying:
+        levels = ", ".join(sorted({str(v) for f in factors for v in df[f].dropna()}))
+        raise ValueError(f"Only one treatment ({levels}): there is nothing to compare "
+                         f"between treatments.")
+    factors = varying
 
     # Sanitise the metric column name for patsy (no spaces/dots).
     df = df.rename(columns={value_col: "Y"})

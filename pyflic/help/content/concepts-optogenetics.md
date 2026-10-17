@@ -469,7 +469,8 @@ with a `Program.txt` section gets the band from the program's clock schedule, ap
 and the lanes show `OptoCol1` only. With neither there is nothing to draw.
 
 **QC reports** write it to `qc/program/program_timeline_dfm<id>.png` for every DFM that has
-one, and basic analysis for every generation-3 DFM. It appears in the report's Quality
+one, and basic analysis for every generation-3 DFM, in an optogenetic experiment only: a
+recording whose light never came on has nothing for it to show. It appears in the report's Quality
 control section, behind the Hub's **Program timeline** button (`plot_program_timeline`),
 and with each well's state at the end of the loaded range in the
 [QC Viewer](app-qc-viewer.md#the-program-sub-tab)'s **Program** sub-tab. See

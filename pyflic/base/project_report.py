@@ -382,26 +382,35 @@ def _results_blocks(project, summary: pd.DataFrame, facet) -> list[Any]:
     blocks.extend(project.experiment_type.project_results_blocks(project))
 
     blocks.append(rl.Heading("Statistics", level=2))
+    ## One treatment pooled: nothing is compared between treatments, said
+    ## once.  A paired − yoked difference is still tested against zero.
+    levels = rc.treatment_levels(summary)
+    single = len(levels) == 1
+    if single:
+        blocks.append(rc.single_treatment_note(levels[0]))
     diff = project.combined_diff_frame()
     diff_rows = project.diff_comparison_rows(diff)
     if diff is not None:
-        blocks += rc.stats_table(diff_rows, caption="Primary: paired − yoked difference "
-                                                    "(one observation per chamber group)",
-                                 well_names=names, show_phase=True)
+        if not single:
+            blocks += rc.stats_table(diff_rows, caption="Primary: paired − yoked "
+                                                        "difference (one observation "
+                                                        "per chamber group)",
+                                     well_names=names, show_phase=True)
         blocks += rc.zero_test_table(project.diff_zero_rows(diff),
                                      caption="Paired − yoked difference against zero, "
                                              "per treatment",
                                      well_names=names, show_phase=True)
-    rows = project.comparison_rows(summary, facet)
-    caption = ("Per-chamber metrics (secondary)" if diff is not None
-               else "Treatment comparisons, per chamber")
-    blocks += rc.stats_table(rows, caption=caption, well_names=names, show_phase=True,
-                             two_well=two_well)
-    blocks += _light_blocks(project, specs)
+    if not single:
+        rows = project.comparison_rows(summary, facet)
+        caption = ("Per-chamber metrics (secondary)" if diff is not None
+                   else "Treatment comparisons, per chamber")
+        blocks += rc.stats_table(rows, caption=caption, well_names=names, show_phase=True,
+                                 two_well=two_well)
+    blocks += _light_blocks(project, specs, compare=not single)
     return blocks
 
 
-def _light_blocks(project, specs) -> list[Any]:
+def _light_blocks(project, specs, *, compare: bool = True) -> list[Any]:
     """"Light behaviour": the stacked light table pooled as the feeding
     metrics are — a faceted figure per headline metric and the treatment
     comparisons — for a Project with optogenetic Members; nothing otherwise."""
@@ -442,9 +451,10 @@ def _light_blocks(project, specs) -> list[Any]:
             pending = []
     if pending:
         blocks.append(rl.PlotRow(pending, height=3.2))
-    rows = project.light_comparison_rows(light, frames.get("LightSummary_Facet"))
-    blocks += rc.stats_table(rows, caption="Light behaviour: treatment comparisons, "
-                                           "per chamber", show_phase=True)
+    if compare:
+        rows = project.light_comparison_rows(light, frames.get("LightSummary_Facet"))
+        blocks += rc.stats_table(rows, caption="Light behaviour: treatment comparisons, "
+                                               "per chamber", show_phase=True)
     return blocks
 
 

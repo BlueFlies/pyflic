@@ -60,6 +60,22 @@ def _p_tone(value: Any) -> str | None:
         return None
 
 
+def treatment_levels(frame: pd.DataFrame | None, column: str = "Treatment") -> list[str]:
+    """The treatments *frame* holds rows for, in order of appearance."""
+    if frame is None or frame.empty or column not in frame.columns:
+        return []
+    return list(dict.fromkeys(frame[column].dropna().astype(str)))
+
+
+def single_treatment_note(treatment: str) -> Any:
+    """Said once, where a report would otherwise repeat under every figure
+    that no comparison was possible: a one-treatment design is a design, not
+    a failure."""
+    return rl.Paragraph(f"One treatment, {treatment}, so nothing is compared between "
+                        f"treatments: the figures describe it alone.",
+                        color=rl.MUTED, italic=True)
+
+
 def stats_table(rows: Sequence[dict], *, caption: str | None = None,
                 well_names: dict | None = None, show_phase: bool = True,
                 two_well: bool = True) -> list[Any]:
@@ -247,12 +263,21 @@ def still_responding_plot(frame: pd.DataFrame, *, value_col: str = "BreakingPoin
 
 def dot_plot(frame: pd.DataFrame, value_col: str, *, y_label: str,
              factors: Sequence[str] | None = None, facet_col: str | None = None,
-             hline_at: float | None = None):
+             hline_at: float | None = None, empty_reason: str | None = None):
     """A jitter + mean ± SEM dot plot of *value_col* by treatment, in the
     report's size: x is the first design factor present (or the Treatment),
-    panels are *facet_col* when given (a Facet, usually)."""
+    panels are *facet_col* when given (a Facet, usually).
+
+    When no chamber has a value it raises :class:`report_layout.NothingToDraw`
+    with *empty_reason* (why the values are undefined) rather than handing
+    plotnine an empty frame, which fails with a message about faceting."""
     from .experiment import Experiment
 
+    values = (pd.to_numeric(frame[value_col], errors="coerce")
+              if value_col in frame.columns else pd.Series(dtype=float))
+    if not values.notna().any():
+        raise rl.NothingToDraw(f"No chamber has a value for {y_label}."
+                               + (f"  {empty_reason}" if empty_reason else ""))
     df = frame.copy()
     present = [f for f in (factors or []) if f in df.columns]
     x_col = present[0] if present else "Treatment"

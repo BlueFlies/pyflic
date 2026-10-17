@@ -33,6 +33,7 @@ from __future__ import annotations
 import io
 import os
 from dataclasses import asdict, dataclass, field
+from functools import lru_cache
 
 import matplotlib
 import pandas as pd
@@ -568,12 +569,35 @@ _AXIS_MARGIN_MM = 22.0
 _PT_TO_MM = 25.4 / 72.0
 
 
+#: Family names matplotlib resolves itself, never looked up as installed faces.
+_GENERIC_FAMILIES = {"sans-serif", "serif", "monospace", "cursive", "fantasy"}
+
+
+@lru_cache(maxsize=1)
+def _installed_fonts() -> frozenset[str]:
+    from matplotlib import font_manager
+
+    return frozenset(f.name for f in font_manager.fontManager.ttflist)
+
+
 def resolve_font_family(requested: str) -> list[str]:
     """*requested* first, with generic fallbacks, so a missing face degrades to
-    something sane instead of matplotlib's default at some sizes only."""
+    something sane instead of matplotlib's default at some sizes only.
+
+    Only faces this machine has are listed (and the generic families).
+    matplotlib logs "Font family … not found" for every listed face it lacks,
+    on every text it draws, so a fallback missing here (Liberation Sans on
+    Windows) flooded the console with warnings during a Project Report."""
+    installed = _installed_fonts()
+
+    def usable(name: str) -> bool:
+        return name in installed or name.lower() in _GENERIC_FAMILIES
+
     wanted = str(requested or "").strip()
-    fallbacks = ["DejaVu Sans", "Liberation Sans", "sans-serif"]
-    return ([wanted] + fallbacks) if wanted else fallbacks
+    fallbacks = [f for f in ("DejaVu Sans", "Liberation Sans") if usable(f)] + ["sans-serif"]
+    if wanted and usable(wanted):
+        return [wanted] + [f for f in fallbacks if f != wanted]
+    return fallbacks
 
 
 def effective_width_mm(style: PlotStyle, n_facets: int | None = None) -> float:

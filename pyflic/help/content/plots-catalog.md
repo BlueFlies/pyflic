@@ -15,7 +15,7 @@ not figures for a paper.
 | Baselined signal | `qc/baselined/DFM{n}_baselined.png` | Every well after baseline subtraction, with thresholds drawn |
 | Cumulative licks | `qc/cumulative_licks/DFM{n}_cumulative_licks.png` | Running lick total per well over time |
 | Light explained by licks | `qc/opto/opto_light_dfm{n}.png` | Optogenetic experiments only: each linkage group's lit time, explained and unexplained by trigger-well licks |
-| Program timeline | `qc/program/program_timeline_dfm{n}.png` | A DFM with a `Program.txt` section or firmware 4.0.0 data: its Program Intervals, and each well's Acclimation, Activations and light |
+| Program timeline | `qc/program/program_timeline_dfm{n}.png` | Optogenetic experiments only, a DFM with a `Program.txt` section or firmware 4.0.0 data: its Program Intervals, and each well's Acclimation, Activations and light |
 
 The **baselined signal with thresholds** is the most useful one in the set. It puts your
 `feeding_threshold` and `feeding_minimum` lines directly on the trace, so whether they sit
@@ -40,9 +40,10 @@ is a drifting sensor. The strip carries the group's verdict. See
 
 ### Program timeline
 
-**Program timeline** (`plot_program_timeline`) is drawn for every DFM that has something to
-draw: firmware 4.0.0 data, or a `Program.txt` section. **QC reports** write it for each such
-DFM, and basic analysis for each firmware 4.0.0 DFM.
+**Program timeline** (`plot_program_timeline`) is drawn, in an optogenetic experiment, for
+every DFM that has something to draw: firmware 4.0.0 data, or a `Program.txt` section.
+**QC reports** write it for each such DFM, and basic analysis for each firmware 4.0.0 DFM. A
+recording whose light never came on (every well Off) gets none.
 
 - **The band at the top** is the program, one block per Program Interval, coloured by
   Paradigm type and labelled with the Paradigm's name (and `C<n>`, the Cycle, when the

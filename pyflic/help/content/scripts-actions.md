@@ -21,7 +21,7 @@ several devices. `group` defaults to the **script's name** — see
 | Action | Parameters | What it does |
 |---|---|---|
 | `basic_analysis` | — | The standard pipeline: auto-removal (the `constants:` cutoffs, once), summary, feeding summary, summary plot, and for an optogenetic experiment the light QC, the light table and each firmware 4.0.0 DFM's Program timeline (QC is `run_qc`'s job) |
-| `run_qc` | — | Per-DFM QC reports into `qc/`: integrity, data breaks, bleeding, raw / baselined / cumulative-licks plots, and the Program timeline of each DFM with a `Program.txt` section or firmware 4.0.0 data |
+| `run_qc` | — | Per-DFM QC reports into `qc/`: integrity, data breaks, bleeding, raw / baselined / cumulative-licks plots, and, in an optogenetic experiment, the Program timeline of each DFM with a `Program.txt` section or firmware 4.0.0 data |
 | `feeding_csv` | — | Per-chamber feeding summary to CSV |
 | `facet_csv` | — | Per-chamber summary per Facet to `feeding_summary_facet.csv` (the Hub's **Faceted summary CSV**); skipped when the experiment has no Facets |
 | `binned_csv` | `binsize` | Feeding metrics binned over time, to CSV |

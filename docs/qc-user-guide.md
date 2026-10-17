@@ -55,7 +55,7 @@ Three rules run through everything:
 | How | What it writes |
 |---|---|
 | **Hub → QC → QC reports** | the **QC bundle**, into the member's `qc/` folder: the integrity report, the data breaks, the three signal plots, the two-well crosstalk tables, and when the member is optogenetic the light QC and the Program timeline of each DFM that has one |
-| **Hub → Analyze → Basic analysis** | auto-removal, `summary.txt` and the feeding summaries. It skips the QC bundle, which is the slow part, but it writes the optogenetic light QC, the light table, the Program timeline of each firmware 4.0.0 DFM and a Progressive Ratio experiment's own light QC |
+| **Hub → Analyze → Basic analysis** | auto-removal, `summary.txt` and the feeding summaries. It skips the QC bundle, which is the slow part, but it writes the optogenetic light QC, the light table, the Program timeline of each firmware 4.0.0 DFM of an optogenetic member, and a Progressive Ratio experiment's own light QC |
 | **QC Viewer** | loading a member on its **Load** tab writes the QC bundle. Opened from the Hub, the viewer starts on the member the Hub already loaded, and **Run QC** in its top bar writes the bundle |
 | **PDF report** | nothing into `qc/`. The report computes its integrity and crosstalk tables from the loaded recording, never from an old `qc/` folder |
 | **Scripts** | `run_qc` writes the QC bundle. `basic_analysis` skips it, as on the Hub |

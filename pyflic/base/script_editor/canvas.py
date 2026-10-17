@@ -316,7 +316,14 @@ class Canvas(QWidget):
         step: dict[str, Any] = {"action": action_name}
         for p in act.params:
             if p.default is not None and not p.inheritable:
-                step[p.key] = p.default
+                ## A list parameter's default is written as its text
+                ## ("Licks, Events, MedDuration"); save it as the list it is.
+                if p.type in ("list_str", "list_float") and isinstance(p.default, str):
+                    items = [x.strip() for x in p.default.split(",") if x.strip()]
+                    step[p.key] = ([float(x) for x in items] if p.type == "list_float"
+                                   else items)
+                else:
+                    step[p.key] = p.default
         self._append_item(step)
         self._list.setCurrentRow(self._list.count() - 1)
         self._emit_changed()
