@@ -15,6 +15,7 @@ not figures for a paper.
 | Baselined signal | `qc/baselined/DFM{n}_baselined.png` | Every well after baseline subtraction, with thresholds drawn |
 | Cumulative licks | `qc/cumulative_licks/DFM{n}_cumulative_licks.png` | Running lick total per well over time |
 | Light explained by licks | `qc/opto/opto_light_dfm{n}.png` | Optogenetic experiments only: each linkage group's lit time, explained and unexplained by trigger-well licks |
+| Program timeline | `qc/program/program_timeline_dfm{n}.png` | A DFM with a `Program.txt` section or firmware 4.0.0 data: its Program Intervals, and each well's Acclimation, Activations and light |
 
 The **baselined signal with thresholds** is the most useful one in the set. It puts your
 `feeding_threshold` and `feeding_minimum` lines directly on the trace, so whether they sit
@@ -27,12 +28,50 @@ inactive and should be excluded.
 **Light explained by licks** (`plot_opto_light`) is drawn for an optogenetic experiment of
 any type, by basic analysis as well. One row per linkage group. The left panel is its lit
 time per bin, stacked: grey-blue where a trigger-well lick or touch within the light's
-decay explains it, red where nothing does, purple where it was lit while every threshold
-was -1, and light grey where the light is not judged by licks (open loop, non-feeding
-activation). The right panel, when `data/Program.txt` allows it, is orange: the time the
-emulated firmware trigger read the trigger wells above threshold with no lick or touch.
-Red beside orange in the same bins is a drifting sensor. The strip carries the group's
-verdict. See [Optogenetic experiments](concepts-optogenetics.md).
+Hold explains it, red where nothing does, purple where it was lit while every threshold
+was `Off` (-1), and light grey where the light is not judged by licks (open loop,
+NonFeeding). The right panel is orange: on a recording older than firmware 4.0.0, when
+`data/Program.txt` allows it, the time the emulated firmware trigger read the trigger wells
+above threshold with no lick or touch; on a firmware 4.0.0 recording, titled *firmware
+events, no lick*, the light of Activations the firmware counted with no lick or touch at
+their onset. Lit time there is `OnMs`, in milliseconds. Red beside orange in the same bins
+is a drifting sensor. The strip carries the group's verdict. See
+[Optogenetic experiments](concepts-optogenetics.md).
+
+### Program timeline
+
+**Program timeline** (`plot_program_timeline`) is drawn for every DFM that has something to
+draw: firmware 4.0.0 data, or a `Program.txt` section. **QC reports** write it for each such
+DFM, and basic analysis for each firmware 4.0.0 DFM.
+
+- **The band at the top** is the program, one block per Program Interval, coloured by
+  Paradigm type and labelled with the Paradigm's name (and `C<n>`, the Cycle, when the
+  program repeats). Light grey is the baseline before the first instruction reached the DFM,
+  hatched white an instruction outside the program, and dark grey a Paradigm whose type
+  `Program.txt` does not give.
+- **Below it, one lane per well**, labelled with its chamber and Role. Pale orange shading is
+  Acclimation (Phase `A`), each black tick an Activation, and the blue strip the share of
+  each bin the LED was on, from white (dark) to dark blue (lit throughout).
+
+How to read it:
+
+- **Each trigger well should leave Acclimation**, its shading ending, within the
+  interval that started it. A well still shaded at the end never completed Acclimation.
+- **Ticks should come where the fly fed.** Under a ratio Paradigm they thin out as the
+  Requirement rises. A dense comb of ticks with a flat cumulative-licks curve is the light
+  following the sensor.
+- **A yoked well has no ticks** and the same blue strip as its paired partner. Ticks on a
+  yoked well, or a strip that differs, is broken yoking.
+- **The band should match the program you meant to run.** A hatched block after the start
+  is the DFM running something outside the program. A dark-grey block is a Paradigm the
+  `Program.txt` in `data/` does not know, which usually means it is the wrong file; every
+  block is dark grey when there is no `Program.txt` at all.
+
+On a recording older than firmware 4.0.0 the band is laid out from the program's clock
+times, approximate, and the lanes show the sampled `OptoCol1` light only: no Acclimation and
+no ticks. The bin width is the plot action's `binsize` (10 minutes by default; the Hub uses
+its Analyze panel's **Bin size**). See
+[Optogenetic experiments](concepts-optogenetics.md#the-program-timeline).
 
 ## Summary plots
 
@@ -106,6 +145,46 @@ established from the first minutes, and only a cumulative view distinguishes the
 **Hedonic feeding plot** — Well A against Well B median durations, faceted by treatment.
 Duration is the measure of interest in these designs; see
 [Experiment types](concepts-experiment-types.md).
+
+## Light behaviour plots
+
+Drawn for an optogenetic experiment of any type, from its
+[light table](concepts-optogenetics.md#the-light-table): what the light did, one point per
+chamber.
+
+**Light behaviour dot plots** — in the experiment report's and the Project Report's *Light
+behaviour* section. One dot plot per headline metric, by Treatment, per Facet when the
+experiment has them: **Activations**, **Lit time (s)**, **Firmware Events** and
+**Acclimation end (min)**. The diamond and bars are the treatment mean ± SEM, and the
+treatment comparisons sit underneath. A metric no Paradigm of the experiment defines is left
+out, and so is everything but lit time on a recording older than firmware 4.0.0. A
+Progressive Ratio experiment shows its paired chambers only: a yoked fly's light is its
+partner's.
+
+**Light Publication Figures** — in a Project whose Combined Analysis has a light table, the
+[Plot Editor](app-plot-editor.md) offers every numeric column of it as a faceted figure, on
+the shape of `faceted_licks`: x = Treatment, one panel per Facet, dots with mean ± SEM. Each
+is listed as *… (light, faceted)* and drawn from `<project>_LightSummary_Facet.csv`, or
+`<project>_LightSummary.csv` when the members have no Facets.
+
+| Plot id | Metric |
+|---|---|
+| `faceted_activations` | Activations |
+| `faceted_litsec` | Lit time (s) |
+| `faceted_firmwareevents` | Firmware Events |
+| `faceted_acclimationendmin` | Acclimation end (min) |
+| `faceted_litfraction` | Fraction of the time lit |
+| `faceted_activationsperhour` | Activations per hour |
+| `faceted_lightonsets` | Light onsets |
+| `faceted_acclimationactivations` | Acclimation Activations |
+| `faceted_lastrequirementmet` | Last Requirement met |
+| `faceted_progressatend` | Progress at the end |
+| `faceted_eventsperactivation` | Firmware Events per Activation |
+| `faceted_lockedoutcontactsec` | Feeding while locked out (s) |
+| `faceted_unlitsec` | Unlit time (s) |
+| `faceted_suppressions` | Suppressions |
+
+The first four are the headline metrics the reports test.
 
 ## Progressive-ratio plots
 

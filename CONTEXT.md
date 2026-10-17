@@ -137,7 +137,9 @@ _Avoid_: device, board, monitor, plate.
 **Chamber**:
 The unit an animal occupies, and the unit every metric is computed for: one
 well under `single_well`, a pair of wells under `two_well`. Chamber count is
-derived from the Chamber Layout — 12 or 6 per DFM — never stated directly.
+derived from the Chamber Layout — 12 or 6 per DFM — never stated directly. On
+an optogenetic DFM each Chamber also has a **Role**, what it was to the light,
+which is read from the program or the data and never assigned.
 _Avoid_: well (a well is the electrode; a two-well chamber has two of them),
 arena, position.
 
@@ -154,22 +156,40 @@ What a Chamber is assigned to, and the pooling key — chambers sharing one
 across DFMs are analysed together. With no Factors declared it is a free
 name; with Factors declared it is the ordered tuple of their levels, written
 comma-separated. A blank assignment omits the Chamber from the config
-entirely; a *partial* one is an error, never a shorter tuple.
+entirely; a *partial* one is an error, never a shorter tuple. A Chamber's
+**Role** sits beside its Treatment and is never one of its levels.
 _Avoid_: group, condition, label, cohort.
 
 **Facet**:
 A named time window within a recording, normally fixed by the Design's
-`facet_cutoffs:` so every Member is windowed identically. The one exception
-is the Progressive Ratio type, whose two Facets — **Training** and **Test** —
-are split at each Chamber Group's own data-derived training end; the type
-owns them, so a PR config never states `facet_cutoffs`. A Facet is still one
-named window per row, so every consumer of the Facet column works unchanged. Facets are a
+`facet_cutoffs:` so every Member is windowed identically. Two exceptions
+take their windows from each DFM instead: **Program Facets**, and the
+Progressive Ratio type, whose two Facets — **Training** and **Test** — are
+split at each Chamber Group's own data-derived training end; the type owns
+them, so a PR config never states `facet_cutoffs` or `facet_source`. A Facet
+is still one named label per row, so every consumer of the Facet column works
+unchanged. Facets are a
 **column**, not a directory: analysis writes `feeding_summary.csv` plus
 `feeding_summary_facet.csv` carrying a Facet column. The Hub's Start/End
 controls select a Facet rather than filtering the load. Replaces the
 retired `analysis_<start>_<end>/` output directories.
 _Avoid_: window, range, time bin (a bin is the separate `binsize` concept
 used by binned summaries).
+
+**Program Facet**:
+A Facet taken from the Opto Program rather than from minute cutoffs, chosen by
+the Design's `facet_source`: one per **Program Interval** of each DFM, its
+Cycles pooled (`program`), or one per Program Interval and Cycle
+(`program_cycles`). Labelled by the Paradigm's name — prefixed with the
+interval (`I2 Open`) only when some DFM runs that name in two Program
+Intervals, and suffixed with the Cycle (`PR10 C3`) under `program_cycles` — so
+the label is the
+same on every DFM and Member that ran the Paradigm, and pooling a Facet pools
+chambers under one Paradigm. Each DFM has its own windows, and a pooled Facet
+of a Repeating program is several of them. Exact on a Generation-3 recording,
+which states its Program Interval on every row; laid out from the program's
+clock schedule, and so approximate, before it.
+_Avoid_: interval facet, phase (a Phase is a well's Acclimation state).
 
 **Excluded Chamber**:
 A chamber removed from every result. Two live sources, both applied before
@@ -342,14 +362,19 @@ _Avoid_: pair (ambiguous with the paired fly), block, quad, well group (the
 group is four wells, but it is counted in chambers).
 
 **Paired Chamber** / **Yoked Chamber**:
-The two roles inside a Chamber Group. The **Paired** fly receives light-driven
-neuronal stimulation contingent on its own feeding at the sucrose well, and is
-the only chamber that undergoes and completes **Training**. The **Yoked** fly
-is lit at the same moments as its Paired partner, independent of its own
-behaviour. The role is structural, not a Treatment level: the config names the
-Paired chamber per DFM (`paired_chambers: [1, 4, 5]`, exactly one from each
-Chamber Group) and Yoked is always the other member, never written. Both
-chambers of a Chamber Group must carry the same Treatment.
+Two **Roles** with the same meaning in any optogenetic design: the **Paired**
+chamber holds the only Trigger Well of a Linkage Group that also lights other
+chambers, so its fly's own behaviour switches the light; a **Yoked** chamber
+shares that group without a Trigger Well of it, so its fly is lit at the same
+moments as its partner, independent of its own behaviour. In a Progressive
+Ratio experiment they are the two chambers of a Chamber Group: the Paired fly
+receives light-driven neuronal stimulation contingent on its own feeding at
+the sucrose well, and is the only chamber that undergoes and completes
+**Training**. There the role is stated, not read: the config names the Paired
+chamber per DFM (`paired_chambers: [1, 4, 5]`, exactly one from each Chamber
+Group), Yoked is always the other member, never written, and the program is
+checked against it. Both chambers of a Chamber Group must carry the same
+Treatment.
 _Avoid_: test fly / control fly, stimulated / unstimulated (the yoked fly is
 stimulated too), master / slave, active / passive.
 
@@ -372,8 +397,12 @@ still in training, and its true value is the raw value minus 65536; a well's
 **training end** is the last minute its own column is flagged, the four wells
 of a Chamber Group are expected to clear together, and a well that clears at
 a different minute or never clears is a per-well QC warning, never a load
-error. Generation 3 reports it as the Paired Sucrose Well's **Phase**: `A`
-(the firmware's **Acclimation**) while Training lasts, `M` after. The
+error. Generation 3 reports it through the Paired Sucrose Well's **Phase**:
+Training ends at its first row in `M` (Main) under a ratio Paradigm, so its
+`A` (the firmware's **Acclimation**) and any Program Interval before the
+ratio Paradigm are Training, and a ratio Paradigm with neither leaves Training
+empty but complete. Generation 2 records no Training at all: each Chamber
+Group is then one Facet, `Recording`, with no Test. The
 **group's** training end is always the Sucrose Well (well A) of its Paired
 Chamber. Training end varies between Chamber Groups (it is
 behaviour-contingent), so it is a data-derived per-group time, never a
@@ -430,7 +459,7 @@ group's).
 
 **Lick-free Light Event**:
 A Light Event credited with no Sucrose Well licks at all, and with no Sucrose
-Well lick or touch within its light's decay — the **Opto Program**'s decay, or
+Well lick or touch within its light's **Hold** — the **Opto Program**'s, or
 `opto_default_decay_ms` without one — so a light the fly touched for is never
 lick-free (ADR-0015). A few occur in healthy data (pyflic's feeding threshold
 misses brief touches the firmware counts); a run of them does not.
@@ -484,7 +513,9 @@ cause), incomplete, missing.
 
 **Test window**:
 The span a Chamber Group's Breaking Point and Sucrose Persistence are judged
-over: from the group's training end to the end of the recording, capped at
+over: from the group's training end to the end of the recording — on a
+Generation-3 recording, to the end of the ratio Paradigm's run that holds
+the training end, so only the first ratio run is the Test — capped at
 `pr_test_window_min` when that design constant is set (it is off by
 default). It differs between groups because training end does, which is what
 the cap is for.
@@ -535,14 +566,39 @@ chamber's Sucrose Well, which is how `paired_chambers` can be read from the
 program.
 _Avoid_: active well, stimulated well (the whole group is lit).
 
+**Role**:
+What a Chamber of an optogenetic DFM was to the light, in any design, read
+from its wells' places in the Linkage Groups: **Paired**, **Yoked**,
+**Mutual**, **Self**, **Open** or **Unlit**. It comes from the Opto Program's
+linkage and thresholds or, on a Generation-3 recording without one, from the
+data (Trigger Wells are the wells that counted Activations, and wells whose
+light matches to the millisecond are linked); a Generation-1 or 2 recording
+without a program has none. A column beside the Treatment, never a Treatment
+level and never written in the config; the Progressive Ratio type alone
+states its Paired chambers and checks the program against them.
+_Avoid_: condition, group, arm.
+
+**Mutual** / **Self** / **Open** / **Unlit**:
+The Roles other than Paired and Yoked. A **Mutual** chamber is one of several
+chambers of one Linkage Group that each hold a Trigger Well, so each fly's
+behaviour lights the others. A **Self** chamber holds a Trigger Well whose
+group lights no other chamber: closed loop on its own fly alone. An **Open**
+chamber is lit regardless of its fly, its wells `On` or in a group lit open
+loop. An **Unlit** chamber is none of these.
+_Avoid_: control (any of them can be one), solo, free-running.
+
 **Explained Light**:
-A lit sample of a Linkage Group with activity — a feeding lick or a tasting
-sample — in one of its Trigger Wells from the interval's decay plus
-`opto_decay_tolerance_samples` before it to that tolerance after it. What
-the optogenetic light QC measures is the share of lit time that is *not*
-explained: a warning at `opto_unexplained_warn_fraction`, a failure at
-`opto_unexplained_fail_fraction`. Judged only under a paradigm the fly's
-feeding drives; open loop and non-feeding activation are not.
+A Linkage Group's light with activity — a feeding lick or a tasting sample —
+in one of its Trigger Wells behind it: for closed-loop and Acclimation light,
+activity from the interval's **Hold** plus `opto_decay_tolerance_samples`
+before a lit sample to that tolerance after it; for an Activation of fixed
+length (FixedInterval, or a ratio Paradigm in Main), activity at its onset,
+which explains its whole on-period. What the optogenetic light QC measures is
+the share of lit time that is *not* explained: a warning at
+`opto_unexplained_warn_fraction`, a failure at
+`opto_unexplained_fail_fraction`, the same for every Paradigm type. Judged
+only under a Paradigm the fly's feeding drives; OpenLoop and NonFeeding light
+are not.
 _Avoid_: earned light (the PR question, asked of Light Events), justified
 light.
 
@@ -629,7 +685,7 @@ Paradigm, and `M` (Main) otherwise. Per Well, recorded on every Generation-3
 row; a Well with an `On` or `Off` threshold, or under a Paradigm without
 Acclimation, reads `M` throughout and says nothing about Training. In a
 Progressive Ratio experiment the Paired Sucrose Well's Acclimation **is**
-Training.
+Training, together with any Program Interval before the ratio Paradigm.
 _Avoid_: training (pyflic's PR-level word for the same span), stage, state.
 
 **Hold**:
@@ -639,6 +695,18 @@ ratio or Acclimation Activation. PyMCU retired "decay" for it; pyflic keeps
 `opto_default_decay_ms` as the constant's name for recordings without a
 program, and says Hold in new prose.
 _Avoid_: decay (in new prose), delay (that is Lockout or OnDelay).
+
+**Light table**:
+What the light did, per Chamber (and per well), in the feeding summary's
+shape: the same Treatment, factor and **Role** columns, beside lit time,
+Activations, Acclimation, Firmware Events and each Paradigm type's own
+measures, over the whole recording and per Facet. Every optogenetic
+experiment of any type has one, so light behaviour is pooled, tested and
+plotted between Treatments like feeding. A measure the recording's
+Generation or the well's Paradigm type does not define is missing, not zero.
+It describes the light; whether the light was right is the light QC's
+question.
+_Avoid_: light QC (the judgement, not the measurement), opto summary.
 
 ### Cross-app
 
@@ -736,6 +804,11 @@ _Avoid_: manual, documentation, the docs, USAGE.
   Group**, its **Paired** chamber's **Sucrose Well** is the **Trigger Well**,
   and two light QCs run: the type's, on **Light Events**, and the general one,
   on lit time. A group can pass one and fail the other.
+- Every **Chamber** of an optogenetic **DFM** has one **Role**, derived from
+  its wells' **Linkage Groups** and **Trigger Wells**; the **Light table** and
+  the feeding summary carry it beside the **Treatment**. A **Program Facet**
+  windows every table by the **Program Intervals** of each DFM, and pools by
+  **Paradigm** name across DFMs and **Members**.
 - Many **Help buttons** across the apps open the one **Help window**; each
   names a single **Help topic**. A tooltip may summarise a topic but never
   restates it — the topic is the only copy of the text.

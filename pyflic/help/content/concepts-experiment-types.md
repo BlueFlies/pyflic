@@ -117,7 +117,10 @@ A two-well operant assay built on **chamber groups**: each DFM's chambers 1+2, 3
 share one light circuit and one treatment. In each group the **paired** fly's feeding at
 the sucrose well (always well A) turns the light on, and the **yoked** fly is lit at the same
 moments whatever it does. The config names the paired chamber of each group per DFM with
-`paired_chambers:`; the yoked one is derived.
+`paired_chambers:`; the yoked one is derived. On DFM firmware 4.0.0 the type covers both
+ratio Paradigms, ProgressiveRatio and FixedRatio. Other optogenetic designs — open loop,
+closed loop, fixed interval, non-feeding — are analysed as a Custom or Hedonic experiment,
+with the [light table](concepts-optogenetics.md#the-light-table) beside the feeding results.
 
 What the type adds:
 

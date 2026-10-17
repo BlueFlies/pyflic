@@ -25,6 +25,16 @@ scripts. All the *controls* live in the tile's **anchored panel**, which drops d
 you click the tile. One panel is open at a time; click the tile again, click anywhere in
 the background, or press Esc to close it.
 
+**The readout's Loaded line** names the loaded member, and adds a note when its recording
+needs one:
+
+| Note | Means |
+|---|---|
+| *no training information (firmware older than 4.0.0)* | a DFM was recorded by PyMCU 4.0.0 from a DFM whose firmware is older: no Training, so a Progressive Ratio member has one `Recording` Facet and no Test |
+| *DFM n: firmware 4.0.0 recording without Program.txt: Paradigm types and settings unknown* | copy the `Program.txt` PyMCU exported for this recording into `data/` |
+
+See [Generations](concepts-optogenetics.md#generations).
+
 **Tiles never move or hide.** A tile that does not apply yet is *dimmed* — Analyze is dim
 until a member is loaded — but it stays clickable, because its panel holds the control
 that fixes the missing state. Its panel's cards are greyed to match, and they stay
@@ -200,14 +210,27 @@ simultaneous-feeding and bleeding matrices (two-well), and the **Raw Signal**,
 **Baselined**, and **Cumulative Licks** signal plots. **Open QC Viewer** opens the
 interactive app on the already-loaded member — tables, plots, and per-chamber
 exclusions saved to `remove_chambers.csv` (see [QC Viewer](app-qc-viewer.md)).
-**View QC plots** opens the saved signal plots as output-area tabs, one per DFM and
-kind, reusing tabs on a second look. **Open qc folder** shows the files themselves.
+**View QC plots** opens the saved signal plots, and the saved Program timelines, as
+output-area tabs, one per DFM and kind, reusing tabs on a second look. **Open qc folder**
+shows the files themselves.
 
 An **Optogenetics** group appears while the loaded member is optogenetic — whatever its
-type — or a Progressive Ratio member. Was the light where the licks were? **Opto light QC
-table** writes `qc/opto/` and logs every linkage group that failed or warned; **Light
-explained by licks (QC)** draws the per-DFM figure behind the verdict. See
-[Optogenetic experiments](concepts-optogenetics.md).
+type — or a Progressive Ratio member:
+
+- **Opto light QC table** — was the light where the licks were? Writes `qc/opto/` and logs
+  every linkage group that failed or warned.
+- **Light explained by licks (QC)** — the per-DFM figure behind the verdict.
+- **Program timeline** — per DFM, what the program ran and what each well did: the Program
+  Intervals by Paradigm, each well's Acclimation and Activations, and the light it received.
+  Writes `qc/program/`. It needs firmware 4.0.0 data or a `data/Program.txt`, and uses the
+  Analyze panel's **Bin size** for its light strip. See
+  [Program timeline](plots-catalog.md#program-timeline).
+- **Light summary CSV** — the light table: per chamber (`light_summary.csv`) and per well
+  (`light_wells.csv`), lit time, Activations, Acclimation, Firmware Events and the Paradigm
+  type's own measures, with the Treatment, factor and Role columns, written into
+  `analysis/` (and per Facet when faceted). Basic analysis writes it too.
+
+See [Optogenetic experiments](concepts-optogenetics.md).
 
 For a Progressive Ratio member the same group holds that type's own check — did the paired
 fly earn its light? **Light QC table** writes `pr_light_qc.csv` and `pr_light_events.csv`

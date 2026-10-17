@@ -31,13 +31,45 @@ load.
 
 Each **DFM** tab has its own sub-tabs:
 
-- **Integrity** — data continuity: gaps, breaks, and anything odd about the recording.
-- **Sim. Feeding** — samples where both wells of a chamber registered feeding at once.
-  This is your window onto electrical crosstalk; see
-  [dual-feeding correction](concepts-two-well-pi.md#dual-feeding-correction).
+- **Integrity** — data continuity: gaps, breaks, lost and repeated records, error flags,
+  and anything odd about the recording. Below the report, the recording's `Messages.csv`
+  for this DFM and the MCU, when `data/` holds one.
+- **Sim. Feeding** — samples where both wells of a chamber registered feeding at once,
+  before and after the dual-feeding correction. This is your window onto electrical
+  crosstalk; see [dual-feeding correction](concepts-two-well-pi.md#dual-feeding-correction).
 - **Bleeding** — signal bleeding between wells.
 - **Raw Signal**, **Baselined** and **Cumulative Licks** — the saved QC plots from `qc/`,
   once QC has run.
+- **Program** — the Program timeline and each well's Paradigm state, for a DFM with
+  firmware 4.0.0 data or a `Program.txt` section. See [below](#the-program-sub-tab).
+
+### The messages table
+
+PyMCU writes `Messages.csv` beside the data: what the MCU logged while it recorded. The
+Integrity sub-tab lists the messages of this DFM and of the MCU itself (DFM 0), with their
+time, the record `Index` they refer to, the text and the type, and counts the errors in its
+title. *Skipped index* is a lost record; a DFM error code points at the `Error` column. The
+integrity report lists the same errors.
+
+### The Program sub-tab
+
+The [Program timeline](plots-catalog.md#program-timeline) fills the top: the Program
+Intervals coloured by Paradigm type, and per well its Acclimation, its Activations and its
+light. Below it, a table with one row per well at the end of the loaded range:
+
+| Column | What it holds |
+|---|---|
+| `Well`, `Chamber`, `Role` | the well, its chamber and the chamber's [Role](concepts-optogenetics.md#roles) |
+| `Paradigm` | the Paradigm in force on the last row |
+| `Phase` | `A` while in Acclimation, `M` after |
+| `AcclimationEndMin` | the minute the well left Acclimation |
+| `Activations` | Activations so far |
+| `Requirement`, `Progress` | under a ratio Paradigm: the Firmware Events the next Activation needs, and how many it has |
+| `LitSec` | seconds its LED was on over the loaded range |
+
+On a recording older than firmware 4.0.0 the timeline is laid out from the program's clock
+times, and only `Paradigm`, `Role` and `LitSec` can be filled. The sub-tab is computed from the
+loaded experiment, not read from `qc/`, so a **Params** recompute redraws it.
 
 A Progressive Ratio experiment's own QC — the light QC table and its figures — is on the
 Hub's QC panel rather than here; see
@@ -46,15 +78,18 @@ Hub's QC panel rather than here; see
 
 ## The Opto Light QC tab
 
-Shown for an optogenetic experiment of any type: one row per linkage group, with its lit
-time, the share of it no trigger-well lick or touch explains, the minute that began, the
-time the emulated firmware trigger saw contact with no lick, and the verdict, coloured by
-tone. The tab opens on the worst group. Selecting a group fills the panes below it:
+Shown for an optogenetic experiment of any type: one row per linkage group, with its
+chambers and their `Roles` (`1 Paired, 2 Yoked`), its lit time, the share of it no
+trigger-well lick or touch explains, the minute that began, the contact with no lick — the
+emulated firmware trigger's, or on firmware 4.0.0 data the light of Activations with no lick
+or touch at their onset — and the verdict, coloured by tone. The tab opens on the worst
+group. Selecting a group fills the panes below it:
 
 - **Why** — the verdict, a line per flag with its numbers and likely cause, and the notes
   about its DFM and its program.
 - **Intervals**, **Light events** and **Program** — the group's rows of the tables in
-  `qc/opto/`, and its DFM's program as read.
+  `qc/opto/`, and its DFM's program as read. A column empty on every row — a setting none
+  of the DFM's Paradigms has, a firmware column on an older recording — is hidden.
 - The **Light explained by licks** figure — the selected group's panels, or the whole DFM
   with **Selected group only** unticked, at the bin size you choose.
 

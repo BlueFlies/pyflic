@@ -203,6 +203,7 @@ The same topics are readable here on GitHub — they are ordinary markdown in
 | [Plot catalogue](pyflic/help/content/plots-catalog.md) | What each figure shows |
 | [Troubleshooting](pyflic/help/content/troubleshooting.md) | When results look wrong |
 | [Installing pyflic](pyflic/help/content/install.md) | Install, update, verify |
+| [Firmware 4.0.0 data in pyflic](docs/firmware-4-data-in-pyflic.md) | What pyflic reads from each column of a DFM data file, by firmware generation, and where it surfaces |
 
 > **Note:** The Jupyter notebooks in `doc/ToBeDepricated/` are retained for users
 > transitioning from the R pipeline and will be removed in a future release. The Analysis

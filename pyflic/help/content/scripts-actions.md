@@ -20,8 +20,8 @@ several devices. `group` defaults to the **script's name** — see
 
 | Action | Parameters | What it does |
 |---|---|---|
-| `basic_analysis` | — | The standard pipeline: auto-removal (the `constants:` cutoffs, once), summary, feeding summary, summary plot (QC is `run_qc`'s job) |
-| `run_qc` | — | Per-DFM QC reports into `qc/`: integrity, data breaks, bleeding, raw / baselined / cumulative-licks plots |
+| `basic_analysis` | — | The standard pipeline: auto-removal (the `constants:` cutoffs, once), summary, feeding summary, summary plot, and for an optogenetic experiment the light QC, the light table and each firmware 4.0.0 DFM's Program timeline (QC is `run_qc`'s job) |
+| `run_qc` | — | Per-DFM QC reports into `qc/`: integrity, data breaks, bleeding, raw / baselined / cumulative-licks plots, and the Program timeline of each DFM with a `Program.txt` section or firmware 4.0.0 data |
 | `feeding_csv` | — | Per-chamber feeding summary to CSV |
 | `facet_csv` | — | Per-chamber summary per Facet to `feeding_summary_facet.csv` (the Hub's **Faceted summary CSV**); skipped when the experiment has no Facets |
 | `binned_csv` | `binsize` | Feeding metrics binned over time, to CSV |
@@ -30,6 +30,7 @@ several devices. `group` defaults to the **script's name** — see
 | `breaking_point` | — | **Breaking point table**: per chamber group, the paired fly's lick-backed Test light events before its first pause longer than `pr_break_gap_min`. Writes `pr_breaking_point.csv` and logs the table with its sensitivity to the gap (progressive ratio) |
 | `pr_light_qc` | — | **Light QC table**: per chamber group, did the paired fly earn its light? Writes `pr_light_qc.csv` and `pr_light_events.csv` and logs each flagged group (progressive ratio) |
 | `opto_light_qc` | — | **Opto light QC table**: per linkage group, was the light where the licks were? Writes `qc/opto/` (verdicts, intervals, light events, the program as read) and logs each flagged group (any optogenetic experiment; skipped otherwise) |
+| `light_summary` | — | **Light summary CSV**: the light table, what each chamber's and each well's light did — lit time, Activations, Acclimation, Firmware Events and the Paradigm type's own measures, with the Treatment, factor and `Role` columns. Writes `analysis/light_summary.csv`, `light_wells.csv` and, for a faceted experiment, their `_facet` variants (any optogenetic experiment; skipped otherwise) |
 | `tidy_export` | `kind` | **Event statistics**: one row per individual event, for downstream statistics |
 | `bootstrap` | `metric`, `mode`, `n_boot`, `ci`, `seed` | Bootstrap confidence intervals |
 | `compare` | `metric`, `mode`, `model`, `factors` | ANOVA or linear mixed model across treatments |
@@ -83,7 +84,11 @@ parameter for a publication — an effect that appears only at one link gap is n
 | `plot_pr_resting_level` | — | Per-DFM paired Sucrose Well resting level over the recording, light onsets as a rug (progressive ratio, QC) |
 | `plot_pr_still_responding` | — | Fraction of paired flies whose breaking point reached each ratio, per treatment; censored flies as ticks (progressive ratio) |
 | `plot_breaking_point` | — | Per-DFM ΔLicks per light-on period since training end, the break marked (progressive ratio) |
-| `plot_opto_light` | `binsize` | Per-DFM lit time per bin, explained and unexplained by trigger-well licks, and the emulated firmware trigger's contact with no lick (any optogenetic experiment, QC) |
+| `plot_opto_light` | `binsize` | Per-DFM lit time per bin, explained and unexplained by trigger-well licks, and the contact with no lick: the emulated firmware trigger's, or on firmware 4.0.0 data the Activations' (any optogenetic experiment, QC) |
+| `plot_program_timeline` | `binsize` | **Program timeline**: per DFM, the Program Intervals coloured by Paradigm type, and per well its Acclimation, its Activations as ticks and the share of each bin its LED was on. Draws each DFM with firmware 4.0.0 data or a `Program.txt` section (any optogenetic experiment; skipped otherwise, QC) |
+
+`plot_program_timeline`'s `binsize` (10 minutes by default) is the width of the light
+strip's bins. See [Program timeline](plots-catalog.md#program-timeline).
 
 Every plot action also writes its figure into the member's `analysis/`:
 `feeding_summary.png`, `binned_<metric>.png`, `dot_<metric>.png`,
@@ -92,7 +97,8 @@ Every plot action also writes its figure into the member's `analysis/`:
 Progressive Ratio `pr_cumulative_diff.png`, `pr_still_responding.png`, and per DFM
 `pr_cumulative_licks_dfm<id>.png`, `pr_light_events_dfm<id>.png`,
 `pr_resting_level_dfm<id>.png` and `breaking_point_dfm<id>.png`.  `plot_opto_light`
-writes into `qc/opto/`, as `opto_light_dfm<id>.png`.
+writes into `qc/opto/`, as `opto_light_dfm<id>.png`, and `plot_program_timeline` into
+`qc/program/`, as `program_timeline_dfm<id>.png`.
 
 ## Project actions
 
@@ -114,7 +120,10 @@ listed. For a Progressive Ratio Project it also stacks each member's
 `paired_yoked_diff.csv`, `pr_light_qc.csv` and `pr_breaking_point.csv` into
 `<project>_PairedYokedDiff.csv`, `<project>_LightQC.csv` and `<project>_BreakingPoint.csv`,
 and `<project>_Stats.txt` adds the tests against zero and the breaking point's log-rank
-test ([Statistics](concepts-progressive-ratio.md#statistics)).
+test ([Statistics](concepts-progressive-ratio.md#statistics)). For a Project with
+optogenetic members it stacks their light tables into `<project>_LightSummary.csv` and
+`<project>_LightWells.csv` (and their `_Facet` variants), and `<project>_Stats.txt` adds the
+light behaviour comparisons.
 
 ## `metric` and `mode`
 

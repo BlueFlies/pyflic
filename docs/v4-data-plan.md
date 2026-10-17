@@ -15,9 +15,15 @@ Terms are in [../CONTEXT.md](../CONTEXT.md): *Generation*, *Paradigm*,
 Event*, *Phase* / *Acclimation*, *Hold*, and the redefined *Training* and
 *Light Event*.
 
-**Status (2026-10-17):** decided; nothing implemented. No recording from a
-4.0.0 board exists yet, so every statement about the file comes from the
-PyMCU and firmware source and is checked at the [bench checkpoint](#the-bench-checkpoint).
+**Status (2026-10-17):** implemented on `v4_Dev` (Phase 0 and streams 3 to 7
+merged); where the build departed from this plan is listed under
+[As built](#as-built). Still open: the [bench checkpoint](#the-bench-checkpoint),
+because no recording from a 4.0.0 board exists yet, so every statement about
+the file comes from the PyMCU and firmware source; and a re-run of the real
+Progressive Ratio dataset, which was not on the machine the streams ran on, so
+decision 1's identity check rests on the generation-1 fixtures alone. The
+pyflic-side reference for the data file is
+[firmware-4-data-in-pyflic.md](firmware-4-data-in-pyflic.md).
 
 - [Sources of truth](#sources-of-truth)
 - [What changes for the user](#what-changes-for-the-user)
@@ -30,6 +36,7 @@ PyMCU and firmware source and is checked at the [bench checkpoint](#the-bench-ch
 - [Stream 6: integrity, messages and the QC views](#stream-6-integrity-messages-and-the-qc-views)
 - [Stream 7: help, guides and records](#stream-7-help-guides-and-records)
 - [Delivery](#delivery)
+- [As built](#as-built)
 - [The bench checkpoint](#the-bench-checkpoint)
 - [Not in this plan](#not-in-this-plan)
 
@@ -51,13 +58,14 @@ they disagree, they win, and the plan is corrected.
 | The Paradigm rules, per millisecond, hardware-free | `DFMV3_V2/src/LEDControl.c`, tests in `DFMV3_V2/tests/test_ledcontrol.c` |
 | Example programs | `PyMCU/FLICPrograms/ParadigmExamples.txt`, `OptoTest1`–`6` |
 
-pyflic's own `docs/dfm-firmware-4-data-guide.md` (12 Oct) predates
-`DataFileColumns.md` (16 Oct) and is superseded by it where they differ:
+pyflic's own `docs/dfm-firmware-4-data-guide.md` (12 Oct) predated
+`DataFileColumns.md` (16 Oct) and was superseded by it where they differ:
 missing values are the literal `NA` (development builds before 16 Oct wrote
 blanks, which the reader also accepts), baseline rows carry `Interval` 0 with
 `Cycle` `NA`, `Phase` reads `M` during `Interval` 0, and three behaviours the
 guide called open are settled by the firmware source (below). Stream 7
-replaces the guide with `docs/firmware-4-data-in-pyflic.md`.
+replaced the guide with [firmware-4-data-in-pyflic.md](firmware-4-data-in-pyflic.md)
+and deleted it; its export example (its §7.1) is `tests/fixtures/Program_v4.txt`.
 
 Facts from the source that the plan relies on and the documents do not all
 state:
@@ -630,7 +638,7 @@ OpenLoopWells, LegacyF, LegacyP` (the last two `NA` for the new grammar).
 wrapped into a `Paradigm` with `generated=True` and PyMCU's generated-name
 pattern (`ClosedLoop-40Hz-8ms-Hold500-MaxOn0`).
 
-Acceptance: the example in `docs/dfm-firmware-4-data-guide.md` §7.1 parses
+Acceptance: the example of the former guide's §7.1 (`tests/fixtures/Program_v4.txt`) parses
 with every DFM section accepted, `trigger_wells()` returns the level wells,
 `open_wells()` the `On` wells; the `***ALL DFM***` and `***Env Mon***` cases
 behave as above; every existing legacy fixture parses unchanged and
@@ -1001,6 +1009,85 @@ Phase 0 (one agent, sequential, on v4_Dev)
 - Each stream's report names: files changed, the acceptance criteria met with
   the test names, any Phase 0 interface it needed and did not have, and any
   decision above it found unworkable.
+
+## As built
+
+Where the implementation on `v4_Dev` departs from the plan above, and why. The
+code is the authority on names and columns;
+[firmware-4-data-in-pyflic.md](firmware-4-data-in-pyflic.md) describes it.
+
+- **`Roles`, not `Role`, in the opto QC table.** A Linkage Group can touch
+  several chambers with different Roles, so `opto_light_qc.csv` lists each
+  chamber's (`1 Paired, 2 Yoked`). Per-chamber tables carry `Role`.
+- **`facet_windows_for` returns several windows per Facet**
+  (`[(label, [(a, b), ...]), ...]`), not one. A `program` Facet pools a
+  Repeating program's Cycles, which are disjoint windows; every consumer takes
+  a list of windows.
+- **Stream 5 was split** into 5a (the light table, Role on rows, reports,
+  figures, the Hub button, decision 24) and 5b (`facet_source`, per-DFM
+  multi-window Facets, their consumers and editors), because Program Facets
+  reshape the facet machinery independently of the light table.
+- **`requirement_met` returns `None` for Acclimation Activations and for an
+  Activation on the first row of a new Paradigm name**, not only for `NA` and
+  onset 0. An Acclimation Activation meets no Requirement although its row
+  already shows the first Main one; at a Paradigm change the row before belongs
+  to the old Paradigm. Consumers fall back to the program's
+  `requirement_for(k)` for the second case.
+- **The ledger's `FirmwareEvents` window is (previous onset, onset]**: the
+  Event that completed the Requirement lands in the onset row, so under a ratio
+  Paradigm's Main phase the column equals the `Requirement` met.
+- **`light_events_table`'s Training/Test column is now `Facet`** (it was
+  `Phase`), because `Phase` now names the firmware's `A`/`M` column in the
+  ledger, and the column also holds `Recording` on generation 2.
+- **Repeated records are matched on `Index` plus time** (`Date`, `Time`,
+  `MSec`), not on `Index` alone, so a DFM that restarted and counts from 1
+  again with new records loses nothing.
+- **`EVENT_DISAGREEMENT` needs at least 5 events** in either count
+  (`MIN_FEEDING_EVENTS`): a fraction of a handful of events is noise.
+- **`PROGRAM_MISSING` replaces `NO_PROGRAM_SECTION` on generation 3**, for a
+  missing file and a missing section alike; `NO_PROGRAM_SECTION` stays for
+  generations 1 and 2.
+- **`LightOnsets` was added** to both light tables: the rising edges of a
+  well's own light on every generation, on generation 1 the nearest thing to
+  an Activation count.
+- **Generation-2 groups have no breaking-point rows.** With no Test phase
+  there is no break to report; the group's light QC notes say why.
+- **A sixth new flag, *non-feeding light during feeding*** (warning), is the
+  NonFeeding check of decision 19, which decision 20's list did not name. It
+  reuses `opto_unexplained_warn_fraction` and `opto_unexplained_min_sec`
+  rather than adding a constant.
+- ***Program mismatch* also covers rows that name a defined Paradigm other
+  than the printed line's.** The rows win and are judged by their own
+  Paradigm.
+- **The Firmware Events trend is a witness, not a second judge** (decision
+  13). `TrendRhoFirmware` is measured and reported; the *no increasing trend*
+  warning stays on pyflic's licks, and a firmware trend that rises while the
+  licks do not is a note pointing at the lick detection.
+- **The Environmental Monitor's file is `EnvMon_<n>.csv`**, not
+  `DFM99_<n>.csv` as *Sources of truth* and decision 5 say
+  (`PyMCU/EnvMonV3.py`, `DataFileColumns.md`). pyflic's `DFM*.csv` discovery
+  never matches it; the id-99 exclusion stands and guards a file PyMCU does
+  not write. Filing treats only `DFM*.csv` as recording files, so a loose
+  `EnvMon_<n>.csv` is filed into `extra_files/`.
+- **Decision 15's message has two wordings.** The Progressive Ratio type says
+  *no training information: recorded with DFM firmware older than 4.0.0*
+  (`summary.txt`, the report, its light QC); the light table's
+  `NO_TRAINING_INFORMATION`, which the Hub's Loaded line, the Project Report's
+  member Note and the Stats text use, says *no training information (firmware
+  older than 4.0.0)*.
+
+Completed after the stream merges, to close gaps the streams reported:
+
+- the generation-3 missing-program warning, *DFM n: firmware 4.0.0 recording
+  without Program.txt: Paradigm types and settings unknown*, in `pyflic lint`,
+  the report's *At a glance* and the Hub's Loaded line (decision 4);
+- `ParadigmType` in `pr_breaking_point.csv`, so the Project Report can title
+  its section *Fixed ratio: activations earned* when every pooled group ran
+  FixedRatio (decision 14);
+- `LitSec` and `Activations` on the Progressive Ratio Facet rows;
+- the Hub's **View QC plots** opens the Program timelines, and its **Program
+  timeline** button uses the Analyze panel's bin size;
+- the QC Viewer's Opto Light QC detail tables hide columns empty on every row.
 
 ## The bench checkpoint
 
