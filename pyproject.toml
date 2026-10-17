@@ -35,6 +35,11 @@ pyflic-lint = "pyflic.base.yaml_lint:main_cli"
 source = "vcs"
 fallback-version = "0.0.0"
 
+[tool.pytest.ini_options]
+markers = [
+    "slow: long checks that build and run external code (deselect with -m \"not slow\")",
+]
+
 [dependency-groups]
 dev = [
     "hypothesis>=6.111.0",
