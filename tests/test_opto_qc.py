@@ -97,6 +97,27 @@ def test_verdicts():
     assert oq.verdict_of([oq.PARTLY_UNEXPLAINED, oq.LIGHT_WHILE_OFF]) == "failed"
 
 
+def test_the_firmware4_checks_fail_or_warn_as_decision_20_says():
+    for flag in (oq.YOKING_BROKEN, oq.PARADIGM_NOT_IN_PROGRAM):
+        assert oq.verdict_of([flag]) == "failed"
+    for flag in (oq.ACCLIMATION_COUNT_MISMATCH, oq.EVENT_DISAGREEMENT, oq.LOST_RECORDS,
+                 oq.UNKNOWN_INSTRUCTION_ROWS, oq.LATE_RECORDS, oq.PROGRAM_MISSING,
+                 oq.NON_FEEDING_LIT_WHILE_FEEDING):
+        assert flag in oq.WARNING_FLAGS and oq.verdict_of([flag]) == "warning"
+    ## A flag list is split on ", ", so no flag may contain one.
+    assert not any(", " in f for f in (*oq.FAILING_FLAGS, *oq.WARNING_FLAGS))
+
+
+def test_the_firmware4_constants_merge_and_describe():
+    s = oq.OptoQCSettings.from_constants({"opto_late_records_warn": 3,
+                                          "opto_unknown_rows_warn_fraction": 7})
+    assert s.late_records_warn == 3 and s.unknown_rows_fraction == 1.0
+    assert s.lost_records_warn == 25 and s.event_disagreement_fraction == 0.25
+    assert "opto_yoking_fail_fraction=0.01" in s.describe_firmware4()
+    ## The generation-1 summary's settings line is as it was.
+    assert "opto_yoking" not in s.describe()
+
+
 # ---------------------------------------------------------------------------
 # One DFM from arrays
 # ---------------------------------------------------------------------------
@@ -342,6 +363,45 @@ def test_yes_with_no_light_at_all_fails_the_dfm():
     assert all(g["Verdict"] == "ok" for g in result.groups)
     ## ...and auto never fails on darkness alone.
     assert _analyze(_inputs(N), None).groups[0]["Verdict"] == "ok"
+
+
+def test_the_simple_export_is_every_well_off():
+    """``***ALL DFM***``: recorded without a Program, so every well was Off and
+    any light fails — never "no program section"."""
+    program = op.parse_program("***ALL DFM***\nStart Time: 01/01/2025 08:00:00\n"
+                               "Duration: 10 min\nLinkage: 1,2,3,4,5,6,7,8,9,10,11,12\n"
+                               "Lit, Idle, Off,Off,Off,Off,Off,Off,Off,Off,Off,Off,Off,Off, "
+                               "10 min\n")
+    assert program.grammar == op.GRAMMAR_SIMPLE
+    lit = np.zeros(N, dtype=bool)
+    lit[1000:1010] = True
+    result = _analyze(_inputs(N, lights={3: lit}), program)
+    assert result.program_status == oq.PROGRAM_ALL_OFF and result.flags == []
+    g = _group(result, 1)
+    assert g["Flags"] == oq.LIGHT_WHILE_OFF and g["LitWhileOffSec"] == pytest.approx(2.0)
+    dark = _analyze(_inputs(N), program, setting="yes")
+    assert [(r["Flags"], r["Verdict"]) for r in dark.groups] == [("", "ok")]
+
+
+def test_generation_1_rows_carry_the_new_columns_empty():
+    lit = np.zeros(N, dtype=bool)
+    lit[600:2400] = True
+    result = _analyze(_inputs(N, lights={1: lit}), _program(THRESHOLDS))
+    g = _group(result, 1)
+    assert g["Generation"] == 1 and result.generation == 1
+    for column in ("Roles", "FirmwareEvents", "PyflicEvents", "AcclimationActivations",
+                   "AcclimationExpected", "FirmwareEventsWithoutActivity"):
+        assert np.isnan(g[column]), column
+    interval = result.intervals[0]
+    assert interval["HoldMs"] == 1000 and "DecayMs" not in interval
+    assert interval["LitSource"] == oq.LIT_SOURCE_OPTOCOL1
+    assert all(np.isnan(interval[c]) for c in ("ProgramInterval", "Cycle", "Paradigm",
+                                               "ParadigmType"))
+    event = result.events[0]
+    assert event["Source"] == oq.EVENT_SOURCE_OPTOCOL1 and np.isnan(event["Well"])
+    assert set(oq.OPTO_INTERVAL_COLUMNS) == set(interval)
+    assert set(oq.OPTO_EVENT_COLUMNS) == set(event)
+    assert set(oq.OPTO_QC_COLUMNS) - {"Flags", "Verdict", "Notes"} <= set(g)
 
 
 def test_the_decay_profile_follows_the_schedule():

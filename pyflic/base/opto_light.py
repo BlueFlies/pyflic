@@ -25,6 +25,7 @@ import pandas as pd
 
 from . import opto_program as op
 from . import opto_qc as oq
+from .paradigm_state import GENERATION_DESCRIPTIONS, GENERATION_FLAG, GENERATION_PARADIGM
 from .pr_light_qc import VERDICT_FAILED, VERDICT_OK, VERDICT_WARNING
 
 #: ``qc/<QC_SUBDIR>/`` holds the files this module writes.
@@ -107,6 +108,8 @@ def dfm_inputs(dfm) -> oq.DFMInputs:
 
     chamber_of_well = {int(w): int(ch.index)
                        for ch in (dfm.chambers or []) for w in ch.wells}
+    generation = int(getattr(dfm, "generation", GENERATION_FLAG) or GENERATION_FLAG)
+    state = getattr(dfm, "paradigm", None)
     return oq.DFMInputs(
         dfm_id=int(dfm.id), minutes=minutes,
         samples_per_second=float(dfm.params.samples_per_second),
@@ -114,12 +117,28 @@ def dfm_inputs(dfm) -> oq.DFMInputs:
         feeding=_matrix(dfm.event_df, n, np.int64), raw=signal,
         chamber_of_well=chamber_of_well, origin=recording_origin(raw),
         data_frequency=column("OptoFreq"), data_pulse_width=column("OptoPW"),
-        data_dark=column("Dark"))
+        data_dark=column("Dark"), generation=generation,
+        state=state if generation == GENERATION_PARADIGM else None)
 
 
 def _split_flags(text: Any) -> list[str]:
     return [f for f in str(text if text is not None else "").split(", ")
             if f and f.lower() != "nan"]
+
+
+def _generation_of(row) -> int:
+    """A QC row's Generation (1 when the row predates the column)."""
+    try:
+        value = row["Generation"]
+    except (KeyError, IndexError):
+        return GENERATION_FLAG
+    return int(value) if pd.notna(value) else GENERATION_FLAG
+
+
+def _group_reasons(result: oq.DFMOptoResult) -> dict[Any, dict[str, str]]:
+    """``{group: {flag: words}}`` the QC wrote for flags whose numbers are
+    not columns of the QC table (generation 3)."""
+    return {g["Group"]: g.get("_reasons") or {} for g in result.groups}
 
 
 #: The program table's Paradigm settings, in the order a reader is shown them:
@@ -285,9 +304,11 @@ class OptoLightQC:
             return self.result(dfm_id).decay_samples
         dfm = self.experiment.dfms[dfm_id]
         minutes = pd.to_numeric(dfm.raw_df["Minutes"], errors="coerce").to_numpy(float)
+        state = (dfm.paradigm if getattr(dfm, "generation", GENERATION_FLAG)
+                 == GENERATION_PARADIGM else None)
         return oq.decay_profile(dfm_id, minutes, float(dfm.params.samples_per_second),
                                 recording_origin(dfm.raw_df), self.program,
-                                self.settings())
+                                self.settings(), state=state)
 
     # ------------------------------------------------------------------
     # Tables
@@ -302,8 +323,10 @@ class OptoLightQC:
         """One row per Linkage Group of every DFM the QC covers —
         ``qc/opto/opto_light_qc.csv``.
 
-        ``Flags`` lists what fired: *unexplained light*, *light while off* and
-        *no light recorded* fail a group; the rest are warnings.  ``Verdict``
+        ``Flags`` lists what fired: *unexplained light*, *light while off*,
+        *no light recorded* and, on a firmware 4.0.0 recording, *broken
+        yoking* and *paradigm not in program* fail a group
+        (:data:`oq.FAILING_FLAGS`); the rest are warnings.  ``Verdict``
         is ``ok``, ``warning`` or ``failed``; ``Excluded`` says a failed
         group's chambers leave the analysis (``exclude_failed_opto_chambers``,
         off by default).  The definitions are in :mod:`pyflic.base.opto_qc`.
@@ -405,16 +428,28 @@ class OptoLightQC:
             return ("no Program.txt in data/ — the light QC is limited (linkage inferred "
                     "from wells lit together, decay assumed; see each DFM)")
         name = program.path.name if program.path is not None else "Program.txt"
+        if program.grammar == op.GRAMMAR_SIMPLE:
+            return (f"{name}: the recording was made without a Program (***ALL DFM***), "
+                    f"every well Off, so any light is a fault")
         start = program.start.strftime("%Y-%m-%d %H:%M:%S") if program.start else "no start"
         duration = (f"{program.duration_min:g} min" if program.duration_min is not None
                     else "no duration")
         return (f"{name}: {len(program.dfms)} DFM section(s), start {start}, {duration}, "
                 f"firmware baseline {'on' if program.baseline else 'off'}")
 
+    def generations(self) -> dict[int, int]:
+        """``{dfm: Generation}`` for every DFM the QC covers."""
+        out: dict[int, int] = {}
+        for dfm_id in self.dfm_ids():
+            dfm = self.experiment.dfms[dfm_id]
+            out[dfm_id] = int(getattr(dfm, "generation", GENERATION_FLAG) or GENERATION_FLAG)
+        return out
+
     def experiment_notes(self) -> list[str]:
         """Notes about the experiment as a whole: the program's parse warnings,
-        what the loader derived from it, and a program whose paradigm is not
-        the Experiment Type's."""
+        what the loader derived from it, a program whose paradigm is not the
+        Experiment Type's, the DFMs' Generations when any is not the first,
+        and a firmware 4.0.0 recording without its program."""
         exp = self.experiment
         notes: list[str] = []
         program = self.program
@@ -432,14 +467,41 @@ class OptoLightQC:
                 etype = getattr(exp, "experiment_type", None)
                 is_pr = getattr(etype, "name", "") == "ProgressiveRatio"
                 display = getattr(etype, "display_name", "Custom")
-                if op.PROGRESSIVE_RATIO in paradigms and not is_pr:
-                    notes.append(f"Program.txt runs a progressive ratio, but the experiment "
+                ## The Progressive Ratio type covers both ratio Paradigms.
+                ratios = [p for p in op.RATIO_PARADIGMS if p in paradigms]
+                if ratios and not is_pr:
+                    names = " and a ".join(ratios)
+                    notes.append(f"Program.txt runs a {names}, but the experiment "
                                  f"type is {display}: the breaking point and the paired / "
                                  f"yoked analysis need experiment_type ProgressiveRatio")
-                if is_pr and op.PROGRESSIVE_RATIO not in paradigms:
+                if is_pr and not ratios:
                     listed = ", ".join(sorted(paradigms)) or "no triggered interval"
                     notes.append(f"the experiment type is Progressive Ratio, but Program.txt "
-                                 f"runs no progressive-ratio interval ({listed})")
+                                 f"runs no progressive-ratio or fixed-ratio interval "
+                                 f"({listed})")
+        generations = self.generations()
+        if any(g != GENERATION_FLAG for g in generations.values()):
+            by_generation: dict[int, list[int]] = {}
+            for dfm_id, g in generations.items():
+                by_generation.setdefault(g, []).append(dfm_id)
+            notes.append("DFM generations: " + "; ".join(
+                f"DFM {', '.join(str(d) for d in ids)} generation {g} "
+                f"({GENERATION_DESCRIPTIONS.get(g, 'unknown')})"
+                for g, ids in sorted(by_generation.items())))
+        firmware4 = [d for d, g in generations.items() if g == GENERATION_PARADIGM]
+        if firmware4 and program is None:
+            notes.append(f"no Program.txt for DFM {', '.join(str(d) for d in firmware4)}, "
+                         f"recorded with DFM firmware 4.0.0: the rows name each Paradigm "
+                         f"but not its type, settings or thresholds, so the type-dependent "
+                         f"light checks are not made; copy the Program.txt PyMCU exported "
+                         f"for this recording into data/")
+        elif firmware4 and program.grammar != op.GRAMMAR_SIMPLE:
+            lacking = [d for d in firmware4 if program.section(d) is None]
+            if lacking:
+                notes.append(f"Program.txt has no usable section for DFM "
+                             f"{', '.join(str(d) for d in lacking)}, recorded with DFM "
+                             f"firmware 4.0.0: the type-dependent light checks are not "
+                             f"made there")
         notes.extend(getattr(exp, "program_notes", None) or [])
         return notes
 
@@ -452,6 +514,7 @@ class OptoLightQC:
         for dfm_id in self.dfm_ids():
             result = self.result(dfm_id)
             dfm_flags = [f for f in result.flags]
+            extra = _group_reasons(result)
             if dfm_flags or result.notes:
                 head = f"DFM {dfm_id}"
                 if dfm_flags:
@@ -461,7 +524,7 @@ class OptoLightQC:
             rows = table[table["DFM"] == dfm_id]
             for _, r in rows.iterrows():
                 own = [f for f in _split_flags(r["Flags"]) if f not in dfm_flags]
-                reasons = [self._reason(flag, r) for flag in own]
+                reasons = [self._reason(flag, r, extra.get(r["Group"])) for flag in own]
                 where = (f"DFM {dfm_id} linkage group {r['Group']} ({r['Wells']}; "
                          f"chamber(s) {r['Chambers']}"
                          + (f"; {r['Treatment']}" if r["Treatment"] else "") + ")")
@@ -497,7 +560,8 @@ class OptoLightQC:
             verdict += " (excluded by exclude_failed_opto_chambers)"
         out = [f"Verdict: {verdict}"]
         own = [f for f in _split_flags(r["Flags"]) if f not in result.flags]
-        out += [f"- {self._reason(flag, r)}" for flag in own]
+        extra = _group_reasons(result).get(r["Group"])
+        out += [f"- {self._reason(flag, r, extra)}" for flag in own]
         if r["Notes"]:
             out += [f"· {note}" for note in str(r["Notes"]).split("; ")]
         if result.flags or result.notes:
@@ -508,19 +572,39 @@ class OptoLightQC:
         return out
 
     @staticmethod
-    def _reason(flag: str, r) -> str:
+    def _reason(flag: str, r, extra: dict[str, str] | None = None) -> str:
+        """One flag of a QC row in words, with its numbers: from the row's
+        columns, or for the generation-3 checks whose numbers have no column,
+        the words the QC wrote for the group (*extra*)."""
+        if extra and flag in extra:
+            return extra[flag]
+        if flag == oq.ACCLIMATION_COUNT_MISMATCH:
+            return (f"{flag}: {r['AcclimationActivations']:.0f} Activations in completed "
+                    f"Acclimation, the Paradigm's Acclimation adds up to "
+                    f"{r['AcclimationExpected']:.0f}")
+        if flag == oq.EVENT_DISAGREEMENT:
+            return (f"{flag}: {r['FirmwareEvents']:.0f} Firmware Events and "
+                    f"{r['PyflicEvents']:.0f} pyflic feeding events under the ratio "
+                    f"Paradigm's Main phase")
+        firmware4 = _generation_of(r) == GENERATION_PARADIGM
         if flag in _UNEXPLAINED_FLAGS:
+            window = ("the Hold, or at the onset of a fixed-length Activation" if firmware4
+                      else "the decay")
             text = (f"{flag}: {r['UnexplainedSec']:.0f} s of {r['JudgedLitSec']:.0f} s lit "
                     f"({100 * r['UnexplainedFraction']:.0f}%) with no trigger-well lick or "
-                    f"touch within the decay")
+                    f"touch within {window}")
             if pd.notna(r["UnexplainedOnsetMin"]):
                 text += f", from minute {r['UnexplainedOnsetMin']:.0f}"
             if r["LikelyCause"]:
                 text += f"; {r['LikelyCause']}"
+            if firmware4 and r["LikelyCause"] == oq.CAUSE_DRIFT:
+                text += (f" ({r['ContactWithoutActivitySec']:.0f} s lit by Activations and "
+                         f"{r['FirmwareEventsWithoutActivity']:.0f} Firmware Event(s) "
+                         f"with no lick or touch)")
             return text
         if flag == oq.LIGHT_WHILE_OFF:
             return (f"light while off: lit {r['LitWhileOffSec']:.1f} s while every "
-                    f"member's threshold was -1")
+                    f"member's threshold was {'Off' if firmware4 else '-1'}")
         if flag == oq.NO_LIGHT_EVENTS:
             return (f"no light events: {int(r['FeedingEvents'])} feeding bout(s) at its "
                     f"trigger wells and never lit")
@@ -544,7 +628,16 @@ class OptoLightQC:
                f"{settings.tolerance_samples} sample(s), before it.",
                "Computed over the whole recording, whatever window a table uses.",
                f"Program: {self.program_line()}",
-               f"Settings: {settings.describe()}", ""]
+               f"Settings: {settings.describe()}"]
+        firmware4 = GENERATION_PARADIGM in self.generations().values()
+        if firmware4:
+            out += [f"Firmware 4.0.0 checks: {settings.describe_firmware4()}",
+                    "On a firmware 4.0.0 recording the light is OnMs and each trigger-well",
+                    "Activation owns it: a fixed-length Activation (FixedInterval, ratio Main)",
+                    "is explained when its well had a lick or touch within the tolerance of",
+                    "its onset; closed-loop and Acclimation light keep the decay rule with",
+                    "the Hold."]
+        out.append("")
         program = self.program_table()
         if not program.empty:
             show = program_view(program)[["DFM", "Interval", "Minutes", "Paradigm", "Type",
@@ -557,11 +650,15 @@ class OptoLightQC:
         table = self.qc_table()
         if table.empty:
             return out + ["(no DFM is covered)", ""]
-        show = table[["DFM", "Group", "Wells", "Chambers", "Treatment", "LitSec",
-                      "UnexplainedFraction", "UnexplainedOnsetMin",
-                      "ContactWithoutActivitySec", "Verdict"]].copy()
-        show.columns = ["DFM", "Group", "Wells", "Chambers", "Treatment", "Lit(s)",
-                        "Unexpl", "Onset", "Contact(min)", "Verdict"]
+        roles = firmware4 and table["Roles"].notna().any()
+        columns = ["DFM", "Group", "Wells", "Chambers", *(["Roles"] if roles else []),
+                   "Treatment", "LitSec", "UnexplainedFraction", "UnexplainedOnsetMin",
+                   "ContactWithoutActivitySec", "Verdict"]
+        show = table[columns].copy()
+        show.columns = ["DFM", "Group", "Wells", "Chambers", *(["Roles"] if roles else []),
+                        "Treatment", "Lit(s)", "Unexpl", "Onset", "Contact(min)", "Verdict"]
+        if roles:
+            show["Roles"] = show["Roles"].map(lambda v: "—" if pd.isna(v) else v)
         show["Lit(s)"] = show["Lit(s)"].map(lambda v: f"{v:.0f}")
         show["Unexpl"] = show["Unexpl"].map(lambda v: "—" if pd.isna(v) else f"{100 * v:.0f}%")
         show["Onset"] = show["Onset"].map(lambda v: "—" if pd.isna(v) else f"{v:.0f}")
@@ -570,6 +667,9 @@ class OptoLightQC:
         out.append(show.to_string(index=False))
         out.append("(Contact: minutes the emulated firmware trigger saw the signal above "
                    "threshold with no pyflic lick or touch.)")
+        if firmware4:
+            out.append("(On a firmware 4.0.0 DFM, Contact is the minutes lit by "
+                       "Activations whose onset had no pyflic lick or touch.)")
         notes = self.experiment_notes()
         detail = self.lines()
         if notes or detail:
@@ -635,10 +735,12 @@ class OptoLightQC:
         non-feeding activation).  The right one, when the program allows the
         Emulated Trigger, is the time the firmware would have read the trigger
         wells above threshold while pyflic saw no lick or touch — the
-        drifting-baseline signature.  A group never lit or touched is left
-        out unless it was flagged.  *groups* limits the figure to those
-        Linkage Groups, drawn whatever they hold (the QC Viewer shows one at a
-        time).
+        drifting-baseline signature.  On a firmware 4.0.0 recording the lit
+        time is ``OnMs`` (milliseconds, not samples) and the right panel is
+        the light of Activations the firmware counted with no lick or touch at
+        their onset.  A group never lit or touched is left out unless it was
+        flagged.  *groups* limits the figure to those Linkage Groups, drawn
+        whatever they hold (the QC Viewer shows one at a time).
         """
         import plotnine as p9
 
@@ -649,6 +751,9 @@ class OptoLightQC:
         result = self.result(dfm_id)
         binsize = max(float(binsize_min), 1.0)
         emulated = any(pd.notna(g["ContactSec"]) for g in result.groups)
+        drift_kind = ("firmware events, no lick"
+                      if result.generation == GENERATION_PARADIGM
+                      else "firmware contact, no lick")
         frames, order = [], []
         wanted = None if groups is None else {int(g) for g in groups}
         for group in result.groups:
@@ -663,7 +768,7 @@ class OptoLightQC:
             head = (f"Group {group['Group']} ({group['Wells']}) — "
                     f"{verdict_text(group['Flags'])}")
             light_panel = f"{head}\nlight (s per bin)"
-            contact_panel = f"{head}\nfirmware contact, no lick (s per bin)"
+            contact_panel = f"{head}\n{drift_kind} (s per bin)"
             order.append(light_panel)
             if emulated:
                 order.append(contact_panel)
@@ -681,7 +786,7 @@ class OptoLightQC:
             if emulated:
                 frames.append(pd.DataFrame({"Minute": minute, "Panel": contact_panel,
                                             "Seconds": agg["ContactWithoutActivitySec"],
-                                            "Kind": "firmware contact, no lick"}))
+                                            "Kind": drift_kind}))
         if not frames:
             return p9.ggplot() + p9.labs(title=f"DFM {dfm_id} — no light to show")
         subject = f"DFM {dfm_id}"
@@ -690,7 +795,7 @@ class OptoLightQC:
         data = pd.concat(frames, ignore_index=True)
         data["Panel"] = pd.Categorical(data["Panel"], categories=order, ordered=True)
         kinds = ["explained", "unexplained", "lit while off", "not judged by licks",
-                 "firmware contact, no lick"]
+                 drift_kind]
         data["Kind"] = pd.Categorical(data["Kind"], categories=kinds, ordered=True)
         ncol = 2 if emulated else min(3, len(order))
         nrow = -(-len(order) // ncol)
@@ -698,7 +803,7 @@ class OptoLightQC:
             figsize = (4.6 * ncol, min(24.0, 1.9 * nrow + 1.0))
         colors = {"explained": "#9DB4C8", "unexplained": "#D62728",
                   "lit while off": "#6A3D9A", "not judged by licks": "#D9D9D9",
-                  "firmware contact, no lick": "#E69F00"}
+                  drift_kind: "#E69F00"}
         g = (p9.ggplot(data, p9.aes("Minute", "Seconds", fill="Kind"))
              + p9.geom_col(width=binsize, position="stack")
              ## Every panel from zero, and an empty one a unit tall rather
@@ -812,9 +917,15 @@ class OptoLightQC:
                                    caption="The program, as the MCU echoed it",
                                    formats={"Minutes": "{:g}"}))
         table = self.qc_table()
-        view = pd.DataFrame({
+        generations = self.generations()
+        firmware4 = GENERATION_PARADIGM in generations.values()
+        columns: dict[str, Any] = {
             "DFM": table["DFM"], "Group": table["Group"], "Wells": table["Wells"],
-            "Chambers": table["Chambers"], "Treatment": table["Treatment"],
+            "Chambers": table["Chambers"]}
+        if firmware4 and table["Roles"].notna().any():
+            columns["Roles"] = table["Roles"].map(lambda v: "—" if pd.isna(v) else v)
+        columns.update({
+            "Treatment": table["Treatment"],
             "Lit (s)": table["LitSec"],
             "Unexplained": table["UnexplainedFraction"],
             "From (min)": table["UnexplainedOnsetMin"],
@@ -822,28 +933,40 @@ class OptoLightQC:
             "Verdict": [("excluded" if ex else verdict_text(f))
                         for f, ex in zip(table["Flags"], table["Excluded"])],
         })
+        view = pd.DataFrame(columns)
+        thresholds = f"Thresholds: {settings.describe()}."
+        if firmware4:
+            thresholds += f"  Firmware 4.0.0 checks: {settings.describe_firmware4()}."
         blocks += [
             rl.Table(view, caption="Opto light QC by linkage group",
                      formats={"Lit (s)": "{:.0f}", "Unexplained": "{:.0%}",
                               "From (min)": "{:.0f}", "Contact, no lick (min)": "{:.0f}"},
                      status={"Verdict": rl.tone_of}),
-            rl.Paragraph(f"Thresholds: {settings.describe()}.", size=rl.SIZE_SMALL,
-                         color=rl.MUTED),
+            rl.Paragraph(thresholds, size=rl.SIZE_SMALL, color=rl.MUTED),
         ]
         items = [*self.experiment_notes(), *self._bullets()]
         if items:
             blocks.append(rl.Bullets(items, size=rl.SIZE_SMALL + 0.5))
         for dfm_id in self.dfm_ids():
+            if generations.get(dfm_id) == GENERATION_PARADIGM:
+                caption = ("Lit time (OnMs) per bin: explained by a trigger-well lick or "
+                           "touch within the Hold, or at the onset of a fixed-length "
+                           "Activation (grey-blue), unexplained (red), lit while every "
+                           "threshold was Off (purple) and not judged by licks — open loop, "
+                           "NonFeeding (light grey).  Orange: light of Activations the "
+                           "firmware counted with no lick or touch at their onset.")
+            else:
+                caption = ("Lit time per bin: explained by a trigger-well lick or touch "
+                           "within the decay (grey-blue), unexplained (red), lit while every "
+                           "threshold was -1 (purple) and not judged by licks — open loop, "
+                           "non-feeding activation (light grey).  Orange: time the emulated "
+                           "firmware trigger read the trigger wells above threshold with no "
+                           "lick or touch.")
             blocks.append(rl.Plot(
                 lambda d=dfm_id: self.plot_dfm(d, base_font_size=8.5),
                 height=min(8.4, 1.45 * self.plot_rows(dfm_id) + 0.9),
                 title=f"Light explained by licks — DFM {dfm_id}",
-                caption="Lit time per bin: explained by a trigger-well lick or touch "
-                        "within the decay (grey-blue), unexplained (red), lit while every "
-                        "threshold was -1 (purple) and not judged by licks — open loop, "
-                        "non-feeding activation (light grey).  Orange: time the emulated "
-                        "firmware trigger read the trigger wells above threshold with no "
-                        "lick or touch."))
+                caption=caption))
         return blocks
 
     def _bullets(self) -> list[str]:

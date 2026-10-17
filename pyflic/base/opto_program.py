@@ -589,8 +589,14 @@ class DFMProgram:
         return {label: tuple(wells) for label, wells in groups.items()}
 
     def trigger_wells(self) -> tuple[int, ...]:
-        """Every well whose threshold is a level in at least one interval."""
-        found = {w for iv in self.intervals for w in iv.trigger_wells()}
+        """Every well whose threshold is a level in at least one interval
+        whose Paradigm is not OpenLoop: under OpenLoop a level well is lit
+        regardless, the firmware running no rule for it (as
+        :func:`opto_roles.linkage_view` counts it).  A legacy export has no
+        OpenLoop type (open loop is a threshold of 0), so its trigger wells
+        are every level well, as before."""
+        found = {w for iv in self.intervals if iv.paradigm.type != OPEN_LOOP
+                 for w in iv.trigger_wells()}
         return tuple(sorted(found))
 
     def schedule(self, start: datetime, end: datetime) -> list[ScheduledInterval]:

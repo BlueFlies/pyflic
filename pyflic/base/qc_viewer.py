@@ -1144,7 +1144,7 @@ class OptoTab(QtWidgets.QWidget):
     #: (header, qc_table column) for the verdict table.
     _COLUMNS: tuple[tuple[str, str], ...] = (
         ("DFM", "DFM"), ("Group", "Group"), ("Wells", "Wells"),
-        ("Chambers", "Chambers"), ("Treatment", "Treatment"),
+        ("Chambers", "Chambers"), ("Roles", "Roles"), ("Treatment", "Treatment"),
         ("Paradigm", "Paradigm"), ("Lit (s)", "LitSec"),
         ("Unexplained", "UnexplainedFraction"), ("From (min)", "UnexplainedOnsetMin"),
         ("Contact, no lick (min)", "ContactWithoutActivitySec"),
