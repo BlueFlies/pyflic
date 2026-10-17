@@ -8,7 +8,8 @@ and the first one to be edited silently became the standard.
 
 Everything the Design owns (ADR-0005 — experiment type, detection ``params:``,
 ``well_names``, ``transform_licks``, ``constants:``, the design factors, the
-facet cutoffs) is authored here, in one place, and every Member inherits it.
+facet cutoffs or ``facet_source``) is authored here, in one place, and every
+Member inherits it.
 The parameter form and the factors table are the config editor's own widgets,
 so the Design is stated in exactly the vocabulary a Member's config uses.
 
@@ -45,6 +46,7 @@ from .config_editor import _OPTO_CHOICES, FactorsWidget, ParamsForm, _opto_index
 from .experiment_types.progressive_ratio import PR_CONSTANT_FIELDS
 from .opto_qc import DEFAULT_CONSTANTS as OPTO_DEFAULTS
 from .opto_qc import OPTO_CONSTANT_FIELDS
+from .program_facets import FACET_SOURCES, SOURCE_LABELS, is_program_source
 from .ui import Category, icon
 from .ui.widgets import Card, CardGroup
 
@@ -271,6 +273,20 @@ class ProjectDesignDialog(QDialog):
         self.opto_combo.currentIndexChanged.connect(self._on_opto_changed)
         form.addRow("Optogenetics:", self.opto_combo)
 
+        ## Where the Facets come from (decision 7): minute cutoffs, or each
+        ## DFM's Program Intervals from its Program.txt.  Beside the cutoffs it
+        ## replaces; a type that owns its Facets owns this too.
+        self.facet_source_combo = QComboBox()
+        for value in FACET_SOURCES:
+            self.facet_source_combo.addItem(SOURCE_LABELS[value], value)
+        self.facet_source_combo.setToolTip(
+            "facet_source — minute cutoffs (the default) split every DFM at the "
+            "same minutes; Program Intervals give one Facet per Program Interval "
+            "of each DFM's Program.txt, labelled by its Paradigm (Cycles pooled, "
+            "or one per Cycle).  A Program Facet needs a Program.txt section for "
+            "every DFM, and no cutoffs.")
+        self.facet_source_combo.currentIndexChanged.connect(self._on_facet_source_changed)
+        form.addRow("Facet source:", self.facet_source_combo)
         self.cutoffs_edit = QLineEdit()
         self.cutoffs_edit.setPlaceholderText("e.g. 10, 70  (minutes)")
         form.addRow("Facet cutoffs:", self.cutoffs_edit)
@@ -483,6 +499,7 @@ class ProjectDesignDialog(QDialog):
                 f"facet_labels is not written.")
         elif not self.labels_edit.text().strip() and item.phase_labels:
             self.labels_edit.setText(", ".join(item.phase_labels))
+        self._apply_facet_widgets()
         defaults = item.default_constants or {}
         for key, _label, placeholder in _CONSTANT_ROWS:
             check = self.constant_checks[key]
@@ -520,6 +537,36 @@ class ProjectDesignDialog(QDialog):
         self.pr_qc_group.setVisible(pr_type)
         self.pr_break_group.setVisible(pr_type)
         self._on_layout_changed()
+
+    def _on_facet_source_changed(self) -> None:
+        self._apply_facet_widgets()
+
+    def _apply_facet_widgets(self) -> None:
+        """The Facet source picker and the two fields it governs: a type that
+        owns its Facets fixes the source at cutoffs; Program Facets take
+        neither cutoffs nor phase names (each Facet is named by its Paradigm)."""
+        item = self._experiment_type()
+        owned = item.owns_facet_source
+        if owned:
+            self.facet_source_combo.blockSignals(True)
+            self.facet_source_combo.setCurrentIndex(
+                max(self.facet_source_combo.findData("cutoffs"), 0))
+            self.facet_source_combo.blockSignals(False)
+        self.facet_source_combo.setEnabled(not owned)
+        derived = bool(getattr(item, "data_derived_facets", False))
+        program = is_program_source(self.facet_source_combo.currentData())
+        self.cutoffs_edit.setEnabled(not item.facets_fixed and not program)
+        self.labels_edit.setEnabled(not derived and not program)
+        if program:
+            self.cutoffs_edit.setPlaceholderText(
+                "not used: each DFM's Program Intervals are its Facets")
+            self.cutoffs_edit.setToolTip(
+                "facet_source takes the Facets from Program.txt; facet_cutoffs "
+                "is not written.")
+            self.labels_edit.setPlaceholderText("not used: each Facet is named by its Paradigm")
+        elif not derived:
+            self.cutoffs_edit.setPlaceholderText("e.g. 10, 70  (minutes)")
+            self.labels_edit.setPlaceholderText("e.g. Acclimation, Experiment, Cooldown")
 
     def _on_layout_changed(self) -> None:
         two_well = self._chamber_layout() == "two_well"
@@ -658,6 +705,11 @@ class ProjectDesignDialog(QDialog):
         self.transform_check.setChecked(bool(g.get("transform_licks", True)))
         cutoffs = g.get("facet_cutoffs") or []
         self.cutoffs_edit.setText(", ".join(str(c) for c in cutoffs))
+        source = item.resolve_facet_source(g)
+        self.facet_source_combo.blockSignals(True)
+        self.facet_source_combo.setCurrentIndex(
+            max(self.facet_source_combo.findData(source), 0))
+        self.facet_source_combo.blockSignals(False)
         self.labels_edit.setText(
             ", ".join(str(v) for v in (g.get("facet_labels") or [])))
         self.exclusion_edit.setText(str(g.get("exclusion_group") or ""))
@@ -715,9 +767,12 @@ class ProjectDesignDialog(QDialog):
         item = self._experiment_type()
         chamber_size = 2 if self._chamber_layout() == "two_well" else 1
 
+        facet_source = ("cutoffs" if item.owns_facet_source
+                        else self.facet_source_combo.currentData() or "cutoffs")
+        from_program = is_program_source(facet_source)
         cutoffs = None
         text = self.cutoffs_edit.text().strip()
-        if text and not item.facets_fixed:
+        if text and not item.facets_fixed and not from_program:
             try:
                 cutoffs = [_number(v) for v in text.split(",") if v.strip()]
             except ValueError:
@@ -790,13 +845,15 @@ class ProjectDesignDialog(QDialog):
             factors=factors,
             facet_cutoffs=cutoffs,
             transform_licks=self.transform_check.isChecked(),
+            facet_source=facet_source,
         )
         if item.chamber_layout is None:
             g["chamber_layout"] = self._chamber_layout()
         labels = [v.strip() for v in self.labels_edit.text().split(",")
                   if v.strip()]
-        if getattr(item, "data_derived_facets", False):
-            ## No cutoffs exist to count against; the names are the type's.
+        if getattr(item, "data_derived_facets", False) or from_program:
+            ## No cutoffs exist to count against; the names are the type's,
+            ## or for Program Facets each Paradigm's.
             labels = []
         if labels:
             n_cutoffs = len(g.get("facet_cutoffs")

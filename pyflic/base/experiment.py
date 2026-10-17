@@ -46,6 +46,7 @@ class Experiment:
     experiment_dir: Path | None = None
     range_minutes: tuple[float, float] | None = None
     facet_cutoffs: tuple[float, ...] | None = None
+    _facet_plan: Any = None                # (source, inputs, program_facets.FacetPlan)
     experiment_type: Any = None            # ExperimentType strategy (ADR-0007)
     chamber_layout: str | None = None      # 'single_well' | 'two_well'
     config: dict = field(default_factory=dict)   # the resolved yaml
@@ -580,6 +581,10 @@ class Experiment:
         dfm_ids = sorted(int(k) for k in self.dfms.keys())
         buf.write(f"Loaded DFMs: {dfm_ids}\n")
         buf.write(f"Treatments: {sorted(self.design.treatments.keys())}\n\n")
+        ## Program Facets only (facet_source): what they are and, per DFM laid
+        ## out by the clock schedule, that they are approximate.
+        if facet_notes := self.facet_notes():
+            buf.write("\n".join(facet_notes) + "\n\n")
 
         # Global params (if any)
         global_params = None
@@ -2019,7 +2024,10 @@ class Experiment:
         """
         if transform_licks is None:
             transform_licks = self.transform_licks
-        key = (float(range_minutes[0]), float(range_minutes[1])), bool(transform_licks)
+        from . import windowing
+
+        ## range_minutes may be a list of windows (a Program Facet).
+        key = windowing.range_key(range_minutes), bool(transform_licks)
         if key in self._feeding_summary_cache:
             return self.opto.with_columns(self._feeding_summary_cache[key])
 
@@ -2346,9 +2354,12 @@ class Experiment:
         return list(windowing.facet_windows(cutoffs)) if cutoffs else []
 
     def facet_labels(self):
-        """Display labels parallel to :meth:`facet_windows`."""
+        """Display labels parallel to :meth:`facet_windows`; for Program
+        Facets, the ordered union of every DFM's labels."""
         from . import windowing
 
+        if self.facet_source != "cutoffs":
+            return list(self._program_facet_plan().labels)
         windows = self.facet_windows()
         if not windows:
             return []
@@ -2356,6 +2367,75 @@ class Experiment:
             return self.experiment_type.phase_labels_for(
                 windows, (self.config or {}).get("global") or {})
         return [windowing.minute_label(w) for w in windows]
+
+    @property
+    def facet_source(self) -> str:
+        """``cutoffs`` (the default), ``program`` or ``program_cycles``: where
+        the Facets come from (:mod:`pyflic.base.program_facets`)."""
+        if self.experiment_type is None:
+            return "cutoffs"
+        return self.experiment_type.resolve_facet_source(
+            (self.config or {}).get("global") or {})
+
+    @property
+    def facets_vary_by_dfm(self) -> bool:
+        """Whether a Facet's windows can differ between DFMs (Program Facets,
+        or a type whose windows come from the data), so that its rows are
+        grouped by the ``Facet`` label and never by ``FacetRange``."""
+        if self.experiment_type is None:
+            return False
+        return self.experiment_type.facets_vary_by_dfm(
+            (self.config or {}).get("global") or {})
+
+    def _program_facet_plan(self):
+        """The Program Facets (:func:`program_facets.plan`), recomputed when
+        the DFMs, the program or the source change."""
+        from . import program_facets
+
+        source = self.facet_source
+        ## The objects themselves, compared by identity: a QC Viewer recompute
+        ## swaps in new DFMs.
+        inputs = (self.opto_program, *(self.dfms[d] for d in sorted(self.dfms)))
+        cached = self._facet_plan
+        if cached is None or cached[0] != source or len(cached[1]) != len(inputs) \
+                or any(a is not b for a, b in zip(cached[1], inputs)):
+            cached = self._facet_plan = (
+                source, inputs, program_facets.plan(self.dfms, self.opto_program, source))
+        return cached[2]
+
+    def facet_windows_for(self, dfm_id: int) -> list[tuple[str, list[tuple[float, float]]]]:
+        """``[(label, [(a, b), ...]), ...]``: *dfm_id*'s Facets, each a label
+        with one or more ``(a, b]`` minute windows.
+
+        ``cutoffs`` gives the global windows, one each.  ``program`` gives one
+        Facet per Program Interval with its Cycles pooled (several windows for
+        a Repeating program), ``program_cycles`` one per Interval and Cycle;
+        a Facet missing from a DFM's program is missing here.  The Progressive
+        Ratio type's per-group windows are its own (:meth:`group_windows`).
+        """
+        if self.facet_source == "cutoffs":
+            return [(label, [tuple(window)])
+                    for window, label in zip(self.facet_windows(), self.facet_labels())]
+        return [(label, list(windows))
+                for label, windows in self._program_facet_plan().windows.get(int(dfm_id), [])]
+
+    def facet_notes(self) -> list[str]:
+        """What ``summary.txt`` says about the Facets: nothing for cutoffs;
+        for Program Facets the source and, per DFM laid out by the clock
+        rather than read from its data, that they are approximate."""
+        from . import program_facets
+
+        source = self.facet_source
+        if not program_facets.is_program_source(source):
+            return []
+        plan = self._program_facet_plan()
+        lines = [f"Facets: {program_facets.SOURCE_LABELS[source]} "
+                 f"(facet_source: {source}); {len(plan.labels)} Facet(s): "
+                 f"{', '.join(plan.labels) or 'none'}"]
+        lines += [f"  DFM {d}: {program_facets.CLOCK_SCHEDULE_NOTE} (generation "
+                  f"{self.dfms[d].generation} records no Program Interval)"
+                  for d in plan.clock_dfms]
+        return lines
 
     def feeding_summary_facet(
         self,
@@ -2369,9 +2449,15 @@ class Experiment:
         travels with the data instead of with the output path.  Returns an
         empty frame when the experiment is not faceted; callers should fall back
         to :meth:`feeding_summary`.
+
+        A Program Facet summarises each chamber over the union of its DFM's
+        windows for that Facet (:meth:`facet_windows_for`); its ``FacetRange``
+        lists them, rounded for reading.
         """
         from . import windowing
 
+        if self.facet_source != "cutoffs":
+            return self._program_feeding_summary_facet(transform_licks)
         windows = self.facet_windows()
         if not windows:
             return pd.DataFrame()
@@ -2388,6 +2474,47 @@ class Experiment:
             df.insert(0, "FacetRange", windowing.format_range(window))
             df.insert(0, "Facet", label)
             frames.append(df)
+        if not frames:
+            return pd.DataFrame()
+        return pd.concat(frames, ignore_index=True)
+
+    def _program_feeding_summary_facet(self, transform_licks: bool | None) -> pd.DataFrame:
+        """:meth:`feeding_summary_facet` for Program Facets: per label, the
+        DFMs that share that Facet's windows are summarised over their union
+        in one :meth:`feeding_summary` call (one call for all of them when
+        every DFM ran the same program), and each keeps only its own rows."""
+        from . import windowing
+
+        frames: list[pd.DataFrame] = []
+        treatment_order = {name: i for i, name in enumerate(self.design.treatments)}
+        for label in self.facet_labels():
+            groups: dict[tuple, list[int]] = {}
+            for dfm_id in sorted(int(d) for d in self.dfms):
+                windows = dict(self.facet_windows_for(dfm_id)).get(label)
+                if windows:
+                    groups.setdefault(windowing.range_key(windows), []).append(dfm_id)
+            parts: list[pd.DataFrame] = []
+            for key, dfm_ids in groups.items():
+                windows = [tuple(w) for w in key]
+                df = self.feeding_summary(range_minutes=windows,
+                                          transform_licks=transform_licks)
+                if df is None or df.empty:
+                    continue
+                df = df[df["DFM"].astype(int).isin(dfm_ids)].copy()
+                if df.empty:
+                    continue
+                df.insert(0, "FacetRange", windowing.format_ranges(windows))
+                df.insert(0, "Facet", label)
+                parts.append(df)
+            if not parts:
+                continue
+            part = pd.concat(parts, ignore_index=True)
+            if len(parts) > 1:
+                ## Rows in the order a single feeding summary gives them.
+                order = part["Treatment"].map(treatment_order).fillna(len(treatment_order))
+                part = part.assign(_t=order, _d=part["DFM"].astype(int)).sort_values(
+                    ["_t", "_d"], kind="stable").drop(columns=["_t", "_d"])
+            frames.append(part)
         if not frames:
             return pd.DataFrame()
         return pd.concat(frames, ignore_index=True)

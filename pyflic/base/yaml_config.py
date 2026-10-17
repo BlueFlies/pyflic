@@ -542,6 +542,22 @@ def load_experiment_yaml(
             f"in {data_dir}.  Config IDs: {sorted(config_ids)}, data IDs: {sorted(data_ids)}."
         )
 
+    ## Program Facets (facet_source: program | program_cycles) are laid out
+    ## from each DFM's Program.txt section, so every DFM loaded needs one.
+    from . import program_facets as _facets
+
+    why_none = opto_program_error
+    if opto_program is None and why_none is None and opto_setting == _opto.SETTING_NO \
+            and all(v == _opto.SETTING_NO for v in dfm_opto_settings):
+        why_none = "optogenetics is no, so it is not read"
+    facet_problems = _facets.program_problems(
+        exp_type.resolve_facet_source(global_cfg), opto_program,
+        [s[0] for s in dfm_specs], program_error=why_none)
+    if facet_problems and strict_type:
+        raise ValueError(f"{path.name}: " + "; ".join(facet_problems))
+    for problem in facet_problems:
+        print(f"  WARNING: {problem}", flush=True)
+
     n_total = len(dfm_specs)
     dfm_ids_str = ", ".join(str(s[0]) for s in dfm_specs)
     print(f"Loading {n_total} DFM(s) [{dfm_ids_str}] from {data_dir}", flush=True)

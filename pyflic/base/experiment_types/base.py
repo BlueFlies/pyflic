@@ -15,7 +15,7 @@ a Custom Experiment uses directly.
 
 from __future__ import annotations
 
-from .. import windowing
+from .. import program_facets, windowing
 
 #: Chamber Layout -> the ``params.chamber_size`` it implies.
 LAYOUT_CHAMBER_SIZE: dict[str, int] = {"single_well": 1, "two_well": 2}
@@ -46,7 +46,8 @@ class ExperimentType:
     #: the *data* defines (Progressive Ratio splits at each Chamber Group's own
     #: training end, ADR-0013).  ``facet_cutoffs`` is then owned and absent,
     #: and consumers group rows by the ``Facet`` label rather than by
-    #: ``FacetRange``.
+    #: ``FacetRange`` — as they do for Program Facets (``facet_source``); ask
+    #: :meth:`facets_vary_by_dfm`, which covers both.
     data_derived_facets: bool = False
     #: Names for the phases of the *default* facet structure; ``len`` should
     #: equal ``len(facet_cutoffs) + 1``.  Applied only when the actual cutoffs
@@ -100,17 +101,48 @@ class ExperimentType:
 
     def resolve_facet_cutoffs(self, global_cfg: dict | None):
         """The facet cutoffs to use, or ``None`` when the experiment is not
-        faceted (a Custom Experiment that never set any)."""
+        faceted (a Custom Experiment that never set any) or its Facets come
+        from the Opto Program (``facet_source``)."""
         if self.facets_fixed and self.facet_cutoffs is not None:
             return tuple(self.facet_cutoffs)
         if self.data_derived_facets:
             ## The windows come from the data, per Chamber Group; there is no
             ## cutoff list to hand back and the yaml is not consulted.
             return None
+        if program_facets.is_program_source(self.resolve_facet_source(global_cfg)):
+            ## Each DFM's Program Intervals are its Facets; a type's default
+            ## cutoffs would split the recording a second, unrelated way.
+            return None
         raw = (global_cfg or {}).get("facet_cutoffs")
         if raw is not None:
             return tuple(windowing.normalize_cutoffs(raw))
         return tuple(self.facet_cutoffs) if self.facet_cutoffs is not None else None
+
+    @property
+    def owns_facet_source(self) -> bool:
+        """A type that owns its Facets (fixed cutoffs, or windows from the
+        data) owns ``facet_source`` too (decision 7)."""
+        return bool(self.facets_fixed or self.data_derived_facets)
+
+    def resolve_facet_source(self, global_cfg: dict | None) -> str:
+        """Where the Facets come from: ``cutoffs`` (the default), ``program``
+        or ``program_cycles`` (:mod:`pyflic.base.program_facets`).  A type
+        that owns its Facets is always ``cutoffs`` here; an unreadable value
+        is too, and :meth:`validate` reports it."""
+        if self.owns_facet_source:
+            return program_facets.SOURCE_CUTOFFS
+        try:
+            return program_facets.normalize_source(
+                (global_cfg or {}).get(program_facets.FACET_SOURCE_KEY))
+        except ValueError:
+            return program_facets.SOURCE_CUTOFFS
+
+    def facets_vary_by_dfm(self, global_cfg: dict | None) -> bool:
+        """Whether a Facet's windows can differ between DFMs, so consumers
+        must group rows by the ``Facet`` label rather than by ``FacetRange``:
+        windows from the data (Progressive Ratio) or from each DFM's program."""
+        return bool(self.data_derived_facets) or program_facets.is_program_source(
+            self.resolve_facet_source(global_cfg))
 
     def resolve_constants(self, global_cfg: dict | None) -> dict:
         """The effective ``constants:`` block — the type's defaults with the
@@ -162,6 +194,8 @@ class ExperimentType:
             owned.append("chamber_layout")
         if self.facets_fixed or self.data_derived_facets:
             owned.append("facet_cutoffs")
+        if self.owns_facet_source:
+            owned.append(program_facets.FACET_SOURCE_KEY)
         return tuple(owned)
 
     def validate_dfm(self, dfm_id: int, node: dict | None,
@@ -217,6 +251,17 @@ class ExperimentType:
                 f"'{self.name}' (chamber_layout '{self.chamber_layout}' implies "
                 f"{expected}) and must not appear in the config"
             )
+        key = program_facets.FACET_SOURCE_KEY
+        if not self.owns_facet_source:
+            problem = program_facets.source_problem(g.get(key), where=f"global.{key}")
+            if problem:
+                problems.append(problem)
+            elif program_facets.is_program_source(self.resolve_facet_source(g)) \
+                    and g.get("facet_cutoffs") is not None:
+                problems.append(
+                    f"'facet_cutoffs' and '{key}: {self.resolve_facet_source(g)}' "
+                    f"cannot both be stated: Program Facets come from each DFM's "
+                    f"Program Intervals, not from minute cutoffs (remove one)")
         if self.required_wells:
             named = {str(k).strip().upper()
                      for k, v in (g.get("well_names") or {}).items()
@@ -275,11 +320,14 @@ class ExperimentType:
                      constants: dict | None = None,
                      factors: dict | None = None,
                      facet_cutoffs=None,
-                     transform_licks: bool | None = None) -> dict:
+                     transform_licks: bool | None = None,
+                     facet_source: str | None = None) -> dict:
         """A ``global:`` block for a fresh experiment of this type.
 
         Keys the type owns are deliberately absent — that is the whole point of
-        ADR-0007's "derived, never written to disk".
+        ADR-0007's "derived, never written to disk".  A *facet_source* of
+        ``program`` or ``program_cycles`` is written in place of any cutoffs;
+        ``cutoffs``, the default, is never written.
         """
         g: dict = {}
         if self.name != "Custom":
@@ -288,8 +336,12 @@ class ExperimentType:
             g["chamber_layout"] = "two_well"
         if transform_licks is not None:
             g["transform_licks"] = bool(transform_licks)
+        source = (program_facets.SOURCE_CUTOFFS if self.owns_facet_source
+                  else program_facets.normalize_source(facet_source))
         cutoffs = facet_cutoffs if facet_cutoffs is not None else self.facet_cutoffs
-        if cutoffs is not None and not self.facets_fixed \
+        if program_facets.is_program_source(source):
+            g[program_facets.FACET_SOURCE_KEY] = source
+        elif cutoffs is not None and not self.facets_fixed \
                 and not self.data_derived_facets:
             g["facet_cutoffs"] = [_clean_number(v) for v in cutoffs]
         clean_params = dict(params or {})

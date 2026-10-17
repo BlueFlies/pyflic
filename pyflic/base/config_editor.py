@@ -1378,6 +1378,23 @@ class FLICConfigEditor(QMainWindow):
         self._opto_combo.currentIndexChanged.connect(self._refresh_badges)
         self._exp_form.addRow("Optogenetics:", self._opto_combo)
 
+        ## Where the Facets come from (facet_source, decision 7): minute
+        ## cutoffs, or each DFM's Program Intervals from data/Program.txt.  A
+        ## type that owns its Facets owns this too (_sync_facet_source).
+        from .program_facets import FACET_SOURCES, SOURCE_LABELS
+
+        self._facet_source_combo = QComboBox()
+        for value in FACET_SOURCES:
+            self._facet_source_combo.addItem(SOURCE_LABELS[value], value)
+        self._facet_source_combo.setMaximumWidth(260)
+        self._facet_source_combo.setToolTip(
+            "facet_source — minute cutoffs (the default) split every DFM at the "
+            "same minutes; Program Intervals give one Facet per Program Interval "
+            "of each DFM's data/Program.txt section, labelled by its Paradigm "
+            "(Cycles pooled, or one per Cycle).")
+        self._facet_source_combo.currentIndexChanged.connect(self._refresh_badges)
+        self._exp_form.addRow("Facet source:", self._facet_source_combo)
+
         # Auto-filter thresholds (used by auto_remove_chambers)
         filter_header = QLabel("Auto-filter Thresholds  (used by auto_remove_chambers)")
         filter_header.setObjectName("PyflicSectionDivider")
@@ -1592,6 +1609,26 @@ class FLICConfigEditor(QMainWindow):
         self._chamber_layout_combo.setToolTip(
             f"The {item.display_name} experiment type fixes the chamber layout."
             if fixed else "")
+        ## The Facet source answers to the same two authorities.
+        self._sync_facet_source()
+
+    def _sync_facet_source(self) -> None:
+        """Fix the Facet source at cutoffs for a type that owns its Facets
+        (Progressive Ratio), and lock it under a Project Design."""
+        item = self._current_type()
+        owned = item.owns_facet_source
+        if owned:
+            self._facet_source_combo.blockSignals(True)
+            self._facet_source_combo.setCurrentIndex(
+                max(self._facet_source_combo.findData("cutoffs"), 0))
+            self._facet_source_combo.blockSignals(False)
+        self._facet_source_combo.setEnabled(not owned and not self._design)
+        if owned:
+            self._facet_source_combo.setToolTip(
+                f"The {item.display_name} experiment type owns its Facets.")
+        elif self._design:
+            self._facet_source_combo.setToolTip(
+                f"Owned by the Project design in {self._design_source}")
 
     def _on_experiment_type_changed(self, idx: int) -> None:
         item = self._current_type()
@@ -2127,6 +2164,14 @@ class FLICConfigEditor(QMainWindow):
         if isinstance(opto, bool):
             global_section["optogenetics"] = opto
 
+        ## facet_source: only program / program_cycles are written (cutoffs is
+        ## the default), never under a type that owns its Facets.
+        from .program_facets import FACET_SOURCE_KEY, is_program_source
+
+        facet_source = self._facet_source_combo.currentData()
+        if not item.owns_facet_source and is_program_source(facet_source):
+            global_section[FACET_SOURCE_KEY] = facet_source
+
         # Well names
         if self._chamber_size() == 2:
             wa = self._well_a_edit.text().strip()
@@ -2414,6 +2459,10 @@ class FLICConfigEditor(QMainWindow):
         self._opto_combo.blockSignals(True)
         self._opto_combo.setCurrentIndex(_opto_index(global_cfg.get("optogenetics")))
         self._opto_combo.blockSignals(False)
+        self._facet_source_combo.blockSignals(True)
+        self._facet_source_combo.setCurrentIndex(max(0, self._facet_source_combo.findData(
+            item.resolve_facet_source(global_cfg))))
+        self._facet_source_combo.blockSignals(False)
 
         # Filter thresholds — null means off; omit means inherit (checked).
         constants = global_cfg.get("constants") or {}
@@ -2499,6 +2548,7 @@ class FLICConfigEditor(QMainWindow):
         self._load_pr_constants({})
         self._load_opto_constants({})
         self._opto_combo.setCurrentIndex(0)
+        self._facet_source_combo.setCurrentIndex(0)
         self._transform_licks_check.setChecked(True)
 
         self._experiment_type_combo.blockSignals(True)
