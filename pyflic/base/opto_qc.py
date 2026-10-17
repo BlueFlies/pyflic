@@ -24,11 +24,34 @@ in ``CONTEXT.md``:
 The unit of judgement is the Linkage Group: its light is one circuit, lit when
 any member is triggered.  Verdicts are broadcast to every chamber the group
 touches.
+
+A **Generation**-3 recording (DFM firmware 4.0.0) records the firmware's
+decisions, so the QC reads them instead of reconstructing them
+(``docs/v4-data-plan.md``, stream 3; ADR-0015's addendum):
+
+* the rows are the schedule: each run of rows under one Program Interval and
+  Cycle is a window, joined to the program's printed line and judged under
+  the Paradigm its rows name;
+* lit time is ``OnMs``, exact to the millisecond, and each Activation of a
+  Trigger Well owns the light from its onset to the next onset or the light
+  going out.  A fixed-length Activation (FixedInterval, ProgressiveRatio,
+  FixedRatio in Main) is explained when its well had a lick or touch within
+  the tolerance of its onset; closed-loop and Acclimation light, and light
+  no Activation accounts for, keep the window rule above with the Hold;
+* the Emulated Trigger is not run: an Activation or Firmware Event with no
+  pyflic activity at its well is the drifting-baseline signature directly;
+* five more checks read the file's own bookkeeping: broken yoking, an
+  Acclimation count that is not the Paradigm's, Firmware Events that
+  disagree with pyflic's, and lost, late or unknown-instruction records.
+
+Generations 1 and 2 are judged as before, from ``OptoCol1`` and the
+program's clock-time schedule.
 """
 
 from __future__ import annotations
 
 import math
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Mapping
@@ -37,8 +60,10 @@ import numpy as np
 import pandas as pd
 
 from . import opto_program as op
+from . import opto_roles as orl
 from .constant_fields import ConstantField
 from .constant_fields import constant_problems as _constant_problems
+from .paradigm_state import GENERATION_FLAG, GENERATION_PARADIGM, IDLE, ParadigmState
 from .pr_light_qc import VERDICT_FAILED, VERDICT_OK, VERDICT_WARNING, light_events
 
 #: Design ``constants:`` read by the optogenetic light QC, with their defaults.
@@ -54,6 +79,13 @@ DEFAULT_CONSTANTS: dict[str, Any] = {
     "opto_decay_tolerance_samples": 2,
     "opto_unlit_feeding_fraction": 0.50,
     "opto_open_loop_min_lit_fraction": 0.95,
+    ## Generation 3 only (decision 21 of docs/v4-data-plan.md); none has data
+    ## behind it yet, and the bench checkpoint revisits all five.
+    "opto_event_disagreement_warn_fraction": 0.25,
+    "opto_yoking_fail_fraction": 0.01,
+    "opto_lost_records_warn": 25,
+    "opto_unknown_rows_warn_fraction": 0.01,
+    "opto_late_records_warn": 10,
 }
 
 #: The editors' and the validation's description of those constants.
@@ -108,6 +140,38 @@ OPTO_CONSTANT_FIELDS: tuple[ConstantField, ...] = (
         "be lit throughout; lit for less than this fraction of it is a warning.  "
         "Default 0.95.",
         "opto", minimum=0, maximum=1),
+    ConstantField(
+        "opto_event_disagreement_warn_fraction", "Firmware events disagree, warning (fraction)",
+        "opto_event_disagreement_warn_fraction — firmware 4.0.0 only: under a ratio "
+        "Paradigm's Main phase the DFM counts its own Firmware Events; a trigger well "
+        "whose count differs from pyflic's feeding events by more than this fraction "
+        "of the Firmware Events gets a warning.  Default 0.25.",
+        "opto", minimum=0),
+    ConstantField(
+        "opto_yoking_fail_fraction", "Broken yoking, failure (fraction)",
+        "opto_yoking_fail_fraction — firmware 4.0.0 only: linked wells share one "
+        "light, so their OnMs match; a linkage group whose wells' OnMs differ by more "
+        "than 1 ms in more than this fraction of its lit records fails (as does an "
+        "Off well linked to a trigger that counts Activations).  Default 0.01.",
+        "opto", minimum=0, maximum=1),
+    ConstantField(
+        "opto_lost_records_warn", "Lost records, warning (records)",
+        "opto_lost_records_warn — firmware 4.0.0 only: a DFM missing more than this "
+        "many records from its Index gets a warning (25 records are 5 s at 5 Hz).  "
+        "Default 25.",
+        "opto", integer=True, minimum=0),
+    ConstantField(
+        "opto_unknown_rows_warn_fraction", "Unknown-instruction rows, warning (fraction)",
+        "opto_unknown_rows_warn_fraction — firmware 4.0.0 only: rows recorded under "
+        "an instruction outside the program (Interval NA), after the Idle lead-in, "
+        "are not judged; more than this fraction of them warns.  Default 0.01.",
+        "opto", minimum=0, maximum=1),
+    ConstantField(
+        "opto_late_records_warn", "Late records, warning (records)",
+        "opto_late_records_warn — firmware 4.0.0 only: a record whose OnMs exceeds "
+        "200 ms came late; more than this many late records on a DFM warns.  "
+        "Default 10.",
+        "opto", integer=True, minimum=0),
 )
 
 # ---------------------------------------------------------------------------
@@ -124,19 +188,56 @@ UNLIT_FEEDING = "unlit feeding"
 OPEN_LOOP_DARK = "open loop not lit"
 PROGRAM_MISMATCH = "program mismatch"
 NO_PROGRAM_SECTION = "no program section"
+## Generation 3 (decision 20 of docs/v4-data-plan.md).
+YOKING_BROKEN = "broken yoking"
+PARADIGM_NOT_IN_PROGRAM = "paradigm not in program"
+ACCLIMATION_COUNT_MISMATCH = "acclimation count mismatch"
+EVENT_DISAGREEMENT = "firmware events disagree"
+LOST_RECORDS = "lost records"
+UNKNOWN_INSTRUCTION_ROWS = "unknown-instruction rows"
+LATE_RECORDS = "late records"
+PROGRAM_MISSING = "no Program.txt for firmware 4.0.0"
+NON_FEEDING_LIT_WHILE_FEEDING = "non-feeding light during feeding"
 
 #: Flags that fail a Linkage Group.  The rest are warnings: they point at the
-#: setup or the program rather than proving the light was wrong.
-FAILING_FLAGS: tuple[str, ...] = (UNEXPLAINED, LIGHT_WHILE_OFF, NO_LIGHT)
+#: setup or the program rather than proving the light was wrong.  A broken
+#: yoking does prove it (a Yoked fly did not get its partner's light), and a
+#: row naming a Paradigm the program lacks proves the program is the wrong
+#: file, so nothing judged against it can stand.
+FAILING_FLAGS: tuple[str, ...] = (UNEXPLAINED, LIGHT_WHILE_OFF, NO_LIGHT, YOKING_BROKEN,
+                                  PARADIGM_NOT_IN_PROGRAM)
 WARNING_FLAGS: tuple[str, ...] = (PARTLY_UNEXPLAINED, UNEXPLAINED_NO_PROGRAM,
                                   NO_LIGHT_EVENTS, UNLIT_FEEDING, OPEN_LOOP_DARK,
-                                  PROGRAM_MISMATCH, NO_PROGRAM_SECTION)
+                                  PROGRAM_MISMATCH, NO_PROGRAM_SECTION,
+                                  ACCLIMATION_COUNT_MISMATCH, EVENT_DISAGREEMENT,
+                                  LOST_RECORDS, UNKNOWN_INSTRUCTION_ROWS, LATE_RECORDS,
+                                  PROGRAM_MISSING, NON_FEEDING_LIT_WHILE_FEEDING)
 
 #: Where a DFM's program came from.
 PROGRAM_OK = "Program.txt"
 PROGRAM_NO_FILE = "no Program.txt"
 PROGRAM_NO_SECTION = "no section"
 PROGRAM_DROPPED = "section unreadable"
+#: ``Program.txt`` is the ``***ALL DFM***`` export of a recording made
+#: without a Program: every well ``Off`` throughout.
+PROGRAM_ALL_OFF = "no Program: every well Off"
+
+#: Generation-3 window modes the light does not get judged under: rows
+#: recorded under an instruction outside the program, and a Program Interval
+#: whose Paradigm or thresholds the QC cannot know.
+UNKNOWN_INSTRUCTION = "unknown instruction"
+NOT_JUDGED = "not judged"
+#: The Paradigm types whose Main Activation lasts a fixed time once earned.
+FIXED_LENGTH_PARADIGMS: tuple[str, ...] = (op.FIXED_INTERVAL, op.PROGRESSIVE_RATIO,
+                                           op.FIXED_RATIO)
+
+#: Where lit time came from (``LitSource``) and what a light event is
+#: (``Source``): ``OnMs`` and Activations on generation 3, ``OptoCol1`` and
+#: its lit runs before.
+LIT_SOURCE_ON_MS = "OnMs"
+LIT_SOURCE_OPTOCOL1 = "OptoCol1"
+EVENT_SOURCE_ACTIVATIONS = "activations"
+EVENT_SOURCE_OPTOCOL1 = "optocol1"
 
 #: Minutes per window of the unexplained-light onset (as the PR Resting Level).
 WINDOW_MIN = 30
@@ -156,25 +257,50 @@ CAUSE_HARDWARE = "light without firmware-visible contact: hardware, linkage or "
                  "program mismatch"
 
 #: ``qc/opto/opto_light_qc.csv`` — one row per Linkage Group per DFM.
+#:
+#: On generation 3 ``LitSec`` and the other light seconds are ``OnMs``
+#: sums; ``LightEvents`` counts the Trigger Wells' Activations;
+#: ``ContactSec`` is the lit time of those Activations (the firmware's
+#: contact decisions) and ``ContactWithoutActivitySec`` the lit time of the
+#: ones whose onset had no pyflic lick or touch at their well;
+#: ``FirmwareEventsWithoutActivity`` counts rises in Progress with none
+#: either.  ``Roles`` names each chamber's Role (``opto_roles``);
+#: ``FirmwareEvents`` / ``PyflicEvents`` compare the two event counts under a
+#: ratio Paradigm's Main phase; ``AcclimationActivations`` /
+#: ``AcclimationExpected`` sum the Trigger Wells' completed Acclimation runs.
+#: These are ``NA`` on generations 1 and 2, as is ``EmulationApproximate`` on
+#: generation 3, where nothing is emulated.
 OPTO_QC_COLUMNS: tuple[str, ...] = (
-    "DFM", "Group", "Linkage", "Wells", "TriggerWells", "Chambers", "Treatment",
-    "Program", "Paradigm", "LitSec", "JudgedLitSec", "UnexplainedSec",
+    "DFM", "Generation", "Group", "Linkage", "Wells", "TriggerWells", "Chambers", "Roles",
+    "Treatment", "Program", "Paradigm", "LitSec", "JudgedLitSec", "UnexplainedSec",
     "UnexplainedFraction", "UnexplainedOnsetMin", "LightEvents", "UnexplainedEvents",
     "FeedingEvents", "ClosedLoopFeedingEvents", "UnlitFeedingEvents",
+    "FirmwareEvents", "PyflicEvents", "AcclimationActivations", "AcclimationExpected",
     "OpenLoopLitFraction", "LitWhileOffSec",
-    "ContactSec", "ContactWithoutActivitySec", "UnexplainedWithContactSec",
+    "ContactSec", "ContactWithoutActivitySec", "FirmwareEventsWithoutActivity",
+    "UnexplainedWithContactSec",
     "EmulationApproximate", "LikelyCause", "Flags", "Verdict", "Excluded", "Notes",
 )
-#: ``qc/opto/opto_light_intervals.csv`` — one row per group per scheduled interval.
+#: ``qc/opto/opto_light_intervals.csv`` — one row per group per window: a
+#: scheduled interval (generations 1 and 2) or a run of rows under one
+#: Program Interval and Cycle (generation 3).  ``Interval`` is the program's
+#: printed line, ``ProgramInterval`` / ``Cycle`` / ``Paradigm`` /
+#: ``ParadigmType`` what the rows recorded (``NA`` before generation 3);
+#: ``HoldMs`` is the Hold the window was judged with (the decay, before).
 OPTO_INTERVAL_COLUMNS: tuple[str, ...] = (
-    "DFM", "Group", "Window", "Interval", "Occurrence", "StartMin", "EndMin", "Mode",
-    "DecayMs", "TriggerWells", "Samples", "LitSec", "LitFraction", "UnexplainedSec",
+    "DFM", "Group", "Window", "Interval", "ProgramInterval", "Cycle", "Occurrence",
+    "StartMin", "EndMin", "Paradigm", "ParadigmType", "Mode", "HoldMs", "TriggerWells",
+    "Samples", "LitSource", "LitSec", "LitFraction", "UnexplainedSec",
     "ContactSec", "ContactWithoutActivitySec", "FeedingEvents", "UnlitFeedingEvents",
 )
-#: ``qc/opto/opto_light_events.csv`` — one row per light event.
+#: ``qc/opto/opto_light_events.csv`` — one row per light event: a lit run of
+#: ``OptoCol1`` (``Source`` ``optocol1``) or, on generation 3, one
+#: Activation of a Trigger Well (``activations``), with its ``Well``,
+#: ``Phase``, the Requirement it met and the Firmware Events behind it.
 OPTO_EVENT_COLUMNS: tuple[str, ...] = (
-    "DFM", "Group", "Event", "OnsetMin", "EndMin", "DurationSec", "Interval", "Mode",
-    "UnexplainedSec", "Explained", "OverrunSec",
+    "DFM", "Group", "Event", "Well", "OnsetMin", "EndMin", "DurationSec", "Interval",
+    "Mode", "Phase", "RequirementMet", "FirmwareEvents", "UnexplainedSec", "Explained",
+    "OverrunSec", "Source",
 )
 #: ``qc/opto/opto_program.csv`` — one row per DFM interval of the program.
 #: ``Paradigm`` is the Paradigm's name and ``ParadigmType`` PyMCU's spelling of
@@ -222,6 +348,11 @@ class OptoQCSettings:
     tolerance_samples: int = 2
     unlit_fraction: float = 0.50
     open_loop_min_fraction: float = 0.95
+    event_disagreement_fraction: float = 0.25
+    yoking_fail_fraction: float = 0.01
+    lost_records_warn: int = 25
+    unknown_rows_fraction: float = 0.01
+    late_records_warn: int = 10
 
     @classmethod
     def from_constants(cls, constants: Mapping[str, Any] | None) -> OptoQCSettings:
@@ -234,16 +365,24 @@ class OptoQCSettings:
                 return float(DEFAULT_CONSTANTS[key])
             return value if math.isfinite(value) else float(DEFAULT_CONSTANTS[key])
 
+        def fraction(key: str) -> float:
+            return min(max(number(key), 0.0), 1.0)
+
         return cls(
             exclude=_truthy(merged["exclude_failed_opto_chambers"]),
-            warn_fraction=min(max(number("opto_unexplained_warn_fraction"), 0.0), 1.0),
-            fail_fraction=min(max(number("opto_unexplained_fail_fraction"), 0.0), 1.0),
+            warn_fraction=fraction("opto_unexplained_warn_fraction"),
+            fail_fraction=fraction("opto_unexplained_fail_fraction"),
             min_unexplained_sec=max(0.0, number("opto_unexplained_min_sec")),
             default_decay_ms=max(0, int(number("opto_default_decay_ms"))),
             tolerance_samples=max(0, int(number("opto_decay_tolerance_samples"))),
-            unlit_fraction=min(max(number("opto_unlit_feeding_fraction"), 0.0), 1.0),
-            open_loop_min_fraction=min(max(number("opto_open_loop_min_lit_fraction"),
-                                           0.0), 1.0),
+            unlit_fraction=fraction("opto_unlit_feeding_fraction"),
+            open_loop_min_fraction=fraction("opto_open_loop_min_lit_fraction"),
+            event_disagreement_fraction=max(
+                0.0, number("opto_event_disagreement_warn_fraction")),
+            yoking_fail_fraction=fraction("opto_yoking_fail_fraction"),
+            lost_records_warn=max(0, int(number("opto_lost_records_warn"))),
+            unknown_rows_fraction=fraction("opto_unknown_rows_warn_fraction"),
+            late_records_warn=max(0, int(number("opto_late_records_warn"))),
         )
 
     def describe(self) -> str:
@@ -255,6 +394,15 @@ class OptoQCSettings:
                 f"opto_decay_tolerance_samples={self.tolerance_samples}, "
                 f"opto_unlit_feeding_fraction={self.unlit_fraction:g}, "
                 f"opto_open_loop_min_lit_fraction={self.open_loop_min_fraction:g}")
+
+    def describe_firmware4(self) -> str:
+        """The generation-3 checks' constants, for a summary that has a
+        firmware 4.0.0 recording to judge with them."""
+        return (f"opto_event_disagreement_warn_fraction={self.event_disagreement_fraction:g}, "
+                f"opto_yoking_fail_fraction={self.yoking_fail_fraction:g}, "
+                f"opto_lost_records_warn={self.lost_records_warn}, "
+                f"opto_unknown_rows_warn_fraction={self.unknown_rows_fraction:g}, "
+                f"opto_late_records_warn={self.late_records_warn}")
 
 
 def opto_constant_problems(constants: Mapping[str, Any] | None) -> list[str]:
@@ -379,6 +527,11 @@ class DFMInputs:
     data_frequency: np.ndarray | None = None
     data_pulse_width: np.ndarray | None = None
     data_dark: np.ndarray | None = None
+    #: The recording's Generation, and on generation 3 its Paradigm state,
+    #: row for row with these arrays; with both, the QC reads the firmware's
+    #: decisions instead of ``lights`` and the clock-time schedule.
+    generation: int = GENERATION_FLAG
+    state: ParadigmState | None = None
 
 
 @dataclass
@@ -400,8 +553,11 @@ class DFMOptoResult:
     #: ContactWithoutActivitySec`` (the QC figure).  Lit time splits four
     #: ways: judged against licks and explained or not, lit while every
     #: threshold was -1, and lit where licks do not decide (open loop,
-    #: non-feeding activation, outside the schedule).
+    #: non-feeding activation, outside the schedule).  On generation 3 the
+    #: seconds are ``OnMs`` sums and ``ContactWithoutActivitySec`` is the lit
+    #: time of Activations whose onset had no pyflic lick or touch.
     timelines: dict = field(default_factory=dict)
+    generation: int = GENERATION_FLAG
 
 
 @dataclass
@@ -413,6 +569,75 @@ class _Window:
     end_min: float
     i0: int
     i1: int
+    #: The simple export: every well Off, whatever the data's linkage.
+    all_off: bool = False
+
+
+#: What a DFM's notes say when ``Program.txt`` is the simple export.
+ALL_OFF_NOTE = ("Program.txt is the export of a recording made without a Program "
+                "(***ALL DFM***): every well Off throughout, so any light is a fault")
+
+
+def _check_program_times(program: op.OptoProgram, inp: DFMInputs, origin: datetime,
+                         dfm_flags: list[str], dfm_notes: list[str]) -> None:
+    """A data start more than a minute from the program's, and data running
+    past its End Time."""
+    minutes = np.asarray(inp.minutes, dtype=float)
+    if program.start is not None and inp.origin is not None:
+        lag = (inp.origin - program.start).total_seconds()
+        if abs(lag) > START_TOLERANCE_SEC:
+            dfm_flags.append(PROGRAM_MISMATCH)
+            dfm_notes.append(f"the data start {abs(lag) / 60.0:.1f} min "
+                             f"{'after' if lag > 0 else 'before'} the program's "
+                             f"Start Time")
+    end = program.resolved_end()
+    if end is not None and minutes.size:
+        past = (origin + timedelta(minutes=float(minutes[-1])) - end).total_seconds()
+        if past > 60.0:
+            dfm_notes.append(f"the data run {past / 60.0:.1f} min past the program's "
+                             f"End Time; light after it is not judged")
+
+
+def _check_light_settings(inp: DFMInputs, paradigm: op.Paradigm, dark: bool | None,
+                          i0: int, i1: int, key: str, where: str, seen: set[str],
+                          dfm_flags: list[str], dfm_notes: list[str]) -> None:
+    """The data's ``OptoFreq``, ``OptoPW`` and ``Dark`` over rows ``[i0, i1)``
+    against *paradigm* and the interval's *dark* (``None``: not known), each
+    difference noted once per *key* and flagged as a program mismatch."""
+    legacy = paradigm.legacy
+    ## A legacy export echoed raw values the data may carry either decoded or
+    ## as written; a 4.0.0 Paradigm states them plainly.
+    if legacy is not None:
+        frequencies = (legacy.frequency_hz, legacy.frequency)
+        pulse_widths = (legacy.pulse_width_ms, legacy.pulse_width)
+    else:
+        frequencies = (paradigm.frequency_hz,)
+        pulse_widths = (paradigm.pulse_width_ms,)
+    checks = [
+        ("OptoFreq", inp.data_frequency, frequencies, f"{paradigm.frequency_hz} Hz"),
+        ("OptoPW", inp.data_pulse_width, pulse_widths, f"{paradigm.pulse_width_ms} ms"),
+    ]
+    if dark is not None:
+        checks.append(("Dark", inp.data_dark, (1.0 if dark else 0.0,),
+                       "on" if dark else "off"))
+    for column, values, allowed, expected in checks:
+        if values is None:
+            continue
+        observed = mode_value(np.asarray(values)[i0:i1])
+        if observed is None:
+            continue
+        if column == "Dark":
+            observed = 1.0 if observed != 0 else 0.0
+        if any(abs(observed - float(a)) < 1e-9 for a in allowed):
+            continue
+        if f"{column}:{key}" in seen:
+            continue
+        seen.add(f"{column}:{key}")
+        if PROGRAM_MISMATCH not in dfm_flags:
+            dfm_flags.append(PROGRAM_MISMATCH)
+        shown = (("on" if observed else "off") if column == "Dark" else f"{observed:g}")
+        dfm_notes.append(f"{where}: the data's {column} is {shown}, the program says "
+                         f"{expected}")
 
 
 def _chambers_label(chambers) -> str:
@@ -445,13 +670,22 @@ def _program_windows(section: op.DFMProgram, program: op.OptoProgram,
 
 def decay_profile(dfm_id: int, minutes: np.ndarray, samples_per_second: float,
                   origin: datetime | None, program: op.OptoProgram | None,
-                  settings: OptoQCSettings) -> np.ndarray:
+                  settings: OptoQCSettings, *, state: ParadigmState | None = None
+                  ) -> np.ndarray:
     """Per sample, the light decay in samples: the program's interval Hold
-    where one of *dfm_id*'s intervals applies, else ``opto_default_decay_ms``."""
+    where one of *dfm_id*'s intervals applies, else ``opto_default_decay_ms``.
+    With a generation-3 *state* the windows are its rows' Program Intervals,
+    not the clock-time schedule."""
     minutes = np.asarray(minutes, dtype=float)
     sps = float(samples_per_second)
     out = np.full(minutes.size, decay_samples_for(settings.default_decay_ms, sps),
                   dtype=int)
+    if state is not None and len(state) == minutes.size:
+        for w in _paradigm_windows(state, program, int(dfm_id))[0]:
+            hold = w.hold_ms(settings)
+            if hold is not None and w.i1 > w.i0:
+                out[w.i0:w.i1] = decay_samples_for(hold, sps)
+        return out
     section = program.section(dfm_id) if program is not None else None
     if section is None or minutes.size == 0:
         return out
@@ -491,8 +725,16 @@ def analyze_dfm(inp: DFMInputs, *, program: op.OptoProgram | None, setting: str,
     judged).  Without one, groups are inferred from wells lit together, every
     member counts as a Trigger Well, the decay is the design's fallback and
     unexplained light can warn but not fail: an open-loop schedule is
-    indistinguishable from a stuck light without the program.
+    indistinguishable from a stuck light without the program.  The
+    ``***ALL DFM***`` export of a recording made without a Program says every
+    well was ``Off``, so the whole recording is judged off.
+
+    A generation-3 recording (*inp* carries its Paradigm state) is judged
+    from the firmware's own record instead (:func:`_analyze_paradigm_state`).
     """
+    if inp.generation == GENERATION_PARADIGM and inp.state is not None:
+        return _analyze_paradigm_state(inp, program=program, setting=setting,
+                                       settings=settings)
     minutes = np.asarray(inp.minutes, dtype=float)
     n = minutes.size
     sps = float(inp.samples_per_second)
@@ -506,8 +748,12 @@ def analyze_dfm(inp: DFMInputs, *, program: op.OptoProgram | None, setting: str,
     dfm_flags: list[str] = []
     dfm_notes: list[str] = []
 
+    all_off = program is not None and program.grammar == op.GRAMMAR_SIMPLE
     section = program.section(inp.dfm_id) if program is not None else None
-    if program is None:
+    if all_off:
+        status = PROGRAM_ALL_OFF
+        dfm_notes.append(ALL_OFF_NOTE)
+    elif program is None:
         status = PROGRAM_NO_FILE
         dfm_notes.append("no Program.txt in data/, so this QC is limited: linkage is "
                          "inferred from wells lit together, every lit well counts as a "
@@ -543,7 +789,8 @@ def analyze_dfm(inp: DFMInputs, *, program: op.OptoProgram | None, setting: str,
     else:
         windows = [_Window(index=1, interval=None, occurrence=1,
                            start_min=float(minutes[0]) if n else 0.0,
-                           end_min=float(minutes[-1]) if n else 0.0, i0=0, i1=n)]
+                           end_min=float(minutes[-1]) if n else 0.0, i0=0, i1=n,
+                           all_off=all_off)]
         groups = _inferred_groups(lights) if n else {}
         linkage_source = "inferred"
     for w in windows:
@@ -576,61 +823,14 @@ def analyze_dfm(inp: DFMInputs, *, program: op.OptoProgram | None, setting: str,
 
     ## ---- program versus data ----
     if section is not None:
-        if program.start is not None and inp.origin is not None:
-            lag = (inp.origin - program.start).total_seconds()
-            if abs(lag) > START_TOLERANCE_SEC:
-                dfm_flags.append(PROGRAM_MISMATCH)
-                dfm_notes.append(f"the data start {abs(lag) / 60.0:.1f} min "
-                                 f"{'after' if lag > 0 else 'before'} the program's "
-                                 f"Start Time")
-        end = program.resolved_end()
-        if end is not None and n:
-            past = (origin + timedelta(minutes=float(minutes[-1])) - end).total_seconds()
-            if past > 60.0:
-                dfm_notes.append(f"the data run {past / 60.0:.1f} min past the program's "
-                                 f"End Time; light after it is not judged")
+        _check_program_times(program, inp, origin, dfm_flags, dfm_notes)
         seen: set[str] = set()
         for w in windows:
             if w.interval is None or w.i1 <= w.i0:
                 continue
-            paradigm = w.interval.paradigm
-            legacy = paradigm.legacy
-            ## A legacy export echoed raw values the data may carry either
-            ## decoded or as written; a 4.0.0 Paradigm states them plainly.
-            if legacy is not None:
-                frequencies = (legacy.frequency_hz, legacy.frequency)
-                pulse_widths = (legacy.pulse_width_ms, legacy.pulse_width)
-            else:
-                frequencies = (paradigm.frequency_hz,)
-                pulse_widths = (paradigm.pulse_width_ms,)
-            checks = (
-                ("OptoFreq", inp.data_frequency, frequencies,
-                 f"{paradigm.frequency_hz} Hz"),
-                ("OptoPW", inp.data_pulse_width, pulse_widths,
-                 f"{paradigm.pulse_width_ms} ms"),
-                ("Dark", inp.data_dark, (1.0 if w.interval.dark else 0.0,),
-                 "on" if w.interval.dark else "off"),
-            )
-            for column, values, allowed, expected in checks:
-                if values is None:
-                    continue
-                observed = mode_value(np.asarray(values)[w.i0:w.i1])
-                if observed is None:
-                    continue
-                if column == "Dark":
-                    observed = 1.0 if observed != 0 else 0.0
-                if any(abs(observed - float(a)) < 1e-9 for a in allowed):
-                    continue
-                key = f"{column}:{w.interval.index}"
-                if key in seen:
-                    continue
-                seen.add(key)
-                if PROGRAM_MISMATCH not in dfm_flags:
-                    dfm_flags.append(PROGRAM_MISMATCH)
-                shown = (("on" if observed else "off") if column == "Dark"
-                         else f"{observed:g}")
-                dfm_notes.append(f"interval {w.interval.index}: the data's {column} is "
-                                 f"{shown}, the program says {expected}")
+            _check_light_settings(inp, w.interval.paradigm, w.interval.dark, w.i0, w.i1,
+                                  str(w.interval.index), f"interval {w.interval.index}",
+                                  seen, dfm_flags, dfm_notes)
 
     ## ---- each Linkage Group ----
     group_rows: list[dict] = []
@@ -683,8 +883,16 @@ def analyze_dfm(inp: DFMInputs, *, program: op.OptoProgram | None, setting: str,
         for k, w in enumerate(windows):
             if w.interval is not None:
                 mode = w.interval.group_mode(wells)
-                trig = w.interval.trigger_wells(wells)
+                ## Under an OpenLoop Paradigm a level well is lit regardless:
+                ## the firmware runs no rule for it (only a 4.0.0 export has
+                ## the type, so generation 1 never takes this branch).
+                trig = (() if w.interval.paradigm.type == op.OPEN_LOOP
+                        else w.interval.trigger_wells(wells))
                 decay_ms = w.interval.hold_ms
+            elif w.all_off:
+                mode = op.LIGHTS_OFF
+                trig = ()
+                decay_ms = 0
             else:
                 mode = op.UNKNOWN_PARADIGM
                 trig = tuple(wells)
@@ -704,9 +912,12 @@ def analyze_dfm(inp: DFMInputs, *, program: op.OptoProgram | None, setting: str,
             triggers_seen.update(trig)
             row = {"DFM": inp.dfm_id, "Group": label, "Window": w.index,
                    "Interval": w.interval.index if w.interval is not None else np.nan,
+                   "ProgramInterval": np.nan, "Cycle": np.nan,
                    "Occurrence": w.occurrence, "StartMin": w.start_min,
-                   "EndMin": w.end_min, "Mode": mode, "DecayMs": decay_ms,
+                   "EndMin": w.end_min, "Paradigm": np.nan, "ParadigmType": np.nan,
+                   "Mode": mode, "HoldMs": decay_ms,
                    "TriggerWells": op.wells_label(trig), "Samples": int(w.i1 - w.i0),
+                   "LitSource": LIT_SOURCE_OPTOCOL1,
                    "LitSec": float(lit[full].sum()) / sps,
                    "LitFraction": float(lit[full].mean()),
                    "UnexplainedSec": np.nan, "ContactSec": np.nan,
@@ -844,12 +1055,13 @@ def analyze_dfm(inp: DFMInputs, *, program: op.OptoProgram | None, setting: str,
                 if not explained_flag:
                     unexplained_events += 1
             event_rows.append({
-                "DFM": inp.dfm_id, "Group": label, "Event": e,
+                "DFM": inp.dfm_id, "Group": label, "Event": e, "Well": np.nan,
                 "OnsetMin": float(minutes[a]),
                 "EndMin": float(minutes[b - 1]) + 1.0 / sps / 60.0,
                 "DurationSec": (b - a) / sps, "Interval": interval, "Mode": mode,
+                "Phase": np.nan, "RequirementMet": np.nan, "FirmwareEvents": np.nan,
                 "UnexplainedSec": un_sec, "Explained": explained_flag,
-                "OverrunSec": overrun,
+                "OverrunSec": overrun, "Source": EVENT_SOURCE_OPTOCOL1,
             })
 
         if n:
@@ -872,11 +1084,12 @@ def analyze_dfm(inp: DFMInputs, *, program: op.OptoProgram | None, setting: str,
         chambers = sorted({inp.chamber_of_well[w] for w in wells
                            if w in inp.chamber_of_well})
         group_rows.append({
-            "DFM": inp.dfm_id, "Group": label,
+            "DFM": inp.dfm_id, "Generation": int(inp.generation), "Group": label,
             "Linkage": label if linkage_source == "program" else np.nan,
             "Wells": op.wells_label(wells),
             "TriggerWells": op.wells_label(triggers_seen),
-            "Chambers": _chambers_label(chambers), "_chambers": tuple(chambers),
+            "Chambers": _chambers_label(chambers), "Roles": np.nan,
+            "_chambers": tuple(chambers),
             "_wells": tuple(wells), "Treatment": "",
             "Program": status, "Paradigm": ", ".join(paradigms),
             "LitSec": lit_total / sps, "JudgedLitSec": judged_lit / sps,
@@ -886,8 +1099,10 @@ def analyze_dfm(inp: DFMInputs, *, program: op.OptoProgram | None, setting: str,
             "FeedingEvents": feeding_events,
             "ClosedLoopFeedingEvents": closed_events if closed_events else np.nan,
             "UnlitFeedingEvents": unlit_events if closed_events else np.nan,
+            **_FIRMWARE4_ONLY,
             "OpenLoopLitFraction": open_fraction,
-            "LitWhileOffSec": off_lit / sps if section is not None else np.nan,
+            "LitWhileOffSec": (off_lit / sps if section is not None or all_off
+                               else np.nan),
             "ContactSec": contact_all.sum() / sps if emulate else np.nan,
             "ContactWithoutActivitySec": contact_without / sps if emulate else np.nan,
             "UnexplainedWithContactSec": (unexplained_with_contact / sps if emulate
@@ -899,30 +1114,60 @@ def analyze_dfm(inp: DFMInputs, *, program: op.OptoProgram | None, setting: str,
 
     ## ---- the DFM as a whole ----
     lit_any = int(lights.any(axis=1).sum())
-    if setting == op.SETTING_YES and lit_any == 0 and (section is None or expects_light):
+    _no_light_check(dfm_flags, dfm_notes, setting, lit_any,
+                    (section is None and not all_off) or expects_light)
+    if not group_rows:
+        group_rows.append(_empty_group_row(inp, status))
+    _finish_groups(group_rows, dfm_flags)
+    return DFMOptoResult(dfm_id=inp.dfm_id, setting=setting, program_status=status,
+                         groups=group_rows, intervals=interval_rows, events=event_rows,
+                         flags=dfm_flags, notes=dfm_notes, decay_samples=decay_by_sample,
+                         lit_samples=lit_any, timelines=timelines,
+                         generation=int(inp.generation))
+
+
+#: The QC table's generation-3 columns, ``NA`` on generations 1 and 2.
+_FIRMWARE4_ONLY: dict[str, Any] = {
+    "FirmwareEvents": np.nan, "PyflicEvents": np.nan, "AcclimationActivations": np.nan,
+    "AcclimationExpected": np.nan, "FirmwareEventsWithoutActivity": np.nan,
+}
+
+
+def _no_light_check(dfm_flags: list[str], dfm_notes: list[str], setting: str,
+                    lit_samples: int, expects_light: bool) -> None:
+    """``optogenetics: yes`` and nothing ever lit, where light was expected."""
+    if setting == op.SETTING_YES and lit_samples == 0 and expects_light:
         dfm_flags.append(NO_LIGHT)
         dfm_notes.append("optogenetics is 'yes' but no LED was lit on this DFM for the "
                          "whole recording: an unplugged lid, or a program that did not "
                          "load")
-    if not group_rows:
-        ## Nothing lit and nothing programmed: one row speaks for the DFM, so a
-        ## failure has somewhere to be recorded.
-        chambers = sorted(set(inp.chamber_of_well.values()))
-        group_rows.append({
-            "DFM": inp.dfm_id, "Group": 0, "Linkage": np.nan, "Wells": "W1-W12",
-            "TriggerWells": "—", "Chambers": _chambers_label(chambers),
-            "_chambers": tuple(chambers), "_wells": tuple(range(1, op.N_WELLS + 1)),
-            "Treatment": "", "Program": status, "Paradigm": "",
-            "LitSec": 0.0, "JudgedLitSec": 0.0, "UnexplainedSec": 0.0,
-            "UnexplainedFraction": np.nan, "UnexplainedOnsetMin": np.nan,
-            "LightEvents": 0, "UnexplainedEvents": 0, "FeedingEvents": 0,
-            "ClosedLoopFeedingEvents": np.nan,
-            "UnlitFeedingEvents": np.nan, "OpenLoopLitFraction": np.nan,
-            "LitWhileOffSec": np.nan, "ContactSec": np.nan,
-            "ContactWithoutActivitySec": np.nan, "UnexplainedWithContactSec": np.nan,
-            "EmulationApproximate": np.nan, "LikelyCause": "", "_flags": [],
-            "_notes": ["no LED was lit on this DFM"], "Excluded": False,
-        })
+
+
+def _empty_group_row(inp: DFMInputs, status: str) -> dict:
+    """Nothing lit and nothing programmed: one row speaks for the DFM, so a
+    failure has somewhere to be recorded."""
+    chambers = sorted(set(inp.chamber_of_well.values()))
+    return {
+        "DFM": inp.dfm_id, "Generation": int(inp.generation), "Group": 0,
+        "Linkage": np.nan, "Wells": "W1-W12",
+        "TriggerWells": "—", "Chambers": _chambers_label(chambers), "Roles": np.nan,
+        "_chambers": tuple(chambers), "_wells": tuple(range(1, op.N_WELLS + 1)),
+        "Treatment": "", "Program": status, "Paradigm": "",
+        "LitSec": 0.0, "JudgedLitSec": 0.0, "UnexplainedSec": 0.0,
+        "UnexplainedFraction": np.nan, "UnexplainedOnsetMin": np.nan,
+        "LightEvents": 0, "UnexplainedEvents": 0, "FeedingEvents": 0,
+        "ClosedLoopFeedingEvents": np.nan,
+        "UnlitFeedingEvents": np.nan, **_FIRMWARE4_ONLY, "OpenLoopLitFraction": np.nan,
+        "LitWhileOffSec": np.nan, "ContactSec": np.nan,
+        "ContactWithoutActivitySec": np.nan, "UnexplainedWithContactSec": np.nan,
+        "EmulationApproximate": np.nan, "LikelyCause": "", "_flags": [],
+        "_notes": ["no LED was lit on this DFM"], "Excluded": False,
+    }
+
+
+def _finish_groups(group_rows: list[dict], dfm_flags: list[str]) -> None:
+    """Each group's ``Flags`` (its own, then its DFM's), ``Verdict`` and
+    ``Notes``, in place."""
     for row in group_rows:
         own = [f for f in row.pop("_flags")
                if not (f == NO_LIGHT_EVENTS and NO_LIGHT in dfm_flags)]
@@ -930,10 +1175,890 @@ def analyze_dfm(inp: DFMInputs, *, program: op.OptoProgram | None, setting: str,
         row["Flags"] = ", ".join(flags)
         row["Verdict"] = verdict_of(flags)
         row["Notes"] = "; ".join(row.pop("_notes"))
+
+
+# ---------------------------------------------------------------------------
+# Generation 3: the firmware's own record
+# ---------------------------------------------------------------------------
+
+@dataclass
+class _RunWindow:
+    """One generation-3 window: a run of rows under one Program Interval and
+    Cycle (``ParadigmState.interval_runs``), joined to the program.
+
+    *kind* is ``"judged"`` (its Paradigm is known, or no program says
+    otherwise), ``"off"`` (every well ``Off``: the simple export, or PyMCU's
+    ``Idle``) or ``"unjudged"`` (*why* says what: an unknown instruction, a
+    Paradigm name the program lacks).  *paradigm* is ``None`` when judged
+    without a program; *interval* is the printed line, ``None`` beyond the
+    lines the export prints.
+    """
+
+    index: int
+    i0: int
+    i1: int
+    kind: str
+    program_interval: int | None = None
+    cycle: int | None = None
+    name: str | None = None
+    paradigm: op.Paradigm | None = None
+    interval: op.ProgramInterval | None = None
+    occurrence: int = 1
+    why: str = ""
+
+    def hold_ms(self, settings: OptoQCSettings) -> int | None:
+        """The Hold this window's light is judged with: the printed line's
+        (which keeps a legacy decay), else the Paradigm's, else
+        ``opto_default_decay_ms`` without a program; ``None`` unjudged."""
+        if self.kind == "off":
+            return 0
+        if self.kind != "judged":
+            return None
+        if self.paradigm is None:
+            return int(settings.default_decay_ms)
+        if self.interval is not None and self.interval.paradigm is self.paradigm:
+            return int(self.interval.hold_ms)
+        return int(self.paradigm.hold or 0)
+
+
+def _paradigm_named(program: op.OptoProgram, name: str | None) -> op.Paradigm | None:
+    """The program's Paradigm called *name*; PyMCU matches names ignoring case."""
+    if not name:
+        return None
+    found = program.paradigms.get(name)
+    if found is None:
+        folded = name.lower()
+        found = next((p for key, p in program.paradigms.items() if key.lower() == folded),
+                     None)
+    return found
+
+
+def _paradigm_windows(state: ParadigmState, program: op.OptoProgram | None, dfm_id: int
+                      ) -> tuple[list[_RunWindow], dict[str, list[int]], list[str]]:
+    """``(windows, {name absent from the program: its Program Intervals},
+    notes)`` for one DFM's generation-3 rows.
+
+    Baseline runs (``Interval`` 0) are left out: they are outside every light
+    judgement (decision 30).  A program run joins to the program's printed
+    line by its Program Interval; one beyond the printed lines (the export
+    omits Intervals past the duration and lists a Repeating program's first
+    pass only) is judged by its Paradigm by name, thresholds unknown.
+    """
+    windows: list[_RunWindow] = []
+    missing: dict[str, list[int]] = {}
+    notes: list[str] = []
+    n = len(state)
+    simple = program is not None and program.grammar == op.GRAMMAR_SIMPLE
+    if simple:
+        lead = min(state.lead_in_rows(), n)
+        if n > lead:
+            windows.append(_RunWindow(index=1, i0=lead, i1=n, kind="off", name=None))
+        return windows, missing, notes
+    section = program.section(dfm_id) if program is not None else None
+    beyond: list[int] = []
+    renamed: list[str] = []
+    occurrences: Counter = Counter()
+    for run in state.interval_runs():
+        if run.kind == "baseline":
+            continue
+        common = dict(index=len(windows) + 1, i0=run.i0, i1=run.i1,
+                      program_interval=run.program_interval, cycle=run.cycle,
+                      name=run.paradigm)
+        if run.kind != "program":
+            windows.append(_RunWindow(kind="unjudged", why=UNKNOWN_INSTRUCTION, **common))
+            continue
+        occurrences[run.program_interval] += 1
+        common["occurrence"] = occurrences[run.program_interval]
+        if section is None:
+            ## No program to say what the Paradigm is: judged on the data
+            ## alone (the caller's fallback rule).
+            windows.append(_RunWindow(kind="judged", **common))
+            continue
+        k = int(run.program_interval)
+        line = program.interval_for(dfm_id, k)
+        paradigm = _paradigm_named(program, run.paradigm)
+        if run.paradigm is None:
+            paradigm = line.paradigm if line is not None else None
+        if paradigm is None and run.paradigm is not None \
+                and run.paradigm.lower() == IDLE.lower():
+            ## PyMCU's own Paradigm: ClosedLoop with every Well Off.
+            windows.append(_RunWindow(kind="off", **common))
+            continue
+        if paradigm is None:
+            if run.paradigm is not None:
+                missing.setdefault(run.paradigm, [])
+                if k not in missing[run.paradigm]:
+                    missing[run.paradigm].append(k)
+                why = f"Paradigm {run.paradigm} is not in Program.txt"
+            else:
+                why = "no Paradigm recorded and no printed line"
+            windows.append(_RunWindow(kind="unjudged", why=why, **common))
+            continue
+        if line is None:
+            if k not in beyond:
+                beyond.append(k)
+        elif line.paradigm.name.lower() != paradigm.name.lower():
+            text = f"{k} ({paradigm.name}, printed {line.paradigm.name})"
+            if text not in renamed:
+                renamed.append(text)
+        windows.append(_RunWindow(kind="judged", paradigm=paradigm, interval=line,
+                                  **common))
+    if beyond:
+        notes.append(f"Program Interval(s) {', '.join(str(k) for k in beyond)} are beyond "
+                     f"the lines Program.txt prints (it omits Intervals past the duration "
+                     f"and lists a Repeating program's first pass only), so they are "
+                     f"judged by their Paradigm by name with thresholds unknown, their "
+                     f"trigger wells read from the Activations")
+    if renamed:
+        notes.append(f"rows name another Paradigm than Program.txt's line for Program "
+                     f"Interval(s) {'; '.join(renamed)}; judged by the rows' Paradigm")
+    return windows, missing, notes
+
+
+def _run_mode(w: _RunWindow, wells: tuple[int, ...], data_triggers: frozenset[int],
+              settings: OptoQCSettings) -> tuple[str, tuple[int, ...], int | None]:
+    """``(mode, Trigger Wells, Hold in ms)`` of the Linkage Group of *wells*
+    during *w*: any member ``On`` is open loop, every member ``Off`` is off,
+    an OpenLoop Paradigm is open loop for the members not ``Off``, else the
+    Paradigm's mode with the level wells as triggers.  Thresholds unknown
+    (beyond the printed lines, or no program) take the wells with
+    Activations as triggers; a group without one is not judged."""
+    if w.kind == "off":
+        return op.LIGHTS_OFF, (), 0
+    if w.kind != "judged":
+        return (UNKNOWN_INSTRUCTION if w.why == UNKNOWN_INSTRUCTION else NOT_JUDGED), (), None
+    hold = w.hold_ms(settings)
+    p = w.paradigm
+    if p is None:
+        trig = tuple(x for x in wells if x in data_triggers)
+        return (op.UNKNOWN_PARADIGM, trig, hold) if trig else (NOT_JUDGED, (), None)
+    line = w.interval
+    if line is not None:
+        if any(line.threshold(x) == op.ON for x in wells):
+            return op.OPEN_LOOP, (), hold
+        if all(line.threshold(x) == op.OFF for x in wells):
+            return op.LIGHTS_OFF, (), hold
+        if p.type == op.OPEN_LOOP:
+            return op.OPEN_LOOP, (), hold
+        return p.mode, line.trigger_wells(wells), hold
+    trig = tuple(x for x in wells if x in data_triggers)
+    if p.type == op.OPEN_LOOP or not trig:
+        return NOT_JUDGED, (), None
+    return p.mode, trig, hold
+
+
+def _true_runs(mask: np.ndarray) -> list[tuple[int, int]]:
+    """``[start, end)`` of each run of True in *mask*."""
+    padded = np.concatenate(([False], np.asarray(mask, dtype=bool), [False]))
+    edges = np.flatnonzero(padded[1:] != padded[:-1])
+    return [(int(a), int(b)) for a, b in zip(edges[::2], edges[1::2])]
+
+
+def _paradigm_starts(state: ParadigmState) -> np.ndarray:
+    """(n,) bool: rows whose Paradigm name differs from the row before, where
+    the firmware reset every Well (row 0 starts one)."""
+    n = len(state)
+    codes, _ = pd.factorize(state.paradigm, use_na_sentinel=True)
+    starts = np.ones(n, dtype=bool)
+    if n > 1:
+        starts[1:] = codes[1:] != codes[:-1]
+    return starts
+
+
+def _onset_minute_ms(minutes: np.ndarray, judged_ms: np.ndarray, unexplained_ms: np.ndarray,
+                     fraction: float, window_min: float = WINDOW_MIN) -> float:
+    """:func:`onset_minute` weighted by the milliseconds each row was lit."""
+    judged = np.asarray(judged_ms, dtype=float) > 0
+    if not judged.any():
+        return float("nan")
+    bins = np.floor(np.asarray(minutes, dtype=float) / float(window_min)).astype(int)[judged]
+    lit = pd.Series(np.asarray(judged_ms, dtype=float)[judged]).groupby(bins).sum()
+    bad = pd.Series(np.asarray(unexplained_ms, dtype=float)[judged]).groupby(bins).sum()
+    share = bad.reindex(lit.index, fill_value=0.0) / lit
+    hit = share[share >= float(fraction) - 1e-12]
+    return float("nan") if hit.empty else float(hit.index.min() * float(window_min))
+
+
+def _record_checks(state: ParadigmState, settings: OptoQCSettings, sps: float,
+                   dfm_flags: list[str], dfm_notes: list[str]) -> None:
+    """The DFM's own bookkeeping: records lost from ``Index``, rows under an
+    unknown instruction after the lead-in, and late records."""
+    gaps = state.index_gaps()
+    lost = int(sum(missing for _after, missing, _minute in gaps))
+    if lost > settings.lost_records_warn:
+        dfm_flags.append(LOST_RECORDS)
+        after, longest, minute = max(gaps, key=lambda g: g[1])
+        dfm_notes.append(f"{LOST_RECORDS}: {lost} record(s) ({lost / sps:.1f} s) missing "
+                         f"from Index in {len(gaps)} gap(s), the longest {longest} after "
+                         f"Index {after} (minute {minute:.1f}); opto_lost_records_warn is "
+                         f"{settings.lost_records_warn}")
+    after_lead = len(state) - state.lead_in_rows()
+    unknown = int(state.unknown_rows().sum())
+    if after_lead > 0 and unknown / after_lead > settings.unknown_rows_fraction:
+        dfm_flags.append(UNKNOWN_INSTRUCTION_ROWS)
+        dfm_notes.append(f"{UNKNOWN_INSTRUCTION_ROWS}: {unknown} of the {after_lead} rows "
+                         f"after the Idle lead-in ({100.0 * unknown / after_lead:.1f}%) were "
+                         f"recorded under an instruction outside the program and are not "
+                         f"judged; opto_unknown_rows_warn_fraction is "
+                         f"{settings.unknown_rows_fraction:g}")
+    late = int(state.late_rows().sum())
+    if late > settings.late_records_warn:
+        dfm_flags.append(LATE_RECORDS)
+        dfm_notes.append(f"{LATE_RECORDS}: {late} record(s) with an OnMs above 200 ms, so "
+                         f"the record came late; opto_late_records_warn is "
+                         f"{settings.late_records_warn}")
+
+
+#: How the light of one Activation is judged (generation 3).
+_UNIT_NONE, _UNIT_FIXED, _UNIT_WINDOW, _UNIT_NON_FEEDING = 0, 1, 2, 3
+
+
+def _analyze_paradigm_state(inp: DFMInputs, *, program: op.OptoProgram | None,
+                            setting: str, settings: OptoQCSettings) -> DFMOptoResult:
+    """The light QC of one generation-3 DFM, read from its Paradigm state.
+
+    The windows are its rows' Program Intervals (:func:`_paradigm_windows`);
+    a group's mode in each is :func:`_run_mode`'s, and its lit time is
+    ``OnMs``.  Each Activation of a Trigger Well owns the group's light from
+    its onset to the next onset, the light going out, or the Hold past the
+    end of its window, whichever comes first.  A fixed-length Main
+    Activation is explained, whole, when its well had a lick or touch within
+    the tolerance of its onset; a closed-loop or Acclimation Activation's
+    light, and light no Activation owns, is judged sample by sample with the
+    window rule and the Hold.  NonFeeding light is checked only for staying
+    on through feeding, open loop for its lit fraction, off for any light.
+    Without a program the linkage and the Trigger Wells come from the data
+    (identical ``OnMs``, Activations), every Activation is judged by the
+    window rule with ``opto_default_decay_ms`` and unexplained light warns
+    without failing, as on generation 1.
+    """
+    state = inp.state
+    minutes = np.asarray(inp.minutes, dtype=float)
+    n = minutes.size
+    if len(state) != n:
+        raise ValueError(f"DFM {inp.dfm_id}: {len(state)} Paradigm rows for {n} samples")
+    sps = float(inp.samples_per_second)
+    record_ms = 1000.0 / sps
+    tol = int(settings.tolerance_samples)
+    on_ms = np.asarray(state.on_ms, dtype=float).reshape(n, op.N_WELLS)
+    phase_a = np.asarray(state.phase_a, dtype=bool).reshape(n, op.N_WELLS)
+    activity = np.asarray(inp.activity, dtype=bool).reshape(n, op.N_WELLS)
+    feeding = np.asarray(inp.feeding).reshape(n, op.N_WELLS)
+    dfm_flags: list[str] = []
+    dfm_notes: list[str] = []
+
+    ## ---- the program ----
+    simple = program is not None and program.grammar == op.GRAMMAR_SIMPLE
+    section = None if program is None or simple else program.section(inp.dfm_id)
+    if simple:
+        status = PROGRAM_ALL_OFF
+        dfm_notes.append(ALL_OFF_NOTE)
+    elif section is None:
+        if program is None:
+            status = PROGRAM_NO_FILE
+            missing_what = "no Program.txt in data/"
+        elif inp.dfm_id in program.rejected:
+            status = PROGRAM_DROPPED
+            missing_what = (f"Program.txt's section for DFM {inp.dfm_id} could not be read "
+                            f"({program.rejected[inp.dfm_id]})")
+        else:
+            status = PROGRAM_NO_SECTION
+            missing_what = f"Program.txt has no section for DFM {inp.dfm_id}"
+        dfm_flags.append(PROGRAM_MISSING)
+        dfm_notes.append(f"{PROGRAM_MISSING}: {missing_what}.  The rows name each "
+                         f"Paradigm but not its type, settings or thresholds, so linkage "
+                         f"and trigger wells come from the data (identical OnMs, "
+                         f"Activations), every Activation is judged against its group's "
+                         f"licks within {settings.default_decay_ms} ms "
+                         f"(opto_default_decay_ms), the type-dependent checks are not "
+                         f"made and unexplained light can warn but not fail")
+    else:
+        status = PROGRAM_OK
+
+    origin = inp.origin
+    if section is not None and origin is None:
+        origin = program.start or datetime(2000, 1, 1)
+
+    windows, missing, window_notes = _paradigm_windows(state, program, inp.dfm_id)
+    dfm_notes.extend(window_notes)
+    if missing:
+        dfm_flags.append(PARADIGM_NOT_IN_PROGRAM)
+        named = "; ".join(f"{name} (Program Interval {', '.join(str(k) for k in ks)})"
+                          for name, ks in missing.items())
+        dfm_notes.append(f"{PARADIGM_NOT_IN_PROGRAM}: the rows name {named}, which "
+                         f"Program.txt does not define, so Program.txt is not this "
+                         f"recording's; those rows are not judged")
+    if any(w.interval is not None and w.paradigm is not None
+           and w.interval.paradigm.name.lower() != w.paradigm.name.lower() for w in windows):
+        dfm_flags.append(PROGRAM_MISMATCH)
+
+    ## ---- program versus data ----
+    if section is not None:
+        _check_program_times(program, inp, origin, dfm_flags, dfm_notes)
+        seen: set[str] = set()
+        for w in windows:
+            if w.kind == "judged" and w.paradigm is not None and w.i1 > w.i0:
+                _check_light_settings(
+                    inp, w.paradigm, w.interval.dark if w.interval is not None else None,
+                    w.i0, w.i1, str(w.program_interval),
+                    f"Program Interval {w.program_interval}", seen, dfm_flags, dfm_notes)
+    _record_checks(state, settings, sps, dfm_flags, dfm_notes)
+
+    decay_by_sample = np.full(n, decay_samples_for(settings.default_decay_ms, sps), dtype=int)
+    window_of = np.full(n, -1, dtype=int)
+    for k, w in enumerate(windows):
+        window_of[w.i0:w.i1] = k
+        hold = w.hold_ms(settings)
+        if hold is not None:
+            decay_by_sample[w.i0:w.i1] = decay_samples_for(hold, sps)
+    judged_window = np.array([w.kind != "unjudged" for w in windows] + [False], dtype=bool)
+    scheduled = judged_window[window_of]          # window_of -1 picks the False
+    starts = _paradigm_starts(state)
+    segment_start = np.maximum.accumulate(np.where(starts, np.arange(n), 0)) if n \
+        else np.zeros(0, dtype=int)
+
+    ## ---- linkage, trigger wells, roles ----
+    data_triggers = state.wells_with_activations()
+    if section is not None:
+        groups = section.linkage_groups()
+        linkage_source = "program"
+    else:
+        view = orl.linkage_view(None, state, None)
+        groups = {int(label): tuple(wells) for label, wells in view.groups.items()}
+        linkage_source = "data"
+    roles = (orl.chamber_roles(orl.linkage_view(section, state, None), inp.chamber_of_well)
+             if inp.chamber_of_well else {})
+
+    near_cache: dict[tuple, np.ndarray] = {}
+
+    def any_activity(trig: tuple[int, ...]) -> np.ndarray:
+        if not trig:
+            return np.zeros(n, dtype=bool)
+        return activity[:, [t - 1 for t in trig]].any(axis=1)
+
+    def activity_near(trig: tuple[int, ...], before: int, after: int) -> np.ndarray:
+        key = (tuple(trig), before, after)
+        if key not in near_cache:
+            near_cache[key] = near(any_activity(tuple(trig)), before, after)
+        return near_cache[key]
+
+    def onset_activity(well: int) -> np.ndarray:
+        """Activity at *well* itself within the tolerance of each row."""
+        return activity_near((well,), tol, tol)
+
+    group_rows: list[dict] = []
+    interval_rows: list[dict] = []
+    event_rows: list[dict] = []
+    timelines: dict = {}
+    expects_light = False
+    for label, wells in groups.items():
+        wells = tuple(int(w) for w in wells)
+        idx = [w - 1 for w in wells]
+        g_ms = on_ms[:, idx].max(axis=1) if n else np.zeros(0)
+        lit = g_ms > 0
+        capped = np.minimum(g_ms, record_ms)
+        flags: list[str] = []
+        notes: list[str] = []
+        reasons: dict[str, str] = {}
+        modes = [_run_mode(w, wells, data_triggers, settings) for w in windows]
+        decays = [decay_samples_for(h, sps) if h is not None else 0 for _m, _t, h in modes]
+
+        ## ---- the Activations of its Trigger Wells, each owning its light ----
+        u_rows, u_wells, u_wins = [], [], []
+        for well in wells:
+            onsets = state.activation_onsets(well)
+            if not onsets.size:
+                continue
+            ks = window_of[onsets]
+            is_trigger = np.array([well in m[1] for m in modes] + [False], dtype=bool)
+            keep = is_trigger[ks]
+            u_rows.append(onsets[keep])
+            u_wells.append(np.full(int(keep.sum()), well, dtype=int))
+            u_wins.append(ks[keep])
+        U_row = np.concatenate(u_rows) if u_rows else np.zeros(0, dtype=int)
+        U_well = np.concatenate(u_wells) if u_wells else np.zeros(0, dtype=int)
+        U_win = np.concatenate(u_wins) if u_wins else np.zeros(0, dtype=int)
+        order = np.lexsort((U_well, U_row))
+        U_row, U_well, U_win = U_row[order], U_well[order], U_win[order]
+        m = U_row.size
+        U_mode = [modes[k][0] for k in U_win.tolist()]
+        U_in_a = phase_a[U_row, U_well - 1] if m else np.zeros(0, dtype=bool)
+        U_cls = np.array([
+            _UNIT_FIXED if mode in FIXED_LENGTH_PARADIGMS and not a
+            else _UNIT_WINDOW if (mode in FIXED_LENGTH_PARADIGMS
+                                  or mode in op.CLOSED_LOOP_PARADIGMS
+                                  or mode == op.UNKNOWN_PARADIGM)
+            else _UNIT_NON_FEEDING if mode == op.NON_FEEDING
+            else _UNIT_NONE
+            for mode, a in zip(U_mode, U_in_a.tolist())], dtype=int)
+        U_act = np.array([bool(onset_activity(int(w))[int(r)])
+                          for r, w in zip(U_row.tolist(), U_well.tolist())], dtype=bool)
+        ## The light an Activation owns: to the next onset, the light going
+        ## out, or its window's end plus the Hold, whichever comes first.
+        positions = np.arange(n)
+        next_unlit = (np.minimum.accumulate(np.where(lit, n, positions)[::-1])[::-1]
+                      if n else np.zeros(0, dtype=int))
+        if m:
+            following = np.append(U_row[1:], n)
+            cap = np.array([windows[k].i1 + decays[k] + tol for k in U_win.tolist()])
+            U_end = np.minimum.reduce([following, next_unlit[U_row], cap,
+                                       np.full(m, n)])
+            U_end = np.maximum(U_end, U_row)
+        else:
+            U_end = np.zeros(0, dtype=int)
+        owner = np.full(n, -1, dtype=int)
+        for i in np.flatnonzero(U_end > U_row).tolist():
+            owner[U_row[i]:U_end[i]] = i
+        owned = owner >= 0
+        owned_rows = np.flatnonzero(owned)
+        owned_unit = owner[owned_rows]
+
+        ## ---- Explained Light ----
+        judged_ms = np.zeros(n)
+        unexplained_ms = np.zeros(n)
+        off_ms = np.zeros(n)
+        cls_of_row = U_cls[owned_unit] if m else np.zeros(0, dtype=int)
+        fixed_rows = owned_rows[cls_of_row == _UNIT_FIXED]
+        judged_ms[fixed_rows] = g_ms[fixed_rows]
+        bad_rows = owned_rows[(cls_of_row == _UNIT_FIXED) & ~U_act[owned_unit]] if m \
+            else owned_rows
+        unexplained_ms[bad_rows] = g_ms[bad_rows]
+        window_rows = cls_of_row == _UNIT_WINDOW
+        for k in np.unique(U_win[owned_unit[window_rows]]).tolist() if m else []:
+            sel = owned_rows[window_rows & (U_win[owned_unit] == k)]
+            _mode, trig, _hold = modes[k]
+            ok = activity_near(trig, decays[k] + tol, tol)[sel]
+            judged_ms[sel] = g_ms[sel]
+            unexplained_ms[sel] = np.where(ok, 0.0, g_ms[sel])
+
+        paradigms: list[str] = []
+        triggers_seen: set[int] = set()
+        open_rows = 0
+        open_ms = 0.0
+        nf_rows = 0
+        nf_lit_ms = 0.0
+        feeding_events = closed_events = unlit_events = 0
+        feeding_windows = False
+        unit_ms = (np.bincount(owned_unit, weights=g_ms[owned_rows], minlength=m)
+                   if m else np.zeros(0))
+        feeding_unit = (U_cls == _UNIT_FIXED) | (U_cls == _UNIT_WINDOW)
+        no_activity_unit = feeding_unit & ~U_act
+        for k, w in enumerate(windows):
+            mode, trig, hold = modes[k]
+            if w.i1 <= w.i0:
+                continue
+            d = decays[k]
+            ## Light carried over from the window before is not this one's to
+            ## explain: skip its Hold at a boundary.
+            grace = (decays[k - 1] + tol
+                     if k > 0 and windows[k - 1].i1 == w.i0 else 0)
+            s0 = min(w.i0 + grace, w.i1)
+            full = slice(w.i0, w.i1)
+            free = np.flatnonzero(lit[s0:w.i1] & ~owned[s0:w.i1]) + s0
+            if mode not in paradigms:
+                paradigms.append(mode)
+            triggers_seen.update(trig)
+            in_window = U_win == k
+            row = {"DFM": inp.dfm_id, "Group": label, "Window": w.index,
+                   "Interval": w.interval.index if w.interval is not None else np.nan,
+                   "ProgramInterval": (w.program_interval if w.program_interval is not None
+                                       else np.nan),
+                   "Cycle": w.cycle if w.cycle is not None else np.nan,
+                   "Occurrence": w.occurrence, "StartMin": float(minutes[w.i0]),
+                   "EndMin": float(minutes[w.i1 - 1]) + 1.0 / sps / 60.0,
+                   "Paradigm": w.name if w.name is not None else np.nan,
+                   "ParadigmType": (w.paradigm.type_name if w.paradigm is not None
+                                    else np.nan),
+                   "Mode": mode, "HoldMs": hold if hold is not None else np.nan,
+                   "TriggerWells": op.wells_label(trig), "Samples": int(w.i1 - w.i0),
+                   "LitSource": LIT_SOURCE_ON_MS,
+                   "LitSec": float(g_ms[full].sum()) / 1000.0,
+                   "LitFraction": float(capped[full].sum()) / ((w.i1 - w.i0) * record_ms),
+                   "UnexplainedSec": np.nan, "ContactSec": np.nan,
+                   "ContactWithoutActivitySec": np.nan, "FeedingEvents": np.nan,
+                   "UnlitFeedingEvents": np.nan}
+            if mode == op.OPEN_LOOP:
+                open_rows += int(w.i1 - s0)
+                open_ms += float(capped[s0:w.i1].sum())
+                expects_light = expects_light or (w.i1 - s0) > 0
+            elif mode == op.LIGHTS_OFF:
+                off_ms[free] = g_ms[free]
+            elif mode == op.NON_FEEDING:
+                during = np.zeros(w.i1 - w.i0, dtype=bool)
+                for t in trig:
+                    for a, b in event_spans(feeding[full, t - 1]):
+                        during[a:b] = True
+                nf_rows += int(during.sum())
+                nf_lit_ms += float(capped[full][during].sum())
+            elif mode in op.FEEDING_PARADIGMS or mode == op.UNKNOWN_PARADIGM:
+                feeding_windows = feeding_windows or mode in op.FEEDING_PARADIGMS
+                ok = activity_near(trig, d + tol, tol)[free]
+                judged_ms[free] = g_ms[free]
+                unexplained_ms[free] = np.where(ok, 0.0, g_ms[free])
+                row["UnexplainedSec"] = float(unexplained_ms[full].sum()) / 1000.0
+                ## Feeding that never lit the group, where every bout should:
+                ## closed loop, and a well's Acclimation (closed loop with the
+                ## Activation as its Hold).  A FixedInterval lockout or a ratio
+                ## Requirement not yet met leaves feeding unlit by design.
+                closed = mode in op.CLOSED_LOOP_PARADIGMS
+                n_feed = n_closed = n_unlit = 0
+                for t in trig:
+                    for a, b in event_spans(feeding[full, t - 1]):
+                        a, b = a + w.i0, b + w.i0
+                        n_feed += 1
+                        if closed or phase_a[a, t - 1]:
+                            n_closed += 1
+                            if not lit[max(0, a - tol):min(n, b + d + tol)].any():
+                                n_unlit += 1
+                feeding_events += n_feed
+                closed_events += n_closed
+                unlit_events += n_unlit
+                row["FeedingEvents"] = n_feed
+                if n_closed:
+                    row["UnlitFeedingEvents"] = n_unlit
+                row["ContactSec"] = float(unit_ms[in_window & feeding_unit].sum()) / 1000.0
+                row["ContactWithoutActivitySec"] = float(
+                    unit_ms[in_window & no_activity_unit].sum()) / 1000.0
+            interval_rows.append(row)
+
+        ## ---- the drifting-baseline signature: the firmware decided, pyflic
+        ## saw no lick or touch ----
+        evidence = np.zeros(n, dtype=bool)
+        if m:
+            evidence[owned_rows] = no_activity_unit[owned_unit]
+        events_without = 0
+        lone_rises = np.zeros(n, dtype=bool)
+        for t in sorted(triggers_seen):
+            rises = state.firmware_event_rises(t)
+            if not rises.size:
+                continue
+            counted = np.array([t in mm[1] and mm[0] in FIXED_LENGTH_PARADIGMS
+                                for mm in modes] + [False], dtype=bool)
+            rises = rises[counted[window_of[rises]]]
+            lone = rises[~onset_activity(t)[rises]]
+            events_without += int(lone.size)
+            lone_rises[lone] = True
+        if lone_rises.any():
+            evidence |= near(lone_rises, int(max(decays, default=0)) + tol, 0)
+        contact_ms = float(unit_ms[feeding_unit].sum()) if m else 0.0
+        without_ms = float(unit_ms[no_activity_unit].sum()) if m else 0.0
+
+        ## ---- the verdict on Explained Light ----
+        judged_total = float(judged_ms.sum())
+        unexplained_total = float(unexplained_ms.sum())
+        fraction = unexplained_total / judged_total if judged_total else float("nan")
+        unexplained_sec = unexplained_total / 1000.0
+        onset = float("nan")
+        if judged_total and unexplained_total and unexplained_sec >= settings.min_unexplained_sec:
+            if fraction >= settings.fail_fraction:
+                flags.append(UNEXPLAINED if section is not None else UNEXPLAINED_NO_PROGRAM)
+            elif fraction >= settings.warn_fraction:
+                flags.append(PARTLY_UNEXPLAINED)
+            if flags:
+                onset = _onset_minute_ms(minutes, judged_ms, unexplained_ms,
+                                         settings.warn_fraction)
+        elif judged_total and unexplained_total and fraction >= settings.warn_fraction:
+            notes.append(f"{unexplained_sec:.1f} s of unexplained light "
+                         f"({100 * fraction:.0f}% of lit time) is under "
+                         f"opto_unexplained_min_sec, so not judged")
+        with_contact_ms = float(unexplained_ms[evidence].sum())
+        cause = ""
+        if unexplained_total and any(f in (UNEXPLAINED, PARTLY_UNEXPLAINED,
+                                           UNEXPLAINED_NO_PROGRAM) for f in flags):
+            cause = (CAUSE_DRIFT if with_contact_ms >= 0.5 * unexplained_total
+                     else CAUSE_HARDWARE)
+        off_total = float(off_ms.sum())
+        if off_total > 0:
+            flags.append(LIGHT_WHILE_OFF)
+        open_fraction = open_ms / (open_rows * record_ms) if open_rows else float("nan")
+        if open_rows and open_fraction < settings.open_loop_min_fraction:
+            flags.append(OPEN_LOOP_DARK)
+        if closed_events >= MIN_FEEDING_EVENTS and \
+                unlit_events / closed_events >= settings.unlit_fraction:
+            flags.append(UNLIT_FEEDING)
+        elif 0 < closed_events < MIN_FEEDING_EVENTS and unlit_events:
+            notes.append(f"{unlit_events} of {closed_events} closed-loop feeding bouts "
+                         f"unlit; {MIN_FEEDING_EVENTS} are needed for a verdict")
+        if section is not None and feeding_windows and judged_total == 0 and feeding_events:
+            flags.append(NO_LIGHT_EVENTS)
+            expects_light = True
+
+        ## ---- NonFeeding: the light should go out while the fly feeds ----
+        if nf_rows:
+            nf_share = nf_lit_ms / (nf_rows * record_ms)
+            if nf_share > settings.warn_fraction and \
+                    nf_lit_ms / 1000.0 >= settings.min_unexplained_sec:
+                flags.append(NON_FEEDING_LIT_WHILE_FEEDING)
+                reasons[NON_FEEDING_LIT_WHILE_FEEDING] = (
+                    f"{NON_FEEDING_LIT_WHILE_FEEDING}: lit {nf_lit_ms / 1000.0:.0f} s of "
+                    f"{nf_rows / sps:.0f} s of feeding at its trigger wells "
+                    f"({100 * nf_share:.0f}%) under a NonFeeding Paradigm, whose light "
+                    f"goes out while the fly feeds")
+
+        ## ---- yoking: linked wells share one light ----
+        yoking = _yoking_problems(state, wells, windows, on_ms, lit, settings)
+        if yoking:
+            flags.append(YOKING_BROKEN)
+            reasons[YOKING_BROKEN] = f"{YOKING_BROKEN}: " + "; ".join(yoking)
+
+        ## ---- Acclimation, as counted against the Paradigm's ----
+        acclimation_count = acclimation_expected = 0
+        acclimation_runs = 0
+        expected_known = True
+        mismatches: list[str] = []
+        for t in sorted(triggers_seen):
+            for count, expected, s0, s1 in _acclimation_counts(
+                    state, t, windows, window_of, starts, record_ms):
+                acclimation_runs += 1
+                acclimation_count += count
+                if expected is None:
+                    expected_known = False
+                    continue
+                acclimation_expected += expected
+                if count != expected:
+                    mismatches.append(f"W{t} counted {count} Activations in Acclimation "
+                                      f"(minutes {minutes[s0]:.1f}-{minutes[s1 - 1]:.1f}), "
+                                      f"its Paradigm's Acclimation is {expected}")
+        if mismatches:
+            flags.append(ACCLIMATION_COUNT_MISMATCH)
+            reasons[ACCLIMATION_COUNT_MISMATCH] = (f"{ACCLIMATION_COUNT_MISMATCH}: "
+                                                   + "; ".join(mismatches))
+
+        ## ---- Firmware Events against pyflic's, under a ratio Paradigm's Main ----
+        firmware_total = pyflic_total = 0
+        ratio_seen = False
+        disagreements: list[str] = []
+        for t in sorted(triggers_seen):
+            counted = np.array([t in mm[1] and mm[0] in op.RATIO_PARADIGMS for mm in modes]
+                               + [False], dtype=bool)
+            main = state.ratio_rows(t) & ~phase_a[:, t - 1] & counted[window_of]
+            if not main.any():
+                continue
+            ratio_seen = True
+            fe = sum(state.firmware_events_between(t, a, b) for a, b in _true_runs(main))
+            pe = int(((feeding[:, t - 1] > 0) & main).sum())
+            firmware_total += fe
+            pyflic_total += pe
+            if max(fe, pe) < MIN_FEEDING_EVENTS:
+                continue
+            share = abs(fe - pe) / fe if fe else float("inf")
+            if share > settings.event_disagreement_fraction:
+                disagreements.append(
+                    f"W{t} {fe} Firmware Events, {pe} pyflic feeding events"
+                    + (f" ({100 * share:.0f}% of the Firmware Events)" if fe else ""))
+        if disagreements:
+            flags.append(EVENT_DISAGREEMENT)
+            reasons[EVENT_DISAGREEMENT] = (f"{EVENT_DISAGREEMENT} under the ratio "
+                                           f"Paradigm's Main phase: "
+                                           + "; ".join(disagreements))
+
+        ## Light where nothing is judged is noted, not judged.
+        unscheduled_ms = float(g_ms[~scheduled].sum())
+        if unscheduled_ms >= 10_000.0:
+            notes.append(f"{unscheduled_ms / 1000.0:.1f} s of light under an unknown "
+                         f"instruction or a Paradigm this check cannot judge, not judged")
+        if any(mode == NOT_JUDGED for mode, _t, _h in modes) and section is not None:
+            dark = float(sum(g_ms[w.i0:w.i1].sum() for w, (mode, _t, _h)
+                             in zip(windows, modes) if mode == NOT_JUDGED and w.kind == "judged"))
+            if dark >= 10_000.0:
+                notes.append(f"{dark / 1000.0:.1f} s of light in Program Intervals whose "
+                             f"thresholds Program.txt does not print and no Activation "
+                             f"explains, not judged")
+
+        ## ---- this group's Activations, one event each ----
+        unit_judged = (np.bincount(owned_unit, weights=judged_ms[owned_rows], minlength=m)
+                       if m else np.zeros(0))
+        unit_unexplained = (np.bincount(owned_unit, weights=unexplained_ms[owned_rows],
+                                        minlength=m) if m else np.zeros(0))
+        last_seen: dict[int, int] = {}
+        last_activity: dict[tuple, np.ndarray] = {}
+        unexplained_events = 0
+        for i in range(m):
+            r, well, k = int(U_row[i]), int(U_well[i]), int(U_win[i])
+            e = int(U_end[i])
+            mode, trig, _hold = modes[k]
+            cls = int(U_cls[i])
+            w = windows[k]
+            in_a = bool(U_in_a[i])
+            requirement = np.nan
+            events = np.nan
+            if in_a:
+                events = 1
+            elif mode in op.RATIO_PARADIGMS:
+                met = state.requirement_met(well, r)
+                if met is None and starts[r] and w.paradigm is not None:
+                    met = w.paradigm.requirement_for(1)
+                requirement = met if met is not None else np.nan
+                i0 = max(last_seen.get(well, -1) + 1, int(segment_start[r]))
+                counted = state.firmware_events_between(well, i0, r + 1)
+                events = counted if counted else requirement
+            last_seen[well] = r
+            explained: bool | None = None
+            un_sec = overrun = np.nan
+            if cls == _UNIT_FIXED:
+                explained = bool(U_act[i])
+            elif cls == _UNIT_WINDOW:
+                explained = (bool(unit_judged[i] - unit_unexplained[i] > 0)
+                             if unit_judged[i] > 0 else bool(U_act[i]))
+            if explained is not None:
+                un_sec = float(unit_unexplained[i]) / 1000.0
+                if not explained:
+                    unexplained_events += 1
+                d = decays[k]
+                if trig not in last_activity:
+                    act = any_activity(trig)
+                    last_activity[trig] = (np.maximum.accumulate(
+                        np.where(act, np.arange(n), -1)) if n else np.zeros(0, dtype=int))
+                end = max(e, r + 1)
+                lo, hi = max(0, r - d - tol), min(n, end + tol)
+                last = int(last_activity[trig][hi - 1]) if hi > 0 else -1
+                overrun = (max(0.0, (end - (last + d + tol + 1)) / sps) if last >= lo
+                           else (end - r) / sps)
+            event_rows.append({
+                "DFM": inp.dfm_id, "Group": label, "Event": i + 1, "Well": well,
+                "OnsetMin": float(minutes[r]),
+                "EndMin": float(minutes[max(e, r + 1) - 1]) + 1.0 / sps / 60.0,
+                "DurationSec": float(unit_ms[i]) / 1000.0,
+                "Interval": (w.program_interval if w.program_interval is not None
+                             else np.nan),
+                "Mode": mode, "Phase": "A" if in_a else "M",
+                "RequirementMet": requirement, "FirmwareEvents": events,
+                "UnexplainedSec": un_sec, "Explained": explained, "OverrunSec": overrun,
+                "Source": EVENT_SOURCE_ACTIVATIONS,
+            })
+
+        if n:
+            minute_bin = np.clip(np.floor(minutes), 0, None).astype(int)
+            size = int(minute_bin.max()) + 1
+
+            def per_minute(ms: np.ndarray) -> np.ndarray:
+                return np.bincount(minute_bin, weights=ms, minlength=size) / 1000.0
+
+            timelines[label] = pd.DataFrame({
+                "Minute": np.arange(size, dtype=float),
+                "LitSec": per_minute(g_ms),
+                "ExplainedSec": per_minute(judged_ms - unexplained_ms),
+                "UnexplainedSec": per_minute(unexplained_ms),
+                "LitWhileOffSec": per_minute(off_ms),
+                "NotJudgedSec": per_minute(np.clip(g_ms - judged_ms - off_ms, 0, None)),
+                "ContactWithoutActivitySec": per_minute(np.where(evidence & owned, g_ms,
+                                                                 0.0)),
+            })
+
+        chambers = sorted({inp.chamber_of_well[w] for w in wells
+                           if w in inp.chamber_of_well})
+        role_text = ", ".join(f"{c} {roles[c]}" for c in chambers if roles.get(c))
+        group_rows.append({
+            "DFM": inp.dfm_id, "Generation": int(inp.generation), "Group": label,
+            "Linkage": label if linkage_source == "program" else np.nan,
+            "Wells": op.wells_label(wells),
+            "TriggerWells": op.wells_label(triggers_seen),
+            "Chambers": _chambers_label(chambers), "Roles": role_text or np.nan,
+            "_chambers": tuple(chambers), "_wells": tuple(wells), "Treatment": "",
+            "Program": status, "Paradigm": ", ".join(paradigms),
+            "LitSec": float(g_ms.sum()) / 1000.0, "JudgedLitSec": judged_total / 1000.0,
+            "UnexplainedSec": unexplained_sec,
+            "UnexplainedFraction": fraction, "UnexplainedOnsetMin": onset,
+            "LightEvents": int(m), "UnexplainedEvents": unexplained_events,
+            "FeedingEvents": feeding_events,
+            "ClosedLoopFeedingEvents": closed_events if closed_events else np.nan,
+            "UnlitFeedingEvents": unlit_events if closed_events else np.nan,
+            "FirmwareEvents": firmware_total if ratio_seen else np.nan,
+            "PyflicEvents": pyflic_total if ratio_seen else np.nan,
+            "AcclimationActivations": acclimation_count if acclimation_runs else np.nan,
+            "AcclimationExpected": (acclimation_expected
+                                    if acclimation_runs and expected_known else np.nan),
+            "OpenLoopLitFraction": open_fraction,
+            "LitWhileOffSec": off_total / 1000.0,
+            "ContactSec": contact_ms / 1000.0,
+            "ContactWithoutActivitySec": without_ms / 1000.0,
+            "FirmwareEventsWithoutActivity": events_without,
+            "UnexplainedWithContactSec": with_contact_ms / 1000.0,
+            "EmulationApproximate": np.nan,
+            "LikelyCause": cause, "_flags": flags, "_notes": notes, "_reasons": reasons,
+            "Excluded": False,
+        })
+
+    ## ---- the DFM as a whole ----
+    lit_any = int((on_ms > 0).any(axis=1).sum()) if n else 0
+    _no_light_check(dfm_flags, dfm_notes, setting, lit_any,
+                    (section is None and not simple) or expects_light)
+    if not group_rows:
+        group_rows.append(_empty_group_row(inp, status))
+    _finish_groups(group_rows, dfm_flags)
     return DFMOptoResult(dfm_id=inp.dfm_id, setting=setting, program_status=status,
                          groups=group_rows, intervals=interval_rows, events=event_rows,
                          flags=dfm_flags, notes=dfm_notes, decay_samples=decay_by_sample,
-                         lit_samples=lit_any, timelines=timelines)
+                         lit_samples=lit_any, timelines=timelines,
+                         generation=int(inp.generation))
+
+
+def _yoking_problems(state: ParadigmState, wells: tuple[int, ...],
+                     windows: list[_RunWindow], on_ms: np.ndarray, lit: np.ndarray,
+                     settings: OptoQCSettings) -> list[str]:
+    """What breaks a Linkage Group's yoking: its wells' ``OnMs`` differing by
+    more than 1 ms in more than ``opto_yoking_fail_fraction`` of its lit
+    records, or an ``Off`` well linked to a trigger counting Activations."""
+    if len(wells) < 2:
+        return []
+    out: list[str] = []
+    idx = [w - 1 for w in wells]
+    lit_records = int(lit.sum())
+    if lit_records:
+        spread = on_ms[:, idx].max(axis=1) - on_ms[:, idx].min(axis=1)
+        differ = int((lit & (spread > 1)).sum())
+        if differ / lit_records > settings.yoking_fail_fraction:
+            out.append(f"its wells' OnMs differ by more than 1 ms in {differ} of "
+                       f"{lit_records} lit records ({100.0 * differ / lit_records:.1f}%)")
+    counted: dict[int, int] = {}
+    for w in windows:
+        line = w.interval
+        if line is None or w.kind != "judged" or w.paradigm is None \
+                or w.paradigm.type == op.OPEN_LOOP or not line.trigger_wells(wells):
+            continue
+        for well in line.off_wells(wells):
+            got = state.activations_between(well, w.i0, w.i1)
+            if got:
+                counted[well] = counted.get(well, 0) + got
+    for well, got in sorted(counted.items()):
+        out.append(f"W{well} is Off and linked to a trigger well but counted {got} "
+                   f"Activation(s)")
+    return out
+
+
+def _acclimation_counts(state: ParadigmState, well: int, windows: list[_RunWindow],
+                        window_of: np.ndarray, starts: np.ndarray, record_ms: float
+                        ) -> list[tuple[int, int | None, int, int]]:
+    """``(Activations, the Paradigm's Acclimation or None, i0, i1)`` for each
+    of *well*'s completed Acclimation runs: rows in Phase ``A`` that end in
+    ``M`` under the same Paradigm, with the well still a level threshold.  A
+    run cut by the end of the data, a new Paradigm, or an ``On`` / ``Off``
+    Interval (which freezes the well, so the file reads ``M``) never
+    completed, and is not counted: that is never completing Training."""
+    n = len(state)
+    out: list[tuple[int, int | None, int, int]] = []
+    for a0, a1 in state.acclimation_runs(well):
+        if a1 >= n or starts[a1]:
+            continue
+        cuts = np.flatnonzero(starts[a0 + 1:a1]) + a0 + 1
+        s0 = int(cuts[-1]) if cuts.size else int(a0)
+        k_end, k_start = int(window_of[a1]), int(window_of[s0])
+        if k_end < 0 or k_start < 0:
+            continue
+        line = windows[k_end].interval
+        if line is not None and not op.is_trigger(line.threshold(well)):
+            continue
+        paradigm = windows[k_start].paradigm
+        expected = int(paradigm.acclimation) if paradigm is not None else None
+        count = state.activations_between(well, s0, a1)
+        ## An Acclimation shorter than a record can start and end in one: its
+        ## Activation is then counted on the first row in M.
+        hold = paradigm.activation_ms if paradigm is not None else None
+        if expected is not None and count < expected and hold is not None \
+                and hold < record_ms:
+            count += min(state.activations_between(well, a1, a1 + 1), expected - count)
+        out.append((int(count), expected, s0, int(a1)))
+    return out
 
 
 # ---------------------------------------------------------------------------
