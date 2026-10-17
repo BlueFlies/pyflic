@@ -965,10 +965,17 @@ Phase 0 (one agent, sequential, on v4_Dev)
                              Stream 7 docs
 ```
 
-- Branches: Phase 0 commits to `v4_Dev`. Streams 3–6 branch from the Phase 0
-  merge as `v4-stream-3-light-qc`, `v4-stream-4-pr`, `v4-stream-5-light-table`,
-  `v4-stream-6-integrity`, each in its own worktree, merged back to `v4_Dev`
-  one at a time; stream 7 works on `v4_Dev` after the last merge.
+- Branches: Phase 0 was delivered as three branches merged into `v4_Dev`
+  (`v4-phase0-fixtures` and `v4-phase0-grammar` in parallel, then
+  `v4-phase0-loader` for 0b and 0d; tip bbe30bb). Streams 3–6 branch from
+  bbe30bb, each in its own worktree. Stream 5 is split in two agents, because
+  Program Facets reshape the facet machinery independently of the light table:
+  `v4-stream-3-light-qc`, `v4-stream-4-pr`, `v4-stream-5a-light-table` (the
+  light table, Role on rows, reports, figures, Hub, decision 24),
+  `v4-stream-5b-program-facets` (the `facet_source` key, per-DFM multi-window
+  Facets, their consumers and editors) and `v4-stream-6-integrity`. They are
+  merged back to `v4_Dev` one at a time; stream 7 works on `v4_Dev` after the
+  last merge.
 - Gate for every merge: `python -m pytest tests -q -p no:cacheprovider`, run
   from the checkout's root with the main `.venv`'s Python, with no failure that
   is not one of the eight pre-existing ones on `v4_Dev` at fbbcda1
