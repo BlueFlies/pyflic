@@ -20,8 +20,18 @@ Terms, fixed in ``CONTEXT.md``:
   of its last Sucrose Well feeding event before the break.
 
 The **Test window** is the recording end minus the group's training end,
-capped at ``pr_test_window_min`` when that is set (off by default).  Nothing
-here knows the time of day: a long pause at night is a gap like any other.
+capped at ``pr_test_window_min`` when that is set (off by default).  On a
+Generation-3 recording it ends where the Paired Sucrose Well's ratio Paradigm
+run ends instead of at the recording end (decision 12 of
+``docs/v4-data-plan.md``): only the first ratio run is the Test, and the cap
+applies after.  Nothing here knows the time of day: a long pause at night is
+a gap like any other.
+
+On Generation 3 the firmware records the Requirement each Activation met
+(ADR-0014's addendum), so a group's row also carries ``BreakRequirement``,
+the Requirement the last counted Light Event met, and ``FirmwareEvents``,
+the Firmware Events credited to the counted ones.  The count itself is
+unchanged: lick-backed Light Events before the first gap.
 
 Plain arrays only; :class:`ProgressiveRatioExperiment` assembles them per
 Chamber Group, and :mod:`pyflic.base.analytics` holds the statistics
@@ -82,7 +92,8 @@ class BreakSettings:
 
     def test_end(self, available_min: float) -> float:
         """The Test window, in minutes since training end, for a group whose
-        recording ran *available_min* past its training end."""
+        recording (on generation 3, whose ratio Paradigm run) went on
+        *available_min* past its training end."""
         available = max(0.0, float(available_min))
         if self.test_window_min is None:
             return available

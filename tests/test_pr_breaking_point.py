@@ -247,7 +247,10 @@ def test_the_summary_counts_until_the_fly_stops(bexp):
     s = bexp.breaking_point_summary()
     assert list(s.columns) == ["Treatment", "Genotype", "DFM", "Group", "PairedChamber",
                                "BreakingPoint", "BreakMin", "Censored", "TestMinutes",
-                               "LargestRequirement", "LickFreeLightEvents", "LightQC"]
+                               "LargestRequirement", "BreakRequirement", "FirmwareEvents",
+                               "LickFreeLightEvents", "LightQC"]
+    ## The firmware's record exists on generation 3 only (tests/test_pr_v4.py).
+    assert s["BreakRequirement"].isna().all() and s["FirmwareEvents"].isna().all()
     working, stopped = _row(s, 1, 1), _row(s, 2, 1)
     assert working.BreakingPoint == 12 and not working.Censored
     assert working.BreakMin == pytest.approx(11.59, abs=0.02)

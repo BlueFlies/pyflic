@@ -13,7 +13,9 @@ experiment assembles it per Chamber Group
 (:meth:`ProgressiveRatioExperiment.light_qc_table`).  Terms, fixed in
 ``CONTEXT.md``:
 
-* a **Light Event** is one onset of the group's light;
+* a **Light Event** is one onset of the group's light: on a Generation-1 or
+  2 recording an onset in ``OptoCol1``, on Generation 3 an **Activation** of
+  the Paired Sucrose Well, read from its ``Activations`` count;
 * a **Lick-free Light Event** has no Sucrose Well licks since the previous
   Light Event ended, and no Sucrose Well activity (a lick or a touch) within
   the light's decay window around it — the decay the Opto Program states,
@@ -23,6 +25,12 @@ experiment assembles it per Chamber Group
   following the sensor, not the fly;
 * the **Resting Level** of a well is its raw (un-baselined) signal between
   licks, measured as the per-minute median.
+
+On Generation 3 the firmware also records the **Firmware Events** each
+Activation took, so the licks-per-event trend has a second witness
+(decision 13 of ``docs/v4-data-plan.md``): the warning stays on pyflic's
+licks, and a firmware trend that rises while pyflic's does not is a note
+pointing at the lick detection.
 """
 
 from __future__ import annotations
@@ -59,6 +67,12 @@ WARNING_FLAGS: tuple[str, ...] = (NO_TREND, RESTING_RISE, RESTING_ELEVATED)
 VERDICT_OK = "ok"
 VERDICT_WARNING = "warning"
 VERDICT_FAILED = "failed"
+
+#: The note for a Chamber Group whose Firmware Events per Activation rise
+#: while pyflic's licks per Light Event show no increasing trend: the fly
+#: worked to the schedule and pyflic's detector missed it.
+FIRMWARE_TREND_NOTE = ("the firmware counted rising Events per light event; "
+                       "pyflic's licks did not follow: check detection")
 
 #: Minutes over which the start, end and peak of a Resting Level are taken.
 RESTING_WINDOW_MIN = 30
@@ -264,6 +278,9 @@ class GroupVerdict:
     lick_free_run_start: int | None     # Test event index where the failing run begins
     trend_rho: float
     trend_slope: float
+    #: Spearman's rho of Firmware Events per Activation against event number
+    #: (generation 3); NaN when the firmware's count was not given.
+    trend_rho_firmware: float = float("nan")
 
     @property
     def verdict(self) -> str:
@@ -279,7 +296,7 @@ class GroupVerdict:
 def judge_group(
     settings: LightQCSettings,
     *,
-    training_complete: bool,
+    training_complete: bool | None,
     training_light_events: int,
     training_licks: int,
     test_counts: np.ndarray,
@@ -287,12 +304,26 @@ def judge_group(
     reference_level: float,
     any_light: bool,
     lick_free: np.ndarray | None = None,
+    firmware_events: np.ndarray | None = None,
+    check_trend: bool = True,
+    light_source: str = "OptoCol1 light bits",
 ) -> GroupVerdict:
     """Flags and notes for one Chamber Group from its measured quantities.
 
     *lick_free* marks the Lick-free Light Events among the Test events; by
     default an event with no credited licks.  The experiment passes the
-    decay-aware mask (``LickFree`` of the light events table)."""
+    decay-aware mask (``LickFree`` of the light events table).
+
+    *training_complete* is ``None`` when the recording carries no Training
+    information at all (generation 2): there is no Test phase, and
+    *implausible training* is not judged.  *firmware_events* are the Firmware
+    Events credited to each Test event (generation 3; NaN where the firmware
+    credited none it recorded): their trend is measured, and when it rises
+    while pyflic's licks show no increasing trend that is a note
+    (:data:`FIRMWARE_TREND_NOTE`) — the warning itself stays on the licks.
+    *check_trend* is False under a FixedRatio Test Paradigm, whose
+    requirement never rises.  *light_source* names what a group without any
+    Light Event lacks, for its note."""
     flags: list[str] = []
     notes: list[str] = []
     counts = np.asarray(test_counts, dtype=int)
@@ -300,10 +331,17 @@ def judge_group(
     run, run_first = longest_run(lick_free)
     failing_start = first_run_start(lick_free, settings.lick_free_run)
     rho, slope = lick_trend(counts)
+    rho_firmware = float("nan")
+    if firmware_events is not None:
+        credited = np.asarray(firmware_events, dtype=float)
+        rho_firmware, _ = lick_trend(credited[np.isfinite(credited)])
 
     if not any_light:
-        notes.append("no light events recorded for this group (no OptoCol1 "
-                     "light bits), so the light checks do not apply")
+        notes.append(f"no light events recorded for this group (no {light_source}), "
+                     f"so the light checks do not apply")
+    elif training_complete is None:
+        notes.append("no training information (DFM firmware older than 4.0.0): no "
+                     "Test phase to check, so no Breaking Point or Sucrose Persistence")
     elif not training_complete:
         notes.append("training never completed, so there is no Test phase to check")
     else:
@@ -319,9 +357,15 @@ def judge_group(
         else:
             if failing_start is not None:
                 flags.append(SELF_TRIGGERED)
-            if counts.size >= settings.trend_min_events:
-                if not (np.isfinite(rho) and rho >= settings.trend_min_rho):
+            if not check_trend:
+                notes.append("the Test Paradigm is a fixed ratio, whose requirement "
+                             "does not rise, so no licks-per-event trend is judged")
+            elif counts.size >= settings.trend_min_events:
+                licks_rise = bool(np.isfinite(rho) and rho >= settings.trend_min_rho)
+                if not licks_rise:
                     flags.append(NO_TREND)
+                    if np.isfinite(rho_firmware) and rho_firmware >= settings.trend_min_rho:
+                        notes.append(FIRMWARE_TREND_NOTE)
             else:
                 notes.append(f"{counts.size} Test light event(s); "
                              f"{settings.trend_min_events} are needed for a "
@@ -344,6 +388,7 @@ def judge_group(
         longest_lick_free_run=int(run),
         lick_free_run_start=failing_start,
         trend_rho=rho, trend_slope=slope,
+        trend_rho_firmware=rho_firmware,
     )
 
 

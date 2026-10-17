@@ -5,9 +5,12 @@ Groups** (1+2, 3+4, 5+6) that share one light circuit and one Treatment; in
 each group one chamber is **Paired** (light contingent on its own feeding at
 the sucrose well, well A) and the other **Yoked** (lit at the same moments,
 regardless of its own behaviour).  The recording opens with a closed-loop
-**Training** phase whose end the firmware marks per well in the data, and
+**Training** phase whose end the firmware marks per well in the data (a flag
+in the signal before firmware 4.0.0, the Sucrose Well's Phase from it), and
 differs for every group — which is why this type's Facets are data-derived
-(ADR-0013) rather than minute cutoffs.
+(ADR-0013) rather than minute cutoffs.  The type covers both ratio
+Paradigms of firmware 4.0.0, ProgressiveRatio and FixedRatio (decision 6 of
+``docs/v4-data-plan.md``).
 
 The config states the design with one key per DFM::
 
@@ -92,6 +95,35 @@ def parse_paired_chambers(raw: Any) -> tuple[list[int], list[str]]:
     if len(values) != len(set(values)):
         problems.append(f"'{PAIRED_KEY}' repeats a chamber: {values}")
     return sorted(set(values)), problems
+
+
+def break_requirement_view(frame) -> Any:
+    """Per treatment, the median ``BreakingPoint`` and beside it the median
+    ``BreakRequirement`` of a stacked ``pr_breaking_point.csv``, with the
+    groups each rests on — ``None`` when no group has a recorded Requirement
+    (no generation-3 member), so a project of older recordings shows nothing
+    new."""
+    import pandas as pd
+
+    if frame is None or frame.empty or "BreakRequirement" not in frame.columns:
+        return None
+    requirement = pd.to_numeric(frame["BreakRequirement"], errors="coerce")
+    if not requirement.notna().any():
+        return None
+    data = pd.DataFrame({
+        "Treatment": frame["Treatment"].astype(str),
+        "BreakingPoint": pd.to_numeric(frame["BreakingPoint"], errors="coerce"),
+        "BreakRequirement": requirement,
+    })
+    rows = []
+    for treatment, sub in data.groupby("Treatment", sort=False):
+        rows.append({"Treatment": treatment, "Groups": int(len(sub)),
+                     "Breaking point": float(sub["BreakingPoint"].median()),
+                     "Break requirement": (float(sub["BreakRequirement"].median())
+                                           if sub["BreakRequirement"].notna().any()
+                                           else float("nan")),
+                     "With a requirement": int(sub["BreakRequirement"].notna().sum())})
+    return pd.DataFrame(rows)
 
 
 #: The two-well chamber_sets default: chamber c is wells (2c-1, 2c).
@@ -384,6 +416,13 @@ class ProgressiveRatioExperimentType(ExperimentType):
                                 caption="Treatment comparisons: breaking point",
                                 well_names=names, show_phase=False),
             ]
+            requirement = break_requirement_view(bp)
+            if requirement is not None:
+                blocks.append(rl.Table(
+                    requirement, caption="Breaking point and the Requirement the last "
+                                         "counted light event met, as the firmware "
+                                         "recorded it (medians per treatment)",
+                    formats={"Breaking point": "{:g}", "Break requirement": "{:g}"}))
 
         test = (diff[diff["Facet"].astype(str) == "Test"]
                 if diff is not None and not diff.empty else None)
