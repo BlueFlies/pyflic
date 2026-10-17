@@ -17,6 +17,8 @@ PyMCU's win:
 | The vocabulary (Generation, Paradigm, Program Interval, Activation, Requirement, Progress, Firmware Event, Phase, Acclimation, Hold, Role) | [../CONTEXT.md](../CONTEXT.md) |
 
 The PyMCU links assume its checkout sits beside pyflic's, on branch `v4_Dev`.
+For a short overview of the new columns and where they show up, see
+[The firmware 4.0.0 data columns](v4-data-columns.md).
 For the researcher's view of the same features see the help topic
 *Optogenetic experiments* and [Checking your data](qc-user-guide.md).
 
