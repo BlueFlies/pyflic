@@ -52,6 +52,7 @@ DESIGN_KEYS: tuple[str, ...] = (
     "experimental_design_factors",
     "facet_cutoffs",
     "facet_labels",
+    "facet_source",
     "exclusion_group",
     "optogenetics",
 )
@@ -397,6 +398,10 @@ class Project:
                             or {}).items()
         }
         self.exclusion_group = source.get("exclusion_group", "general")
+        ## Program Facets (facet_source) and data-derived ones differ in their
+        ## windows from DFM to DFM, so the pooled rows group by Facet label.
+        self.facet_source = self.experiment_type.resolve_facet_source(source)
+        self.facets_vary_by_dfm = self.experiment_type.facets_vary_by_dfm(source)
 
     def _own_global(self, name: str) -> dict:
         """A Member's *own* ``global:`` block as written — not the resolved
@@ -1030,15 +1035,17 @@ class Project:
     def _facet_frames(self, summary: pd.DataFrame,
                       facet: pd.DataFrame | None) -> list[tuple[str, pd.DataFrame]]:
         """``[(phase label, rows), ...]`` — one per Facet, else the whole
-        recording.  A type whose windows come from the data (ADR-0013) is split
-        on the ``Facet`` label, because its ``FacetRange`` differs per Chamber
-        Group and would fragment one phase into many."""
+        recording.  A type whose windows come from the data (ADR-0013), and
+        Program Facets (``facet_source``), are split on the ``Facet`` label,
+        because their ``FacetRange`` differs per Chamber Group or per DFM and
+        would fragment one phase into many; a Program Facet pools every
+        Member's chambers that ran the same Paradigm."""
         frames: list[tuple[str, pd.DataFrame]] = []
         if facet is None or facet.empty:
             return [("Whole recording", summary)]
-        if getattr(self.experiment_type, "data_derived_facets", False) \
-                and "Facet" in facet.columns:
-            order = list(self.experiment_type.phase_labels) or []
+        if self.facets_vary_by_dfm and "Facet" in facet.columns:
+            order = (list(self.experiment_type.phase_labels)
+                     if getattr(self.experiment_type, "data_derived_facets", False) else [])
             labels = list(dict.fromkeys(facet["Facet"].astype(str)))
             labels.sort(key=lambda s: order.index(s) if s in order else len(order))
             for label in labels:
@@ -1220,6 +1227,11 @@ class Project:
         out.append(f"Chambers pooled   : {len(summary)}")
         out.append(f"Experiment type   : {self.experiment_type.display_name}")
         out.append(f"Chamber layout    : {self.chamber_layout}")
+        from . import program_facets
+
+        if program_facets.is_program_source(self.facet_source):
+            out.append(f"Facets            : {program_facets.SOURCE_LABELS[self.facet_source]}"
+                       f" — pooled by Paradigm label across members")
         out.append("")
         out.append("p_pooled : per-chamber test across all members "
                    "(Welch for 2 groups, Tukey HSD otherwise) — matches the "
@@ -1231,7 +1243,11 @@ class Project:
         out.extend(self._flagged_groups_lines())
 
         def _table(table_rows: list[dict], *, logrank: bool = False) -> list[str]:
-            header = (f"{'Metric':<14}{'Facet':<16}{'A':<12}{'B':<12}"
+            ## A Program Facet is named by its Paradigm, which can be long (a
+            ## generation-1 program's generated names); the column widens to
+            ## fit rather than running the label into the next.
+            fw = max([16] + [len(str(row["phase"])) + 1 for row in table_rows])
+            header = (f"{'Metric':<14}{'Facet':<{fw}}{'A':<12}{'B':<12}"
                       f"{'nA':>4}{'nB':>5}{'diff':>10}{'p_pooled':>11}"
                       f"{'p_mixed':>10}" + (f"{'p_logrank':>11}" if logrank else ""))
             lines = [header, "-" * len(header)]
@@ -1244,7 +1260,7 @@ class Project:
                                  else f"{row['p_logrank']:>11.4g}")
                 star = " *" if row["significant"] else ""
                 lines.append(
-                    f"{row['metric']:<14}{row['phase']:<16}{row['a']:<12}"
+                    f"{row['metric']:<14}{row['phase']:<{fw}}{row['a']:<12}"
                     f"{row['b']:<12}{row['n_a']:>4}{row['n_b']:>5}"
                     f"{row['diff']:>10.4g}{row['p_pooled']:>11.4g}{p_mixed}"
                     f"{p_logrank}{star}")

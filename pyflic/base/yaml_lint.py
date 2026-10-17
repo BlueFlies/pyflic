@@ -28,6 +28,8 @@ _KNOWN_GLOBAL_KEYS = {
     "exclusion_group",
     # The optogenetic light QC's switch (auto | yes | no).
     "optogenetics",
+    # Where the Facets come from: cutoffs | program | program_cycles.
+    "facet_source",
 }
 _KNOWN_PARAM_KEYS = {
     "baseline_window_minutes", "baseline_window_min", "baseline_window",
@@ -207,6 +209,8 @@ def lint_flic_config(path: str | Path) -> list[LintIssue]:
         _emit(issues, "error", "dfms must be a mapping or list", path="dfms")
         return issues
 
+    _lint_facet_source(issues, path, g, dfm_items, program, program_path)
+
     seen_ids: set[int] = set()
     for raw_id, dfm in dfm_items:
         if not isinstance(dfm, dict):
@@ -311,6 +315,64 @@ def lint_flic_config(path: str | Path) -> list[LintIssue]:
                         )
 
     return issues
+
+
+def _lint_facet_source(issues: list[LintIssue], path: Path, g: dict, dfm_items,
+                       program, program_path) -> None:
+    """``facet_source`` (decision 7): a known value, not stated under a type
+    that owns its Facets, not beside ``facet_cutoffs``, and for ``program``
+    and ``program_cycles`` a ``Program.txt`` section for every DFM the loader
+    will load — the checks the loader makes, reported all at once."""
+    from . import program_facets as pf
+
+    where = f"global.{pf.FACET_SOURCE_KEY}"
+    value = g.get(pf.FACET_SOURCE_KEY)
+    if value is None:
+        return
+    try:
+        from . import experiment_types as _et
+        etype = _et.get_experiment_type(g.get("experiment_type"))
+    except Exception:  # noqa: BLE001 — the type problem is reported elsewhere
+        etype = None
+    if etype is not None and etype.owns_facet_source:
+        _emit(issues, "error", f"'{pf.FACET_SOURCE_KEY}' is owned by experiment_type "
+                               f"'{etype.name}' and must not appear in the config "
+                               f"(remove it; its Facets are its own)", path=where)
+        return
+    problem = pf.source_problem(value, where=where)
+    if problem:
+        _emit(issues, "error", problem, path=where)
+        return
+    source = pf.normalize_source(value)
+    if not pf.is_program_source(source):
+        return
+    if g.get("facet_cutoffs") is not None:
+        _emit(issues, "error", f"'facet_cutoffs' and '{pf.FACET_SOURCE_KEY}: {source}' "
+                               f"cannot both be stated (remove one)", path=where)
+    if g.get("facet_labels"):
+        _emit(issues, "warning", f"facet_labels is ignored under {pf.FACET_SOURCE_KEY}: "
+                                 f"{source}; Program Facets are named by their Paradigm",
+              path="global.facet_labels")
+    ## The DFMs the loader will load: configured, not the Environmental
+    ## Monitor, and with data when the data folder can be read.
+    from .project import dfm_ids_in_data
+
+    ids: list[int] = []
+    for raw_id, node in dfm_items:
+        try:
+            dfm_id = int(raw_id if raw_id is not None else node.get("id"))
+        except (TypeError, ValueError, AttributeError):
+            continue
+        if not is_environmental_monitor(dfm_id):
+            ids.append(dfm_id)
+    present = set(dfm_ids_in_data(path.parent))
+    if present:
+        ids = [d for d in ids if d in present]
+    error = None
+    if program is None and program_path is not None:
+        error = f"{program_path.name} could not be read"
+    for problem in pf.program_problems(source, program, ids, program_error=error):
+        _emit(issues, "error", problem, path=where)
 
 
 def main_cli() -> None:

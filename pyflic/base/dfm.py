@@ -819,10 +819,31 @@ class DFM:
         raise ValueError(f"Invalid pi_direction: {params.pi_direction!r}")
 
     @staticmethod
+    def _range_rows(minutes, range_minutes: Sequence[float]) -> np.ndarray | None:
+        """``(n,)`` bool: the rows (by their ``Minutes``) inside the ``(a, b]``
+        window, or inside any window of a list of them (a Program Facet
+        pooling its Cycles); ``None`` for the whole recording.  Every
+        feeding-summary statistic is then taken over the events inside the
+        union, so a median is never an average of per-window medians."""
+        from . import windowing
+
+        values = np.asarray(minutes, dtype=float)
+        if windowing.is_window_list(range_minutes):
+            return windowing.window_mask(values, range_minutes)
+        if not range_is_specified(range_minutes):
+            return None
+        a, b = range_bounds(range_minutes)
+        return (values > a) & (values <= b)
+
+    @staticmethod
     def _interval_summary(interval_df, range_minutes: Sequence[float]) -> tuple[float, float]:
+        from . import windowing
+
         if not isinstance(interval_df, pd.DataFrame) or interval_df.empty:
             return 0.0, 0.0
-        if range_is_specified(range_minutes):
+        if windowing.is_window_list(range_minutes):
+            tmp = interval_df[DFM._range_rows(interval_df["Minutes"], range_minutes)]
+        elif range_is_specified(range_minutes):
             a, b = range_bounds(range_minutes)
             tmp = interval_df[(interval_df["Minutes"] > a) & (interval_df["Minutes"] <= b)]
         else:
@@ -833,9 +854,13 @@ class DFM:
 
     @staticmethod
     def _duration_summary(dur_df, range_minutes: Sequence[float]) -> tuple[float, float]:
+        from . import windowing
+
         if not isinstance(dur_df, pd.DataFrame) or dur_df.empty:
             return np.nan, np.nan
-        if range_is_specified(range_minutes):
+        if windowing.is_window_list(range_minutes):
+            tmp = dur_df[DFM._range_rows(dur_df["Minutes"], range_minutes)]
+        elif range_is_specified(range_minutes):
             a, b = range_bounds(range_minutes)
             tmp = dur_df[(dur_df["Minutes"] > a) & (dur_df["Minutes"] <= b)]
         else:
@@ -870,8 +895,16 @@ class DFM:
         Generation 3 sums ``OnMs`` (:meth:`ParadigmState.lit_seconds`), the
         milliseconds the LED was driven, light from Linkage included; the
         other generations count the ``OptoCol1`` snapshots lit, one sample
-        period each, which misses on-periods shorter than a record.
+        period each, which misses on-periods shorter than a record.  A list
+        of windows sums over the rows inside any of them.
         """
+        from . import windowing
+
+        if self.generation == GENERATION_PARADIGM and self.paradigm is not None \
+                and windowing.is_window_list(range_minutes):
+            rows = self._range_rows(self.paradigm.minutes, range_minutes)
+            return np.array([float(self.paradigm.on_ms[rows, w - 1].sum()) / 1000.0
+                             for w in range(1, 13)], dtype=float)
         if self.generation == GENERATION_PARADIGM and self.paradigm is not None:
             i0, i1 = self._state_rows(range_minutes)
             return np.array([self.paradigm.lit_seconds(w, i0, i1) for w in range(1, 13)], dtype=float)
@@ -899,6 +932,11 @@ class DFM:
         range_minutes: Sequence[float] = (0, 0),
         transform_licks: bool = True,
     ) -> pd.DataFrame:
+        """Per chamber over ``(a, b]``, or over the union of a list of such
+        windows (a Program Facet; see :func:`windowing.is_window_list`)."""
+        from . import windowing
+
+        span = windowing.range_span(range_minutes)
         if self.params.chamber_size == 1:
             lights_sec = self.light_seconds(range_minutes)
             rows: list[dict] = []
@@ -908,11 +946,7 @@ class DFM:
                 mean_intv, med_intv = self._interval_summary(self.intervals[cname], range_minutes)
                 base = self.baseline_df[cname].to_numpy(dtype=float)
                 ev = self.event_df[cname].to_numpy(dtype=int)
-                mask = None
-                if range_is_specified(range_minutes):
-                    a, b = range_bounds(range_minutes)
-                    mins = self.baseline_df["Minutes"].to_numpy(dtype=float)
-                    mask = (mins > a) & (mins <= b)
+                mask = self._range_rows(self.baseline_df["Minutes"], range_minutes)
                 mean_int, med_int, min_int, max_int = self._intensity_summary(base, ev, range_mask=mask)
                 licks = int(self._apply_range(self.lick_df, range_minutes)[cname].sum())
                 events = int((self._apply_range(self.event_df, range_minutes)[cname].to_numpy(dtype=int) > 0).sum())
@@ -923,7 +957,7 @@ class DFM:
                     "MeanTimeBtw": mean_intv, "MedTimeBtw": med_intv,
                     "MeanInt": mean_int, "MedianInt": med_int, "MinInt": min_int, "MaxInt": max_int,
                     "OptoOn_sec": float(lights_sec[well - 1]) if len(lights_sec) == 12 else 0.0,
-                    "StartMin": float(range_minutes[0]), "EndMin": float(range_minutes[1]),
+                    "StartMin": span[0], "EndMin": span[1],
                 })
             out = pd.DataFrame(rows)
             if transform_licks:
@@ -954,11 +988,7 @@ class DFM:
                 base_b = self.baseline_df[cb].to_numpy(dtype=float)
                 ev_a = self.event_df[ca].to_numpy(dtype=int)
                 ev_b = self.event_df[cb].to_numpy(dtype=int)
-                mask = None
-                if range_is_specified(range_minutes):
-                    a, b = range_bounds(range_minutes)
-                    mins = self.baseline_df["Minutes"].to_numpy(dtype=float)
-                    mask = (mins > a) & (mins <= b)
+                mask = self._range_rows(self.baseline_df["Minutes"], range_minutes)
                 mean_int_a, med_int_a, min_int_a, max_int_a = self._intensity_summary(base_a, ev_a, range_mask=mask)
                 mean_int_b, med_int_b, min_int_b, max_int_b = self._intensity_summary(base_b, ev_b, range_mask=mask)
                 pi = (licks_a - licks_b) / (licks_a + licks_b) if (licks_a + licks_b) > 0 else np.nan
@@ -976,7 +1006,7 @@ class DFM:
                     "MeanIntB": mean_int_b, "MedianIntB": med_int_b, "MinIntB": min_int_b, "MaxIntB": max_int_b,
                     "OptoOn_sec_A": float(lights_sec[well_a - 1]),
                     "OptoOn_sec_B": float(lights_sec[well_b - 1]),
-                    "StartMin": float(range_minutes[0]), "EndMin": float(range_minutes[1]),
+                    "StartMin": span[0], "EndMin": span[1],
                 })
             out = pd.DataFrame(rows)
             if transform_licks:
@@ -1242,6 +1272,10 @@ class DFM:
         return f"Well{side}"
 
     def _apply_range(self, df: pd.DataFrame, range_minutes: Sequence[float]) -> pd.DataFrame:
+        from . import windowing
+
+        if windowing.is_window_list(range_minutes):
+            return df[self._range_rows(df["Minutes"], range_minutes)]
         if not range_is_specified(range_minutes):
             return df
         a, b = range_bounds(range_minutes)

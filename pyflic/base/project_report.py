@@ -55,6 +55,13 @@ def _facets_line(project) -> str:
     if getattr(etype, "data_derived_facets", False):
         return (f"{' / '.join(etype.phase_labels)} — split at each chamber group's "
                 f"own training end")
+    from .program_facets import SOURCE_LABELS, is_program_source
+
+    source = getattr(project, "facet_source", "cutoffs")
+    if is_program_source(source):
+        ## Each member DFM's own Program Intervals; the labels are its Paradigms.
+        return (f"{SOURCE_LABELS[source]} (facet_source: {source}) — each DFM's own "
+                f"program, pooled by Paradigm label")
     windows, labels = project.shared_windows()
     return ", ".join(labels) if windows else "none (whole recording)"
 

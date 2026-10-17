@@ -11,6 +11,10 @@ belongs to the phase after it and to nothing else.  The final facet always runs
 to ``inf``, so nothing is lost at the tail.
 
 ``(0, 0)`` remains pyflic's sentinel for "the whole recording".
+
+A Program Facet (``facet_source: program``) is not one window but a union of
+them, so ``range_minutes`` may also be a list of windows (see
+:func:`is_window_list`).
 """
 
 from __future__ import annotations
@@ -124,3 +128,79 @@ def as_range_minutes(window) -> tuple[float, float]:
     """
     start, end = window
     return (float(start), 0.0 if end == float("inf") else float(end))
+
+
+# ---------------------------------------------------------------------------
+# Several windows at once: a Program Facet (decision 7 of docs/v4-data-plan.md)
+# ---------------------------------------------------------------------------
+#
+# A Program Facet pools the Cycles of a Repeating program, so its rows are a
+# union of disjoint (a, b] windows.  ``range_minutes`` may therefore be a list
+# of windows as well as one ``(a, b)`` pair; the summaries treat the list as
+# one row mask, so a median is the median of the events inside the union, not
+# an average of per-window medians.
+
+def _is_pair(value) -> bool:
+    return not isinstance(value, (str, bytes)) and hasattr(value, "__len__")
+
+
+def is_window_list(range_minutes) -> bool:
+    """True when *range_minutes* is a list of ``(a, b)`` windows rather than
+    one ``(a, b)`` pair.  An empty list is a window list that selects
+    nothing; ``(0, 0)`` stays the whole-recording sentinel."""
+    if isinstance(range_minutes, (str, bytes)) or not hasattr(range_minutes, "__len__"):
+        return False
+    items = list(range_minutes)
+    return len(items) != 2 or any(_is_pair(v) for v in items)
+
+
+def window_bounds(range_minutes) -> list[tuple[float, float]]:
+    """The ``(a, b]`` bounds of a window list, each open end (``0``, any
+    non-positive end, or ``inf``) resolved to ``inf`` as
+    :func:`pyflic.base.utils.range_bounds` does for one window."""
+    out: list[tuple[float, float]] = []
+    for window in range_minutes:
+        a, b = float(window[0]), float(window[1])
+        out.append((a, float("inf") if b <= 0.0 else b))
+    return out
+
+
+def window_mask(minutes, range_minutes):
+    """``(n,)`` bool: which *minutes* fall in any window of the list."""
+    import numpy as np
+
+    values = np.asarray(minutes, dtype=float)
+    mask = np.zeros(values.shape, dtype=bool)
+    for a, b in window_bounds(range_minutes):
+        mask |= (values > a) & (values <= b)
+    return mask
+
+
+def range_key(range_minutes) -> tuple:
+    """A hashable cache key for *range_minutes*: ``(a, b)`` as floats for one
+    window (the key the feeding-summary cache has always used), a tuple of
+    such pairs for a window list."""
+    if is_window_list(range_minutes):
+        return tuple((float(w[0]), float(w[1])) for w in range_minutes)
+    return (float(range_minutes[0]), float(range_minutes[1]))
+
+
+def range_span(range_minutes) -> tuple[float, float]:
+    """``(start, end)`` for the ``StartMin`` / ``EndMin`` columns: the pair
+    itself, or for a window list the first start and the last end."""
+    if not is_window_list(range_minutes):
+        return float(range_minutes[0]), float(range_minutes[1])
+    windows = sorted((float(w[0]), float(w[1])) for w in range_minutes)
+    if not windows:
+        return float("nan"), float("nan")
+    return windows[0][0], windows[-1][1]
+
+
+def format_ranges(windows, digits: int = 2) -> str:
+    """The ``FacetRange`` cell of a Facet with one or more windows, each
+    rounded to *digits* places for reading: ``"(0, 3); (15, 18)"``."""
+    def bound(value: float):
+        value = float(value)
+        return _tidy_bound(value if value == float("inf") else round(value, digits))
+
+    return "; ".join(f"({bound(a)}, {bound(b)})" for a, b in windows)

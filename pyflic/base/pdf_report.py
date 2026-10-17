@@ -189,6 +189,16 @@ def _facet_description(experiment: Experiment) -> str:
     etype = getattr(experiment, "experiment_type", None)
     if getattr(etype, "data_derived_facets", False):
         return (f"{' / '.join(labels)} — split at each chamber group's own training end")
+    from .program_facets import CLOCK_SCHEDULE_NOTE, SOURCE_LABELS, is_program_source
+
+    source = getattr(experiment, "facet_source", "cutoffs")
+    if is_program_source(source):
+        ## Windows differ by DFM, so the labels (Paradigm names) are the Facets.
+        by_clock = any(CLOCK_SCHEDULE_NOTE in line for line in experiment.facet_notes())
+        clock = ("; DFMs without recorded Program Intervals laid out by the "
+                 "program's clock schedule, approximate" if by_clock else "")
+        return (f"{' · '.join(labels) or 'none'} — {SOURCE_LABELS[source]}, each "
+                f"DFM's own (facet_source: {source}){clock}")
     windows = experiment.facet_windows()
     if not windows:
         return "none (whole recording)"
@@ -425,9 +435,10 @@ def _qc_blocks(experiment: Experiment, qc: dict) -> list[Any]:
 def _summary_frames(experiment: Experiment, options: ReportOptions
                     ) -> tuple[pd.DataFrame, list[tuple[str, pd.DataFrame]], str | None]:
     """``(rows for the dot plots, [(phase, rows)] for the statistics, the
-    panel column)`` — per Facet when the experiment has them."""
+    panel column)`` — per Facet when the experiment has them, grouped by the
+    Facet label (Program Facets have no windows shared by every DFM)."""
     facet = pd.DataFrame()
-    if experiment.facet_windows():
+    if experiment.facet_windows() or getattr(experiment, "facet_source", "cutoffs") != "cutoffs":
         facet = experiment.feeding_summary_facet(transform_licks=options.transform_licks)
     if facet is not None and not facet.empty and "Facet" in facet.columns:
         labels = list(dict.fromkeys(facet["Facet"].astype(str)))
