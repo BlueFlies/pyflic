@@ -365,21 +365,25 @@ well (that is the physical position, which varies per DFM).
 
 **Training**:
 The opening phase of a Progressive Ratio recording in which the Paired fly's
-feeding at the Sucrose Well always turns the light on (pure closed loop). The
-firmware marks it **per well**: a raw sample above 40000 means that well is
-still in training, and its true value is the raw value minus 65536. A well's
-**training end** is the last minute its own column is flagged; every well
-reads its own column, and the four wells of a Chamber Group are expected to
-clear together, because the group is trained as a unit. The **group's**
-training end is the Sucrose Well (well A) of its Paired Chamber; any other
-well of the group that clears at a different minute, or never clears, is a
-per-well QC warning, never a load error. Training end varies
-between Chamber Groups (it is behaviour-contingent), so it is a data-derived
-per-group time, never a fixed-minute Facet cutoff. The **Test** phase is
-everything after it, and Progressive Ratio time axes run from training end,
-not from the start of the recording.
-_Avoid_: acclimation, baseline period, phase 1, conditioning (the light is
-conditioned on feeding, but "conditioning" is not the protocol's word).
+feeding at the Sucrose Well always turns the light on (pure closed loop). How
+the recording says so depends on its **Generation**. Generation 1 marks it
+**per well** inside the signal: a raw sample above 40000 means that well is
+still in training, and its true value is the raw value minus 65536; a well's
+**training end** is the last minute its own column is flagged, the four wells
+of a Chamber Group are expected to clear together, and a well that clears at
+a different minute or never clears is a per-well QC warning, never a load
+error. Generation 3 reports it as the Paired Sucrose Well's **Phase**: `A`
+(the firmware's **Acclimation**) while Training lasts, `M` after. The
+**group's** training end is always the Sucrose Well (well A) of its Paired
+Chamber. Training end varies between Chamber Groups (it is
+behaviour-contingent), so it is a data-derived per-group time, never a
+fixed-minute Facet cutoff. The **Test** phase is everything after it, and
+Progressive Ratio time axes run from training end, not from the start of the
+recording.
+_Avoid_: acclimation as pyflic's word for it (it is the firmware's; say
+Training in prose and Phase `A` of the data), baseline period, phase 1,
+conditioning (the light is conditioned on feeding, but "conditioning" is not
+the protocol's word).
 
 **Paired-Yoked Difference**:
 The within-Chamber-Group contrast — Paired minus Yoked — for a metric within
@@ -413,12 +417,16 @@ firmware decides from its own reading of the Paired chamber's Sucrose Well
 *during* the recording; pyflic counts licks *afterwards*, from the baselined
 signal, so the two can disagree, and the **light QC** exists to measure that.
 A Light Event is credited with the Sucrose Well licks from the end of the
-previous Light Event to the end of its own — the licks that earned it. The
-per-event table is the Paired chamber's breaking-point table, the **Light
-Event Ledger** (`pr_light_events.csv`), whose `Counted` column marks the
-events the **Breaking Point** holds.
+previous Light Event to the end of its own — the licks that earned it. On a
+Generation-1 recording it is read from the light's onset in `OptoCol1`; on
+Generation 3 it is the Sucrose Well's own **Activation**, read from its
+Activations count. The per-event table is the Paired chamber's breaking-point
+table, the **Light Event Ledger** (`pr_light_events.csv`), whose `Counted`
+column marks the events the **Breaking Point** holds.
 _Avoid_: light period (that is the lit interval, not its onset), trigger
-(which names the cause the light QC is testing, not the event).
+(which names the cause the light QC is testing, not the event), activation
+(the firmware's word for one Well's own on-period; a Light Event is the
+group's).
 
 **Lick-free Light Event**:
 A Light Event credited with no Sucrose Well licks at all, and with no Sucrose
@@ -497,8 +505,11 @@ _Avoid_: persistence (alone), latency, time to stop.
 **Opto Program**:
 The program the stand-alone MCU ran, read from the `Program.txt` it exports
 and the experimenter copies into `data/` (ADR-0015): per DFM, a threshold per
-well, the linkage, and per interval the frequency, pulse width, decay, delay
-and max-time-on, laid out over the run by its program type. The export is a
+well, the linkage, and the **Program Intervals** laid out over the run by
+the program type. A pre-4.0.0 export states each interval's frequency,
+pulse width, decay, delay and max-time-on, from which the paradigm is
+inferred; a 4.0.0 export names each interval's **Paradigm** and lists every
+Paradigm with its type and settings in a `Paradigms:` block. The export is a
 record of what ran; the authored `[General]` / `[DFM]` file is the MCU's
 input and is not read. Optional — without it the light QC runs with less
 knowledge — and one per recording.
@@ -515,11 +526,13 @@ _Avoid_: light group, circuit (informal), chamber group (a PR structure,
 which a Linkage Group need not match).
 
 **Trigger Well**:
-A well whose threshold is positive in some interval of the Opto Program, so
-its own signal can switch its Linkage Group's light on. A threshold of 0 keeps
-the group lit regardless (open loop); -1 never triggers. In a Progressive
-Ratio experiment the Trigger Well is the Paired chamber's Sucrose Well, which
-is how `paired_chambers` can be read from the program.
+A well whose threshold is a signal level in some Program Interval of the Opto
+Program, so its own signal can switch its Linkage Group's light on. A
+threshold of `On` (0 in a pre-4.0.0 export) keeps the well lit regardless
+(open loop); `Off` (-1) never triggers, and such a well runs no Paradigm of
+its own. In a Progressive Ratio experiment the Trigger Well is the Paired
+chamber's Sucrose Well, which is how `paired_chambers` can be read from the
+program.
 _Avoid_: active well, stimulated well (the whole group is lit).
 
 **Explained Light**:
@@ -540,7 +553,92 @@ interval's threshold. Contact the Emulated Trigger sees and pyflic does not —
 a well the firmware read as touched while the baselined signal was flat — is
 the drifting-baseline signature, and it names the likely cause of
 unexplained light. Approximate when the data begin after the baseline window.
+On a Generation-3 recording the firmware's decisions are recorded, so its
+Activations and Firmware Events take this role and nothing is emulated.
 _Avoid_: simulated firmware, firmware replay.
+
+**Generation**:
+Which shape of data file a DFM recording has, decided from the file itself
+once at load, because no file states its firmware or PyMCU version.
+Generation 1: 27 columns, written by PyMCU 3.x, Training carried as a flag
+inside the signal. Generation 2: 90 columns with every Paradigm column `NA`,
+written by PyMCU 4.0.0 from a DFM whose firmware is older than 4.0.0, so it
+has no Training information at all. Generation 3: 90 columns filled, from
+DFM firmware 4.0.0. A second axis beside the `version` (2 or 3) that the file
+name gives; every consumer that reads light or Training branches on it.
+_Avoid_: file version (that is the filename's), firmware version (not
+recorded), format.
+
+**Paradigm**:
+A named rule in the Opto Program that decides when a Well's LED turns on,
+with its **Paradigm type** (OpenLoop, ClosedLoop, FixedInterval, NonFeeding,
+ProgressiveRatio or FixedRatio) and settings, for example `PR10`. One
+Paradigm applies to all Wells of a DFM during a Program Interval; a
+Generation-3 row names the one in force. PyMCU's word, adopted as it defines
+it.
+_Avoid_: mode, schedule, inferring the paradigm from which settings are zero
+(the pre-4.0.0 export's way, which pyflic keeps only for Generation 1).
+
+**Program Interval**:
+One timed step of a DFM's Opto Program: its Paradigm, its dark setting and a
+threshold per well, in the order the program lists them. A Generation-3 row
+says which Program Interval, and which **Cycle** (pass through a Repeating or
+Circadian program), it was recorded under; `0` is the baseline before the
+first step reached the DFM. In pyflic's outputs the column is
+`ProgramInterval`, never bare `Interval`, which the binned tables already
+use for a time bin.
+_Avoid_: interval (ambiguous with the binned tables' time bin and with
+FixedInterval), step, stage.
+
+**Activation**:
+One LED on-period that a Well's **own** Paradigm starts: a closed-loop
+contact plus its hold, a fixed-length Activation earned under FixedInterval
+or a ratio Paradigm, an Acclimation Activation. The firmware counts them per
+Well for the whole recording, and light a Well receives through its Linkage
+Group adds nothing to its count, so a Yoked well shows light with zero
+Activations. PyMCU's word, adopted as it defines it; a Chamber Group's Light
+Event is the Activation of its Trigger Well.
+_Avoid_: reward (the stimulus can be aversive), light event (the group-level
+term), trigger.
+
+**Requirement** / **Progress**:
+Under a ratio Paradigm, the number of Firmware Events a Well must produce to
+earn its next Activation, and how many it has produced so far. Recorded per
+Well on every Generation-3 row; the Requirement an Activation met is the one
+on the row before the Activation was counted, because the firmware moves to
+the next Requirement in the same millisecond. Under FixedRatio the
+Requirement is constant; under ProgressiveRatio it follows the Paradigm's
+series (Arithmetic or Exponential).
+_Avoid_: lick threshold, ratio threshold, licks per event (pyflic's estimate,
+now a cross-check).
+
+**Firmware Event**:
+One feeding bout as the firmware counts it: contact above the Well's
+threshold, ended once the signal has stayed below it for the Event gap, and
+not started while the Well's own Activation is running. Ratio Paradigms and
+Acclimation count these. Visible on Generation 3 as a rise in Progress. A
+different detector from pyflic's feeding event (licks linked across the link
+gap) on the same signal; they agree in the main and differ at the edges, and
+the difference is a QC measure.
+_Avoid_: event (alone, ambiguous with pyflic's), lick, contact time.
+
+**Phase** / **Acclimation**:
+Where a Well is in its Paradigm: `A` during **Acclimation**, the firmware's
+opening run of N closed-loop Activations under a FixedInterval or ratio
+Paradigm, and `M` (Main) otherwise. Per Well, recorded on every Generation-3
+row; a Well with an `On` or `Off` threshold, or under a Paradigm without
+Acclimation, reads `M` throughout and says nothing about Training. In a
+Progressive Ratio experiment the Paired Sucrose Well's Acclimation **is**
+Training.
+_Avoid_: training (pyflic's PR-level word for the same span), stage, state.
+
+**Hold**:
+How long a closed-loop Activation keeps the LED on after contact ends: a
+ClosedLoop Paradigm's `HoldMs`, or the `ActivationMs` of a FixedInterval,
+ratio or Acclimation Activation. PyMCU retired "decay" for it; pyflic keeps
+`opto_default_decay_ms` as the constant's name for recordings without a
+program, and says Hold in new prose.
+_Avoid_: decay (in new prose), delay (that is Lockout or OnDelay).
 
 ### Cross-app
 
@@ -714,8 +812,10 @@ _Avoid_: manual, documentation, the docs, USAGE.
   end of the recording. Resolved as a rule plus a tolerance: each well reads
   its own column and the four *should* agree; the group's training end is the
   Paired Sucrose Well's; any other well disagreeing or never clearing is a
-  per-well QC warning, never a load error. Revisit if new firmware confirms
-  which behaviour is intended.
+  per-well QC warning, never a load error. Firmware 4.0.0 settled it: a
+  well with an `Off` threshold never shows Acclimation, so on Generation 3
+  only the Paired Sucrose Well carries Training and the other three wells
+  of the group read `M` from the start, which is no longer a QC note.
 - The R port's "configuration 1-4" conflated *which chamber of the group is
   Paired* with *which side the Sucrose Well is on*, and forced one position for
   all three groups of a DFM. Resolved: `paired_chambers:` names the Paired
@@ -738,6 +838,14 @@ _Avoid_: manual, documentation, the docs, USAGE.
   `pr_break_gap_min` ends the count, lick-free events are ignored, and a group
   still responding at the end of its Test window is **Censored**. The Yoked
   fly has no breaking point.
+
+- `Interval` would have named two different things: the binned tables' time
+  bin and the data file's Program step. Resolved: pyflic's outputs say
+  **Program Interval** (`ProgramInterval`) for the latter, and the firmware's
+  own words (Paradigm, Activation, Requirement, Progress, Phase, Acclimation,
+  Firmware Event) are adopted for every concept that is new with firmware
+  4.0.0, while Training and Light Event stay pyflic's names for the
+  Progressive Ratio ideas, each defined in terms of the other side's word.
 
 - "Lights on" was read as "the light answered the fly", with the firmware's
   own settings nowhere in pyflic. The first real dataset showed a group lit for

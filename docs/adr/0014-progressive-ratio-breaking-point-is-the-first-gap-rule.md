@@ -103,3 +103,22 @@ the first pause longer than `pr_break_gap_min` (Δt, default 120 minutes).
 - A Member analysed before this change has no `pr_breaking_point.csv`. The
   Project Report says so and asks for a re-run instead of deriving a number
   from `pr_light_qc.csv`, as it used to.
+
+## Addendum (2026-10-17): the recorded Requirement
+
+DFM firmware 4.0.0 records, on every row, the Requirement each well must meet
+and its Progress toward it (ADR-0016), so "the firmware's lick schedule is not
+recorded" no longer holds for a generation-3 recording. The rule above stays:
+the Breaking Point is still the count of lick-backed Activations before the
+first pause longer than the gap, because a Firmware Event with no pyflic lick
+is still the drifting-sensor signature. What changes is that the number is no
+longer an estimate: `pr_breaking_point.csv` gains `BreakRequirement`, the
+Requirement the last counted Activation met (read from the row before the
+row where `Activations` rises, since the firmware moves to the next
+Requirement in the same millisecond), and `FirmwareEvents`; the Light Event
+Ledger gains `Requirement`, `FirmwareEvents` and `Phase`. `LargestRequirement`
+is kept for generation 1 and equals `BreakRequirement` on generation 3. Under
+a FixedRatio Paradigm, new with 4.0.0, the same machinery runs with a constant
+`BreakRequirement`, and the Test window ends where the ratio Paradigm's run
+ends rather than at the end of the recording. The plan is
+`docs/v4-data-plan.md`.

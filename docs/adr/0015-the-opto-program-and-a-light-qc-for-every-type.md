@@ -130,3 +130,39 @@ Light*, *Emulated Trigger*.
   the per-DFM key already says the same thing at the level the fact lives.
 - **Read the authored program too.** Deferred until someone has only that
   file; it does not record what ran.
+
+## Addendum (2026-10-17): the 4.0.0 export, and judging by Paradigm type
+
+PyMCU 4.0.0 exports `Program.txt` in a second grammar (ADR-0016): a
+`Paradigms:` block naming each Paradigm with its type and every setting, and
+interval lines `(stamp) Dark|Lit, NAME, t1..t12, N min` whose thresholds are a
+level, `On` or `Off`. pyflic parses both grammars behind one API, with the
+old export's five numbers wrapped into a synthesised Paradigm. The decisions
+above change in three ways on a generation-3 recording:
+
+- **The rows are the schedule.** Each row names its Program Interval, Cycle
+  and Paradigm, so the clock-time schedule reconstruction is used only for
+  generation 1. The export omits Intervals past the duration and lists only
+  a Repeating program's first pass, so a row's Interval beyond the printed
+  lines is judged by its Paradigm name alone, and a name absent from the
+  program fails the group (the wrong file).
+- **Explained Light by type.** ClosedLoop as before with `HoldMs` as the hold
+  and `MaxOnMs` as the cut-off; FixedInterval and the two ratio types explain
+  an Activation's whole `ActivationMs` of light when the trigger well had a
+  lick or touch within the tolerance of its onset; Acclimation rows follow
+  the ClosedLoop rule with `ActivationMs` as the hold; NonFeeding is not
+  judged by Explained Light but for light that stayed on through feeding;
+  OpenLoop and `On` wells get the lit-fraction check only. Lit time is
+  attributed to Activations exactly, from the Activations increments and
+  `OnMs`, and the thresholds are the same for every type.
+- **The Emulated Trigger is not run.** The firmware's Activations and
+  Firmware Events (rises in Progress) are its decisions, recorded; an
+  Activation or Firmware Event with no pyflic lick or touch at the trigger
+  well is the drifting-baseline signature directly. The emulation stays for
+  generation 1.
+
+Five new checks (broken yoking, a Paradigm name not in the program, an
+Acclimation count that does not match the Paradigm's, Firmware Events that
+disagree with pyflic's events, and lost, late or unknown-instruction rows)
+with five new constants, and a `Role` column for every optogenetic
+experiment, are specified in `docs/v4-data-plan.md`.
