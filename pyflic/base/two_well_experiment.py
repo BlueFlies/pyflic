@@ -5,10 +5,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Sequence
 
+import numpy as np
 import pandas as pd
 
 from .dfm import DFM
 from .experiment import Experiment
+
+#: The simultaneous-feeding columns also reported before the dual-feeding
+#: correction, under :data:`PRE_SUFFIX` (decision 23 of ``docs/v4-data-plan.md``).
+SIMULTANEOUS_PRE_COLUMNS: tuple[str, ...] = ("Both", "MaxMinSignalAtBoth", "HigherInCol1AtBoth")
+PRE_SUFFIX = "_pre"
 
 
 @dataclass(slots=True)
@@ -62,13 +68,23 @@ class TwoWellExperiment(Experiment):
     # ------------------------------------------------------------------
 
     def _simultaneous_feeding_matrix_df(self, dfm: DFM) -> pd.DataFrame:
+        """Per chamber, the samples licked at each well and at both at once,
+        after the dual-feeding correction (the licks the analysis counts),
+        then the at-both columns before it, from ``dfm.lick_matrix``.  With
+        the correction off the two agree; with it on, the ``_pre`` columns
+        are the cross-talk the correction removed."""
         mat = dfm.simultaneous_feeding_matrix()
         n = int(dfm.params.chamber_sets.shape[0])
-        return pd.DataFrame(
+        frame = pd.DataFrame(
             mat,
             index=[f"Chamber{i}" for i in range(1, n + 1)],
             columns=["Licks1", "Licks2", "Both", "MaxMinSignalAtBoth", "HigherInCol1AtBoth"],
         )
+        pre = dfm.lick_matrix
+        for k, column in enumerate(SIMULTANEOUS_PRE_COLUMNS, start=2):
+            frame[column + PRE_SUFFIX] = (np.nan if pre is None
+                                          else np.asarray(pre, dtype=float)[:n, k])
+        return frame
 
     def compute_qc_results(
         self,

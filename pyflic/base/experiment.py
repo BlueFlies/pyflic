@@ -480,7 +480,10 @@ class Experiment:
         for n, (dfm_id, r) in enumerate(qc.items(), 1):
             print(f"  DFM {dfm_id}  ({n}/{n_total})...", flush=True)
 
-            integrity = r["integrity"]
+            ## One row of numbers; the gaps and the Paradigm sequence are lists,
+            ## and the integrity text lists them.
+            integrity = {k: v for k, v in r["integrity"].items()
+                         if k not in ("lost_record_gaps", "paradigm_sequence")}
             pd.DataFrame([integrity]).to_csv(
                 dir_integrity / f"DFM{dfm_id}_integrity_report.csv", index=False
             )
@@ -536,6 +539,14 @@ class Experiment:
             self.opto.write_figures(opto_dir)
             for line in self.opto.lines():
                 print(f"    {line}", flush=True)
+
+        ## The Program timeline of every DFM with a Paradigm state or a
+        ## Program.txt section (qc/program/).
+        from . import program_timeline
+
+        if program_timeline.timeline_dfms(self):
+            print("  Program timeline...", flush=True)
+            program_timeline.write(self, out / program_timeline.QC_SUBDIR)
 
         print(f"  QC complete — {n_total} DFM(s) processed.", flush=True)
         self.qc_report_dir = out
@@ -648,6 +659,8 @@ class Experiment:
                       f"({GENERATION_DESCRIPTIONS.get(dfm.generation, 'unknown')})\n")
             buf.write(f"- light seconds from: {dfm.light_source}\n")
             buf.write(f"- raw rows: {len(dfm.raw_df)}\n")
+            for note in getattr(dfm, "load_notes", ()):
+                buf.write(f"- load note: {note}\n")
             if dfm.source_files:
                 buf.write("- source_files:\n")
                 for p in dfm.source_files:
@@ -2790,6 +2803,18 @@ class Experiment:
                 print(f"  Done → {opto_paths['opto_light_qc'].parent}", flush=True)
             for line in self.opto.lines():
                 print(f"  {line}", flush=True)
+
+        ## The Program timeline of each generation-3 DFM (qc/program/; only
+        ## generation 3 has a Paradigm state): write_qc_reports drew it
+        ## already unless QC was skipped.
+        from . import program_timeline
+
+        timeline_ids = [d for d in sorted(self.dfms) if self.dfms[d].paradigm is not None]
+        if timeline_ids and self.qc_dir is not None:
+            if skip_qc:
+                program_timeline.write(self, dfm_ids=timeline_ids)
+            opto_paths.update({f"program_timeline_dfm{d}": program_timeline.timeline_path(
+                self.qc_dir, d) for d in timeline_ids})
 
         step += 1
         print(f"\n[{step}/{n_steps}] Experiment summary...", flush=True)

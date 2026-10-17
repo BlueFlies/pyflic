@@ -22,8 +22,11 @@ Workflow
 2. **Feeding Summary tab** — after loading a table of all chambers is shown.
    The "Excl." checkbox in column 0 marks a chamber for exclusion.
 3. **DFM N tabs** — one tab per DFM.  The left side shows the usual QC
-   sub-tabs (Integrity, Sim. Feeding, Bleeding, Raw Signal …).  The right
-   side shows a narrow "Exclude Wells" panel with one checkbox per well (1-12).
+   sub-tabs (Integrity, with ``Messages.csv`` under the integrity text, Sim.
+   Feeding, Bleeding, Raw Signal …, and Program — the Program timeline and
+   each well's Paradigm state — for a DFM with firmware 4.0.0 data or a
+   ``Program.txt`` section).  The right side shows a narrow "Exclude Wells"
+   panel with one checkbox per well (1-12).
 
 4. **Opto Light QC tab** — for an optogenetic experiment only: the
    optogenetic light QC per Linkage Group, the reasons behind each verdict,
@@ -749,6 +752,92 @@ class FeedingSummaryTab(QtWidgets.QWidget):
 
 
 # ───────────────────────────────────────────────────────────────────────────
+# Per-DFM Program sub-tab  (the Program timeline + the per-well state)
+# ───────────────────────────────────────────────────────────────────────────
+
+class _ProgramPanel(QtWidgets.QWidget):
+    """A DFM tab's **Program** sub-tab: the Program timeline
+    (:func:`pyflic.base.program_timeline.plot_dfm`) above each Well's state
+    at the end of the loaded range (:func:`~pyflic.base.program_timeline.well_table`).
+
+    Computed from the loaded experiment, not read from ``qc/``, and drawn the
+    first time the sub-tab is shown: a viewer with many DFMs does not draw
+    every timeline at load.  :meth:`refresh` after a Params recompute redraws
+    it from the DFMs the recompute put in place.
+    """
+
+    def __init__(self, exp, dfm_id: int, parent: QtWidgets.QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._exp = exp
+        self._dfm_id = int(dfm_id)
+        self._stale = True
+        root = QtWidgets.QVBoxLayout(self)
+        root.setContentsMargins(8, 8, 8, 8)
+        splitter = QtWidgets.QSplitter(Qt.Orientation.Vertical)
+        figure_widget = QtWidgets.QWidget()
+        self._figure_host = QtWidgets.QVBoxLayout(figure_widget)
+        self._figure_host.setContentsMargins(0, 0, 0, 0)
+        table_widget = QtWidgets.QWidget()
+        self._table_host = QtWidgets.QVBoxLayout(table_widget)
+        self._table_host.setContentsMargins(0, 4, 0, 0)
+        splitter.addWidget(figure_widget)
+        splitter.addWidget(table_widget)
+        splitter.setSizes([520, 300])
+        root.addWidget(splitter, 1)
+        self.table: _DfTableWidget | None = None
+
+    def showEvent(self, event) -> None:  # noqa: N802 - Qt's name
+        super().showEvent(event)
+        self.ensure_rendered()
+
+    def refresh(self) -> None:
+        """Redraw from the experiment as it now stands — now if the sub-tab
+        is showing, else the next time it is."""
+        self._stale = True
+        if self.isVisible():
+            self.ensure_rendered()
+
+    def ensure_rendered(self) -> None:
+        if not self._stale:
+            return
+        self._stale = False
+        from . import program_timeline
+
+        for host in (self._figure_host, self._table_host):
+            while host.count():
+                item = host.takeAt(0)
+                if item.widget():
+                    item.widget().deleteLater()
+        self.table = None
+        try:
+            import io
+
+            from PyQt6.QtGui import QPixmap
+
+            from .ui import ZoomableImageView
+
+            buf = io.BytesIO()
+            program_timeline.plot_dfm(self._exp, self._dfm_id).savefig(
+                buf, format="png", dpi=110, facecolor="white")
+            pixmap = QPixmap()
+            pixmap.loadFromData(buf.getvalue())
+            figure: QtWidgets.QWidget = ZoomableImageView(pixmap)
+        except Exception as exc:  # noqa: BLE001 - a view must not take the window down
+            figure = QtWidgets.QLabel(f"Could not draw the Program timeline: {exc}")
+        self._figure_host.addWidget(figure)
+        try:
+            frame = program_timeline.well_table(self._exp, self._dfm_id)
+        except Exception as exc:  # noqa: BLE001
+            self._table_host.addWidget(QtWidgets.QLabel(f"Could not compute the wells: {exc}"))
+            return
+        self._table_host.addWidget(QtWidgets.QLabel(
+            "<b>Each well at the end of the loaded range</b> — Activations and LitSec "
+            "over the whole range"))
+        self.table = _DfTableWidget(frame.astype(object).where(frame.notna(), "—"))
+        self._table_host.addWidget(self.table)
+
+
+# ───────────────────────────────────────────────────────────────────────────
 # Per-DFM tab  (QC sub-tabs + exclusion sidebar)
 # ───────────────────────────────────────────────────────────────────────────
 
@@ -757,7 +846,11 @@ class DfmTab(QtWidgets.QWidget):
     Displays QC sub-tabs for a single DFM, plus an "Exclude Wells" sidebar.
 
     The QC side shows whatever pre-computed files are present in *qc_dir*
-    (integrity, simultaneous feeding, bleeding, signal plots).
+    (integrity, simultaneous feeding, bleeding, signal plots).  Given the
+    loaded experiment (*exp*), the Integrity sub-tab also lists the
+    recording's ``Messages.csv`` for this DFM and the MCU, and a DFM with a
+    Paradigm state (generation 3) or a ``Program.txt`` section gets a
+    **Program** sub-tab (:class:`_ProgramPanel`), computed from *exp*.
 
     The sidebar has checkboxes for wells 1-12 (checked = excluded).
 
@@ -774,9 +867,16 @@ class DfmTab(QtWidgets.QWidget):
         qc_dir: Path,
         excluded_wells: list[int] | None = None,
         parent: QtWidgets.QWidget | None = None,
+        *,
+        exp=None,
     ) -> None:
         super().__init__(parent)
         self._dfm_id = dfm_id
+        ## The loaded experiment, when there is one: the Program sub-tab and
+        ## the Integrity sub-tab's messages are computed from it, not read
+        ## from qc/.
+        self._exp = exp
+        self._program_panel: _ProgramPanel | None = None
         self._checkboxes: dict[int, QtWidgets.QCheckBox] = {}
         self._build(dfm_id, qc_dir, excluded_wells or [])
 
@@ -815,8 +915,11 @@ class DfmTab(QtWidgets.QWidget):
         integ_outer = QtWidgets.QVBoxLayout(integ_widget)
         integ_outer.setContentsMargins(8, 8, 8, 8)
 
+        messages_panel = self._messages_widget(dfm_id)
         if not integ_csv.exists() and not integ_txt.exists():
             integ_outer.addWidget(QtWidgets.QLabel("No integrity files found."))
+            if messages_panel is not None:
+                integ_outer.addWidget(messages_panel, 1)
         else:
             splitter = QtWidgets.QSplitter(Qt.Orientation.Vertical)
             integ_outer.addWidget(splitter)
@@ -841,7 +944,11 @@ class DfmTab(QtWidgets.QWidget):
             else:
                 txt.setPlainText("Integrity text report not found.")
             splitter.addWidget(txt)
-            splitter.setSizes([100, 330])
+            if messages_panel is not None:
+                splitter.addWidget(messages_panel)
+                splitter.setSizes([100, 330, 200])
+            else:
+                splitter.setSizes([100, 330])
 
         tabs.addTab(integ_widget, "Integrity")
 
@@ -910,6 +1017,52 @@ class DfmTab(QtWidgets.QWidget):
             ("Cumulative Licks", "cumulative_licks", f"DFM{dfm_id}_cumulative_licks.png"),
         ]:
             tabs.addTab(_png_widget(self._resolve(qc_dir, subdir, suffix)), label)
+
+        # ── Program (a Paradigm state or a Program.txt section) ────────
+        self._program_panel = None
+        if self._exp is not None:
+            from .program_timeline import has_timeline
+
+            if has_timeline(self._exp, dfm_id):
+                self._program_panel = _ProgramPanel(self._exp, dfm_id)
+                tabs.addTab(self._program_panel, "Program")
+
+    def _messages_widget(self, dfm_id: int) -> QtWidgets.QWidget | None:
+        """The recording's ``Messages.csv`` for this DFM and the MCU (DFM 0),
+        or ``None`` when there is no loaded experiment or no such file."""
+        from . import messages
+
+        ## Beside the DFM's own data files, where integrity_report reads it.
+        dfms = getattr(self._exp, "dfms", None)
+        files = getattr(dfms.get(dfm_id), "source_files", None) if isinstance(dfms, dict) else None
+        if not files or messages.find_messages(Path(files[0]).parent) is None:
+            return None
+        data_dir = Path(files[0]).parent
+        try:
+            frame = messages.for_dfm(messages.read(data_dir), dfm_id)
+        except Exception as exc:  # noqa: BLE001 - a view must not take the window down
+            return QtWidgets.QLabel(f"Could not read {messages.MESSAGES_FILENAME}: {exc}")
+        panel = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(panel)
+        layout.setContentsMargins(0, 4, 0, 0)
+        n_errors = len(messages.errors(frame))
+        layout.addWidget(QtWidgets.QLabel(
+            f"<b>{messages.MESSAGES_FILENAME}</b> — DFM {dfm_id} and the MCU (DFM 0): "
+            f"{len(frame)} message(s), {n_errors} error(s)"))
+        if not frame.empty:
+            shown = frame.assign(Time=frame["Time"].dt.strftime("%m/%d/%Y %H:%M:%S.%f")
+                                 .str[:-3].fillna(""))
+            shown = shown.astype(object).where(shown.notna(), "")
+            layout.addWidget(_DfTableWidget(shown))
+        else:
+            layout.addStretch(1)
+        return panel
+
+    def refresh_program(self) -> None:
+        """Recompute the Program sub-tab from the experiment as it now
+        stands (after a Params recompute replaced the DFMs)."""
+        if self._program_panel is not None:
+            self._program_panel.refresh()
 
     def _build_exclusion_panel(self, excluded_wells: list[int]) -> Card:
         panel = Card("Exclude Wells", Category.QC)
@@ -1571,7 +1724,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 for c in excl_chambers
                 for w in self._wells_for_chamber(dfm_id, c)
             ]
-            tab = DfmTab(dfm_id, qc_dir, excluded_wells=excl_wells)
+            tab = DfmTab(dfm_id, qc_dir, excluded_wells=excl_wells, exp=exp)
             tab.exclusion_changed.connect(self._on_dfm_exclusion_changed)
             tab._tabs.currentChanged.connect(self._on_subtab_changed)
             self._dfm_tab_widgets[dfm_id] = tab
@@ -1665,6 +1818,8 @@ class MainWindow(QtWidgets.QMainWindow):
         ## The opto light QC is computed from the licks, so it moves with them.
         if self._opto_tab is not None:
             self._opto_tab.refresh()
+        for tab in self._dfm_tab_widgets.values():
+            tab.refresh_program()
         self.statusBar().showMessage(
             "Recomputed feeding/tasting with new parameters"
             + (" and the opto light QC" if self._opto_tab is not None else "")

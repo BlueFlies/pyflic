@@ -375,6 +375,25 @@ def run_experiment_script(
             df.to_csv(out, index=False)
             ctx.log(f"Wrote: {out}  ({len(df)} rows)")
 
+        elif action == "plot_program_timeline":
+            from ..program_timeline import plot_dfm, timeline_dfms, timeline_path
+
+            ## Gated like the opto light QC, here rather than in _OPTO_GATED
+            ## so the action stays one block.
+            if not getattr(exp, "is_optogenetic", False):
+                ctx.log(f"[Skip] {action} needs an optogenetic experiment (optogenetics: "
+                        f"yes, or a data/Program.txt or light data).")
+                continue
+            ids = timeline_dfms(exp)
+            if not ids:
+                ctx.log("No DFM has a Program.txt section or firmware 4.0.0 Paradigm "
+                        "columns: no Program timeline to draw.")
+            bs = float(step.get("binsize", 10.0))
+            for dfm_id in ids:
+                fig = plot_dfm(exp, dfm_id, binsize_min=bs)
+                _save_figure(fig, timeline_path(exp.qc_dir, dfm_id), ctx.log)
+                figures.append((f"Program timeline — DFM {dfm_id}", fig))
+
         elif action == "pdf_report":
             from ..pdf_report import write_experiment_report
 

@@ -612,6 +612,24 @@ ACTIONS: list[Action] = [
               "responding when its Test window ended) as a tick.  Writes "
               "analysis/pr_still_responding.png.",
     ),
+    Action(
+        action="plot_program_timeline",
+        label="Program timeline",
+        blurb="Per DFM: the Program Intervals, and each well's Phase, Activations and light.",
+        icon="plot", category=Category.QC, produces="figure",
+        params=[
+            Param(key="binsize", label="Bin size", type="float", unit="min",
+                  note="Width of the bins of each well's light heat strip.", default=10.0),
+        ],
+        notes="A band of Program Intervals coloured by Paradigm type and labelled by "
+              "Paradigm name (with the Cycle of a repeating program), then one lane per "
+              "well: its Acclimation (Phase A) shaded, its Activations as ticks and the "
+              "share of each bin its LED was on, the chamber's Role in the label.  A "
+              "firmware 4.0.0 recording draws it from its own Paradigm columns; an older "
+              "one needs data/Program.txt, laid out by clock time, and shows OptoCol1 only.  "
+              "Runs on any optogenetic experiment.  Writes "
+              "qc/program/program_timeline_dfm<id>.png.",
+    ),
 ]
 
 _ACTION_INDEX: dict[str, Action] = {a.action: a for a in ACTIONS}

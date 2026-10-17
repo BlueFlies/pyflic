@@ -240,3 +240,101 @@ def test_a_params_recompute_refreshes_the_verdicts(opto_window):
                               "tasting_minimum": 300.0, "tasting_maximum": 400.0})
     assert tab._table.item(0, verdict).text() == "failed: unexplained light"
     assert "opto light QC" in win.statusBar().currentMessage()
+
+
+# ---------------------------------------------------------------------------
+# The Program sub-tab and Messages.csv (docs/v4-data-plan.md, stream 6)
+# ---------------------------------------------------------------------------
+
+def _load_quietly(root):
+    import contextlib
+    import io
+
+    from pyflic.base.yaml_config import load_experiment_yaml
+
+    with contextlib.redirect_stdout(io.StringIO()):
+        return load_experiment_yaml(root, parallel=False, use_disk_cache=False)
+
+
+@pytest.fixture
+def v4_window(app, tmp_path):
+    """The viewer on a firmware 4.0.0 recording of two DFMs, DFM 1 with a gap
+    PyMCU logged in Messages.csv."""
+    import yaml
+
+    from v4_fixtures import fixed_ratio_spec, write_v4_recording
+
+    root = tmp_path / "v4"
+    spec = fixed_ratio_spec(minutes=6.0, dfm_ids=(1, 2))
+    write_v4_recording(root / "data", spec, index_gaps={1: [(500, 4)]})
+    params = {"feeding_threshold": 20, "feeding_minimum": 10, "tasting_minimum": 5,
+              "tasting_maximum": 20, "samples_per_second": 5, "pi_direction": "left"}
+    cfg = {"global": {"chamber_layout": "two_well", "transform_licks": False,
+                      "params": params},
+           "dfms": [{"id": d, "chambers": {c: "Ctrl" for c in range(1, 7)}} for d in (1, 2)]}
+    (root / "flic_config.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False))
+    win = qc_viewer.MainWindow(root, experiment=_load_quietly(root))
+    yield win
+    win.close()
+
+
+def _sub_tabs(tab) -> list[str]:
+    return [tab._tabs.tabText(i) for i in range(tab._tabs.count())]
+
+
+def test_a_generation_3_member_gets_the_program_sub_tab(v4_window):
+    from pyflic.base.program_timeline import WELL_TABLE_COLUMNS
+    from pyflic.base.ui import ZoomableImageView
+
+    win = v4_window
+    for dfm_id in (1, 2):
+        assert _sub_tabs(win._dfm_tab_widgets[dfm_id])[-1] == "Program"
+    ## Drawn the first time it is shown, not at load.
+    panel = win._dfm_tab_widgets[1]._program_panel
+    assert panel.table is None
+    win.show()
+    win._tabs.setCurrentWidget(win._dfm_tab_widgets[1])
+    win._dfm_tab_widgets[1]._tabs.setCurrentWidget(panel)
+    QApplication.processEvents()
+    table = panel.table
+    assert table is not None and table.rowCount() == 12
+    assert [table.horizontalHeaderItem(c).text() for c in range(table.columnCount())] == \
+        list(WELL_TABLE_COLUMNS)
+    assert isinstance(panel._figure_host.itemAt(0).widget(), ZoomableImageView)
+    ## A Params recompute redraws it from the DFMs the recompute put in place.
+    win._on_params_recompute({"feeding_threshold": 25.0})
+    QApplication.processEvents()
+    assert panel.table is not None and panel.table is not table
+
+
+def test_the_integrity_sub_tab_lists_the_dfms_messages(v4_window):
+    from PyQt6.QtWidgets import QLabel
+
+    tab = v4_window._dfm_tab_widgets[1]
+    integrity = tab._tabs.widget(_sub_tabs(tab).index("Integrity"))
+    heads = [w.text() for w in integrity.findChildren(QLabel) if "Messages.csv" in w.text()]
+    ## DFM 1's gap error and the MCU's start and end; nothing of DFM 2's.
+    assert heads == ["<b>Messages.csv</b> — DFM 1 and the MCU (DFM 0): 3 message(s), "
+                     "1 error(s)"]
+    table = integrity.findChildren(qc_viewer._DfTableWidget)[-1]
+    assert table.rowCount() == 3
+    other = v4_window._dfm_tab_widgets[2]
+    integrity = other._tabs.widget(_sub_tabs(other).index("Integrity"))
+    assert any("2 message(s), 0 error(s)" in w.text() for w in integrity.findChildren(QLabel))
+
+
+def test_a_generation_1_member_has_a_program_sub_tab_only_with_a_program(app, tmp_path):
+    from opto_fixtures import make_opto_dir
+
+    bare = make_opto_dir(tmp_path / "bare", program=None)
+    win = qc_viewer.MainWindow(bare, experiment=_load_quietly(bare))
+    try:
+        assert "Program" not in _sub_tabs(win._dfm_tab_widgets[1])
+    finally:
+        win.close()
+    rig = make_opto_dir(tmp_path / "rig")
+    win = qc_viewer.MainWindow(rig, experiment=_load_quietly(rig))
+    try:
+        assert _sub_tabs(win._dfm_tab_widgets[1])[-1] == "Program"
+    finally:
+        win.close()
