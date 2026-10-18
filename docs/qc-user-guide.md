@@ -510,9 +510,10 @@ to every two-well type that sets them:
 | `exclude_failed_opto_chambers` | its linkage group failed the optogenetic light QC (sections 6 and 7) | off | off |
 
 *Off* means the cutoff runs only when the design sets a value. In the
-Config Editor and the Project Design dialog each cutoff has a **Use** box: a
-blank value keeps the type's default, and an unticked box turns the cutoff
-off even where the type sets one.
+Config Editor and the Project Design dialog each cutoff has a **Use** box:
+ticked with a blank value, it keeps the type's default; ticked with a number,
+it uses that number; unticked, it turns the cutoff off even where the type
+sets one.
 
 A Progressive Ratio experiment adds its own group-level rules (section 8).
 Set the cutoffs in the Project's design so that every member is judged by

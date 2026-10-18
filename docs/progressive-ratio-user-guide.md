@@ -98,12 +98,12 @@ pyflic reads the shape of each DFM's file and calls it its **generation**:
   told from a progressive one, and pyflic warns loudly (*firmware 4.0.0
   recording without Program.txt*).
 
-A firmware 4.0.0 program opens with Training in one of two ways: a ratio
+A firmware 4.0.0 program trains the flies in one of two ways: a ratio
 Paradigm whose `Acclimation` setting gives each fly a set number of
 closed-loop light events first, or a ClosedLoop Paradigm run before the
-ratio Paradigm. Either way that opening is Training. The second needs an
-Experiment Type of your own, because the shipped one does not take a
-ClosedLoop interval (below).
+ratio Paradigm. Either way, pyflic reads that opening as Training. The
+second needs an Experiment Type of your own, because the shipped one does
+not take a ClosedLoop interval (below).
 
 ### The Experiment Type
 
