@@ -423,7 +423,9 @@ folder and apply it; pyflic writes its rows into each member's file. See
 ### Automatically, by the design's cutoffs
 
 Basic analysis, and the Hub's Run analysis, apply the design's `constants:`
-cutoffs once, before writing any summary. The defaults depend on the experiment type:
+cutoffs once, before writing any summary. The defaults depend on the experiment type
+(a type your lab built states its own), and the median-duration and events cutoffs apply
+to every two-well type that sets them:
 
 | Setting | Removes a chamber when | Custom | Hedonic, Progressive Ratio |
 |---|---|---|---|

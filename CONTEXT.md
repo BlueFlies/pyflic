@@ -859,8 +859,9 @@ _Avoid_: manual, documentation, the docs, USAGE.
   both: `plot_well_comparison` needs a Chamber Layout, `plot_breaking_point`
   needs the Ratio **Analysis Module**.
 - An **Experiment Type** decides what the **QC**, **Analysis** and **Plot
-  Sets** offer: its Analysis Modules' items, the built-in plots it picks and
-  its own Plot Specs. The **Selection** decides which of those a run includes.
+  Sets** offer beyond what its layout and light allow: its Analysis Modules'
+  items. Its report shows the built-in Plot Specs it picks and its own. The
+  **Selection** decides which of the offered items a run includes.
 - An **Experiment Directory** holds one or more **DFMs**; a **DFM** holds
   **Chambers** whose count the **Chamber Layout** derives (12 single-well, 6
   two-well); each **Chamber** carries at most one **Treatment**. A DFM is

@@ -44,9 +44,9 @@ dfms:
 
 Three things are doing the work:
 
-- **The assay.** Either name an `experiment_type` — `Hedonic` or `ProgressiveRatio` — which
-  fixes the chamber layout for you, or leave it out (a **Custom** experiment) and say
-  `chamber_layout: single_well` or `two_well`. See
+- **The assay.** Either name an `experiment_type` — `Hedonic`, `ProgressiveRatio`, or one
+  your lab built — which fixes the chamber layout for you, or leave it out (a **Custom**
+  experiment) and say `chamber_layout: single_well` or `two_well`. See
   [Experiment types](concepts-experiment-types.md).
 - **The layout decides what a chamber is**: 12 one-well chambers per DFM, or 6 two-well
   ones. pyflic derives `chamber_size` from it; you never write that yourself.

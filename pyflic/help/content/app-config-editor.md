@@ -35,10 +35,13 @@ discards anything. Per-DFM overrides are how counterbalancing is set up; see
 
 **The Experiment Type owns the Chamber Layout.** Choose *Hedonic Feeding* or
 *Progressive Ratio* and the layout is fixed for you — shown, but not editable,
-because those assays are two-well by definition. Only a **Custom Experiment**
-chooses its own layout. The editor writes `chamber_layout:` for a Custom
-Experiment and `experiment_type:` for a typed one, and `params.chamber_size` for
-neither: it is derived from the layout, never stored.
+because those assays are two-well by definition. A **Custom Experiment**, or a
+lab type that leaves the layout open, chooses its own. The editor writes
+`experiment_type:` for any type but Custom, `chamber_layout:` when the type leaves
+the layout open, and `params.chamber_size` for neither: it is derived from the
+layout, never stored. **New type…** beside the list opens the
+[Experiment Type Editor](app-type-editor.md); saving a config whose type is one of
+your lab's writes the type beside it as `experiment_type.yaml`.
 
 **Chamber count follows the Chamber Layout.** Single-well gives 12 chambers per
 DFM; two-well gives 6. Change the layout and the chamber fields change with it —

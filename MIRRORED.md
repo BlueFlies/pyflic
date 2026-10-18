@@ -120,6 +120,17 @@ validation, the batch AI narrative, and the sheet-preview/decline switch.
   and its `textformat`-driven inspector changes were left alone; only
   `textformat.py` itself came across, for the Output log.
 
+* **Experiment Types are definitions a lab builds, not classes** (ADR-0019,
+  2026-10-18; originates here). Upstream's ADR-0001 keeps its types in code, as
+  pyflic did. Here a type is a yaml definition combining Analysis Modules, the
+  three shipped types are read-only definitions, a lab builds the rest in an
+  Experiment Type Editor, and the data carries a copy (`experiment_type.yaml`).
+  The cause is pyflic's own: optogenetic light, layout and controls multiplied
+  the assays past what a fixed set of types could name. The siblings: not
+  planned. The `ExperimentType` interface the shared surfaces call (`name`,
+  `display_name`, `chamber_layout`, `report_set`, `validate`) is unchanged, so a
+  later port would not disturb them.
+
 ## Keeping this honest
 
 When you copy something new across, add a row. When you edit a file marked

@@ -13,6 +13,7 @@ global:
   facet_source: ...                      # optional: cutoffs (default), program or program_cycles
   experimental_design_factors: { ... }   # optional
   well_names: { ... }                    # required by Hedonic and ProgressiveRatio
+  control_level: ...                     # under a type with a Treatment control
   omit: { ... }                          # optional: what Run QC, Run analysis and Generate plots leave out
 
 dfms:
@@ -43,14 +44,24 @@ normally holds only `dfms:` and its own `scripts:`; every `global:` key comes fr
 
 ## `global.experiment_type`
 
-The Experiment Type — `Hedonic` or `ProgressiveRatio`; omit it for a Custom Experiment,
-which states `chamber_layout: single_well` or `two_well` instead (two-well when omitted).
-A typed config states neither `chamber_layout` nor `params.chamber_size`: the type owns
-them. A Progressive Ratio config also says, per DFM, how its chambers form chamber groups:
+The Experiment Type — `Hedonic`, `ProgressiveRatio`, or a type your lab built in the
+[Experiment Type Editor](app-type-editor.md); omit it for a Custom Experiment, which states
+`chamber_layout: single_well` or `two_well` instead (two-well when omitted). A config whose
+type fixes the layout states neither `chamber_layout` nor `params.chamber_size`: the type
+owns them. A lab type is read from `experiment_type.yaml` beside the config (or beside
+`project.yaml`), which the editors write. When `data/Program.txt` runs light the type does
+not expect, the recording fails to load. A Progressive Ratio config also says, per DFM, how its chambers form chamber groups:
 `paired_chambers` for pairs, `chamber_groups: single` for single chambers, or neither when
 `data/Program.txt`'s linkage gives them (see [DFMs and chambers](config-dfms-chambers.md)).
 See
 [Experiment types](concepts-experiment-types.md).
+
+## `global.control_level`
+
+Under a type whose report leads with a **Treatment control**, the level of that factor
+every other level is compared with, for example `control_level: w1118`. It must be one of
+the factor's levels, and it is an error under a type without a Treatment control. See
+[Control comparisons](concepts-experiment-types.md#control-comparisons).
 
 ## `global.optogenetics`
 
@@ -126,8 +137,8 @@ The QC Viewer's **Auto Filter** and the Python API run the same removal on deman
 | Key | Applies to | Effect |
 |---|---|---|
 | `min_untransformed_licks_cutoff` | all experiment types | Remove a chamber if any of its wells has a lick count below this |
-| `max_med_duration_cutoff` | hedonic, progressive ratio | Remove a chamber if `MedDurationA` or `MedDurationB` is above this |
-| `max_events_cutoff` | hedonic, progressive ratio | Remove a chamber if `EventsA` or `EventsB` is above this |
+| `max_med_duration_cutoff` | every two-well type | Remove a chamber if `MedDurationA` or `MedDurationB` is above this |
+| `max_events_cutoff` | every two-well type | Remove a chamber if `EventsA` or `EventsB` is above this |
 
 An Experiment Type supplies its own defaults for these (Hedonic and Progressive Ratio set
 all three). A yaml number always wins over the default. A yaml `null` also wins and means

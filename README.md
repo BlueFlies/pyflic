@@ -9,7 +9,7 @@ pyflic is a complete port of the original R-based FLIC analysis pipeline (FLICFu
 - **Signal processing pipeline** -- baseline subtraction (running median), dual-threshold feeding detection, event linking, tasting detection, and preference index computation
 - **Batch / Project / Experiment structure** -- members of one design live in a Project whose `design:` section is the authority for their shared settings; a Batch runs one Project Script across many Projects unattended, finding them recursively so grouping folders are transparent
 - **Pooled analysis** -- member summaries stacked into a Combined Analysis, with pooled per-chamber tests beside a mixed model (DFM nested within Experiment)
-- **Experiment Types** -- a named assay (Hedonic, Progressive Ratio, or Custom) selects a chamber layout and constrains the facets, quality cutoffs, analyses, and report
+- **Experiment Types** -- a named assay (Hedonic, Progressive Ratio, Custom, or one a lab builds in the Experiment Type Editor from pyflic's Analysis Modules) selects a chamber layout, states the light it expects, and constrains the facets, quality cutoffs, analyses, and report
 - **Facets** -- a time window is a column, not a directory: one `analysis/` per experiment carries every phase
 - **YAML configuration** -- experiment structure, parameters, factorial designs, and two levels of automated scripting
 - **Graphical tools** -- a tile-strip analysis hub, config editor, QC viewer, and a project-level Plot Editor
@@ -214,12 +214,16 @@ The same topics are readable here on GitHub — they are ordinary markdown in
 ## Experiment types
 
 The Experiment Type (`experiment_type:`) names the assay; the chamber layout
-(`chamber_layout:`, `single_well` or `two_well`) is set apart from it (ADR-0007).
+(`chamber_layout:`, `single_well` or `two_well`) is set apart from it (ADR-0007). A type is
+a definition: pyflic ships three, and a lab builds its own in the Experiment Type Editor
+(`pyflic-types`) by combining Analysis Modules — Progressive Ratio, Hedonic, Paired and
+yoked, Light and dark — with the light it expects and the comparison its report leads with
+(ADR-0019). A lab type travels with the data as `experiment_type.yaml`.
 
 | Type | Chamber layout | Use case |
 |---|---|---|
-| `Custom` (the default) | `single_well` or `two_well` | Any design: feeding summary, preference index on two wells, and for an optogenetic recording the light QC and light behaviour of whatever Paradigms it ran (OpenLoop, ClosedLoop, FixedInterval, NonFeeding) |
-| `Hedonic` | `two_well` | Hedonic feeding with weighted duration analysis |
+| `Custom` (the default) | `single_well` or `two_well` | Any design, any light or none: feeding summary, preference index on two wells, and for an optogenetic recording the light QC and light behaviour of whatever Paradigms it ran |
+| `Hedonic` | `two_well` | Hedonic feeding with weighted duration analysis, without light |
 | `ProgressiveRatio` | `two_well` | Progressive or fixed ratio training and test, with breaking point detection, with or without yoked controls |
 
 ## Migrating from R
