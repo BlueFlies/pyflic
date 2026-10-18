@@ -991,6 +991,39 @@ Where the build departed from the plan, stream by stream.
 - **The config editor's Progressive Ratio card** gains a Groups choice:
   Pairs, Single chambers, or From Program.txt.
 
+**S1** (9c5025b):
+- **Checks judge per Paradigm.** Windows that ran the same Paradigm are
+  pooled within a group, and the fraction verdicts are judged on each
+  Paradigm's total. *Open loop not lit* stays per window.
+- ***Non-feeding dark*** starts the expected-lit time one record later,
+  because pyflic often misses a bout's last partial record. It judges only
+  once 10 s are expected lit (`MIN_EXPECTED_LIT_SEC`).
+- ***Interval started late*** discounts the first Interval's lead-in
+  (`LEAD_IN_SEC`, 5 s). PyMCU sends no instruction until its baseline is
+  taken, which measured 4.8 to 5.2 s. The schedule follows PyMCU's
+  `GetPosition`; Circadian programs follow the time of day.
+- **Pairing rules.**
+  - Lockout pairs need both onsets unoverlapped.
+  - *Contact without activation* counts the well free from any earlier
+    onset, and accepts an onset in the run's first row or the next.
+  - Activity is a lick or a tasting sample.
+- **The series off-by-one runs are resolved, not skipped.** A run that
+  matches the series with K one less passes, with a note.
+- **`EndedBy` `contact`** means pyflic activity within the tolerance and a
+  record of `EndMs`.
+- **`RelightDelayMs`** reads up to a record above `OnDelayMs`, because it
+  is measured to the end of the last activity sample.
+- **The editors needed no change.** They build their rows from
+  `OPTO_CONSTANT_FIELDS`.
+- **Calibration.** No default changed. The largest clean values were 0
+  for the length, lockout, missed-contact and series checks, 2.1% for
+  *non-feeding dark* against 10%, and 0.2 s for the interval lag against
+  5 s.
+
+**Joining the streams** (144ddb2): the Progressive Ratio light QC calls
+`rule_checks.requirement_series_mismatches`. The light table reads the
+tolerance through `OptoQCSettings`.
+
 **Coordination:**
 - **The checks live in a module of their own**, `rule_checks.py`, so that
   S4 can import the series check.
