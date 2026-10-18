@@ -859,6 +859,181 @@ def zero_tests(
     return rows
 
 
+# ---------------------------------------------------------------------------
+# The yoked comparison, under every Experiment Type (decision 12 of
+# docs/paradigm-analyses-plan.md)
+# ---------------------------------------------------------------------------
+
+#: The feeding-summary metrics :func:`yoked_comparison` takes by default, the
+#: report's own; per well (``LicksA``, ``LicksB``, ...) on a two-well layout.
+YOKED_METRICS: tuple[str, ...] = ("Licks", "Events", "MedDuration")
+
+#: The ``Facet`` of :func:`yoked_comparison`'s whole-recording rows.
+WHOLE_RECORDING = "Whole recording"
+
+#: :func:`yoked_comparison`'s leading columns; the design's factors follow
+#: ``Treatment``, then ``Paired<m>``, ``Yoked<m>`` and ``d<m>`` per metric.
+YOKED_COLUMNS: tuple[str, ...] = ("Facet", "FacetRange", "DFM", "Group", "PairedChamber",
+                                  "YokedChambers", "Treatment")
+
+
+class YokedGroup(NamedTuple):
+    """A Linkage Group whose chambers are one Paired chamber and one or more
+    Yoked ones (``CONTEXT.md``: Paired Chamber / Yoked Chamber)."""
+
+    dfm: int
+    group: int | str           # the Linkage Group's label: the program's linkage number
+    paired: int
+    yoked: tuple[int, ...]
+
+
+def yoked_groups(experiment: Experiment) -> list[YokedGroup]:
+    """The yoked groups of every DFM the optogenetic light QC covers.
+
+    A Linkage Group is one when exactly one of its chambers holds its
+    Trigger Wells and has the Role Paired, and every other chamber it lights
+    has the Role Yoked.  The Roles and groups are the light table's
+    (:func:`opto_roles.dfm_linkage_view <pyflic.base.opto_roles.dfm_linkage_view>`:
+    the program's Linkage, else on generation 3 the data's).  None under an
+    Experiment Type that assigns its own Roles (Progressive Ratio keeps its
+    own paired-minus-yoked table), and none without a source for the Roles.
+    """
+    from .light_summary import type_owns_role
+    from .opto_roles import ROLE_PAIRED, ROLE_YOKED, chamber_roles, dfm_linkage_view
+
+    if type_owns_role(experiment) or not getattr(experiment, "is_optogenetic", False):
+        return []
+    program = getattr(experiment, "opto_program", None)
+    out: list[YokedGroup] = []
+    for dfm_id in experiment.opto.dfm_ids():
+        dfm = experiment.dfms[int(dfm_id)]
+        chamber_of = {int(w): int(ch.index) for ch in (dfm.chambers or []) for w in ch.wells}
+        view = dfm_linkage_view(dfm, program.section(int(dfm_id)) if program is not None else None)
+        roles = chamber_roles(view, chamber_of)
+        for label, wells in view.groups.items():
+            members = sorted({chamber_of[w] for w in wells if w in chamber_of})
+            triggers = {chamber_of[w] for w in wells if w in chamber_of and w in view.trigger_wells}
+            if len(triggers) != 1 or len(members) < 2:
+                continue
+            (paired,) = triggers
+            yoked = tuple(c for c in members if c != paired)
+            if roles.get(paired) != ROLE_PAIRED or any(roles.get(c) != ROLE_YOKED for c in yoked):
+                continue
+            out.append(YokedGroup(int(dfm_id), int(label) if str(label).isdigit() else str(label),
+                                  paired, yoked))
+    return out
+
+
+def yoked_metric_columns(frame: pd.DataFrame, metrics: Sequence[str] | None = None) -> list[str]:
+    """The feeding-summary columns *metrics* name (default
+    :data:`YOKED_METRICS`): a column of that name, else its two wells
+    (``<m>A``, ``<m>B``) as a two-well summary names them.  A metric given
+    and found in neither form is an error."""
+    out: list[str] = []
+    for metric in (YOKED_METRICS if metrics is None else metrics):
+        if metric in frame.columns:
+            out.append(metric)
+        elif f"{metric}A" in frame.columns and f"{metric}B" in frame.columns:
+            out += [f"{metric}A", f"{metric}B"]
+        elif metrics is not None:
+            raise ValueError(f"metric {metric!r} is not in the feeding summary")
+    return out
+
+
+def yoked_comparison(
+    experiment: Experiment,
+    metrics: Sequence[str] | None = None,
+    *,
+    range_minutes: Any = (0, 0),
+    transform_licks: bool | None = None,
+) -> pd.DataFrame:
+    """Paired minus yoked, per yoked group (:func:`yoked_groups`) and window,
+    from the feeding summary: the comparison Progressive Ratio has, for a
+    yoked design under any Experiment Type (decision 12).
+
+    One row per yoked group and window: ``Facet`` is ``Whole recording``
+    (over *range_minutes*) and then each Facet, cutoff or Program Facets,
+    when the experiment has them (``FacetRange`` its window).  ``DFM``,
+    ``Group`` (the Linkage Group), ``PairedChamber``, ``YokedChambers``,
+    ``Treatment`` and the design's factors (the paired chamber's), then per
+    metric column ``m`` (:func:`yoked_metric_columns`): ``Paired<m>``,
+    ``Yoked<m>``, the mean of the yoked chambers' values, and ``d<m>``,
+    their difference.  A chamber the design no longer assigns (excluded,
+    auto-removed) is left out: a group without its Paired chamber or any
+    Yoked one has no row, and the Yoked mean is over the chambers present
+    with a value.  Test the differences against zero with :func:`zero_tests`,
+    as Progressive Ratio does.  Empty when there is no yoked group."""
+    from . import windowing
+
+    groups = yoked_groups(experiment)
+    factors = list(getattr(experiment, "design_factors", None) or [])
+    summary = experiment.feeding_summary(range_minutes=range_minutes,
+                                         transform_licks=transform_licks) if groups else None
+    if not groups or summary is None or summary.empty:
+        return pd.DataFrame(columns=[*YOKED_COLUMNS, *factors])
+    columns = yoked_metric_columns(summary, metrics)
+    whole = (windowing.format_ranges(range_minutes) if windowing.is_window_list(range_minutes)
+             else windowing.format_range(range_minutes))
+    windows: list[tuple[str, pd.DataFrame]] = [(WHOLE_RECORDING, summary.assign(FacetRange=whole))]
+    facet = experiment.feeding_summary_facet(transform_licks=transform_licks)
+    if facet is not None and not facet.empty and "Facet" in facet.columns:
+        windows += [(label, facet[facet["Facet"].astype(str) == label])
+                    for label in dict.fromkeys(facet["Facet"].astype(str))]
+    rows: list[dict[str, Any]] = []
+    for label, frame in windows:
+        at = {(int(d), int(c)): r for (d, c), r in zip(
+            zip(pd.to_numeric(frame["DFM"]), pd.to_numeric(frame["Chamber"])),
+            frame.to_dict("records"))}
+        for g in groups:
+            p = at.get((g.dfm, g.paired))
+            present = [c for c in g.yoked if (g.dfm, c) in at]
+            if p is None or not present:
+                continue
+            row: dict[str, Any] = {
+                "Facet": label, "FacetRange": p.get("FacetRange"), "DFM": g.dfm,
+                "Group": g.group, "PairedChamber": g.paired,
+                "YokedChambers": ", ".join(str(c) for c in present),
+                "Treatment": p["Treatment"], **{f: p.get(f, "") for f in factors}}
+            for m in columns:
+                paired = pd.to_numeric(p.get(m), errors="coerce")
+                values = [pd.to_numeric(at[(g.dfm, c)].get(m), errors="coerce") for c in present]
+                values = [float(v) for v in values if pd.notna(v)]
+                yoked = float(np.mean(values)) if values else np.nan
+                row[f"Paired{m}"] = float(paired) if pd.notna(paired) else np.nan
+                row[f"Yoked{m}"] = yoked
+                row[f"d{m}"] = (row[f"Paired{m}"] - yoked
+                                if pd.notna(row[f"Paired{m}"]) and pd.notna(yoked) else np.nan)
+            rows.append(row)
+    metric_cols = [f"{kind}{m}" for m in columns for kind in ("Paired", "Yoked", "d")]
+    return pd.DataFrame(rows, columns=[*YOKED_COLUMNS, *factors, *metric_cols])
+
+
+#: The ``analysis/`` file :func:`write_yoked_comparison` writes.
+YOKED_COMPARISON_FILE = "yoked_comparison.csv"
+
+
+def write_yoked_comparison(experiment: Experiment, out_dir: Any = None, *,
+                           range_minutes: Any = (0, 0),
+                           transform_licks: bool | None = None) -> Path | None:
+    """Write :func:`yoked_comparison` to ``analysis/yoked_comparison.csv``
+    and return its path; ``None``, writing nothing, when the experiment has
+    no yoked group, so an absent file means "no yoked design" (one left by
+    an earlier run is removed)."""
+    if out_dir is None:
+        if experiment.analysis_dir is None:
+            raise ValueError("experiment_dir must be set to write the yoked comparison.")
+        out_dir = experiment.analysis_dir
+    path = Path(out_dir).expanduser().resolve() / YOKED_COMPARISON_FILE
+    if not yoked_groups(experiment):
+        path.unlink(missing_ok=True)
+        return None
+    frame = yoked_comparison(experiment, range_minutes=range_minutes,
+                             transform_licks=transform_licks)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    frame.to_csv(path, index=False, na_rep="NA")
+    return path
+
+
 def parameter_sensitivity(
     experiment: Experiment,
     *,

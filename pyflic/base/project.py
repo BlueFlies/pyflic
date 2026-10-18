@@ -269,12 +269,15 @@ LIGHT_QC_SOURCES: tuple[tuple[str, tuple[str, ...]], ...] = (
 _EXCLUDE_SWITCH = {"PR": "exclude_failed_pr_groups", "Opto": "exclude_failed_opto_chambers"}
 
 #: The light tables an optogenetic Member writes into ``analysis/``
-#: (:mod:`pyflic.base.light_summary`), stacked into ``<project>_<key>.csv``.
+#: (:mod:`pyflic.base.light_summary`), stacked into ``<project>_<key>.csv``,
+#: and with them its yoked comparison
+#: (:func:`~pyflic.base.analytics.yoked_comparison`, a yoked design only).
 LIGHT_TABLES: dict[str, str] = {
     "LightSummary": "light_summary.csv",
     "LightSummary_Facet": "light_summary_facet.csv",
     "LightWells": "light_wells.csv",
     "LightWells_Facet": "light_wells_facet.csv",
+    "YokedComparison": "yoked_comparison.csv",
 }
 
 
@@ -906,8 +909,8 @@ class Project:
     def combined_light_frames(self) -> dict[str, pd.DataFrame]:
         """The stacked Members' light tables (:data:`LIGHT_TABLES`), each with
         an ``Experiment`` first column, keyed ``LightSummary``,
-        ``LightSummary_Facet``, ``LightWells`` and ``LightWells_Facet``; a
-        table no Member wrote is absent."""
+        ``LightSummary_Facet``, ``LightWells``, ``LightWells_Facet`` and
+        ``YokedComparison``; a table no Member wrote is absent."""
         out: dict[str, pd.DataFrame] = {}
         for key, filename in LIGHT_TABLES.items():
             frames = []

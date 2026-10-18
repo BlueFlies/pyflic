@@ -421,11 +421,12 @@ class _Activations(NamedTuple):
     lit_ms: np.ndarray         # float
     record: np.ndarray         # Timing record: the times are good to one record
     judgeable: np.ndarray      # not Overlap, no Boundary: the length is the rule's
-    main: np.ndarray           # Phase M
+    main: np.ndarray           # Phase M (the ledger's, less ``unseen``)
     since_ms: np.ndarray       # SinceLastOnsetMs, NaN for a state run's first
     after_main: np.ndarray     # the previous Activation, in the same state run, is Main
     next_onset_ms: np.ndarray  # the next Activation's onset in the same state run, or NaN
     paradigm: list             # the Paradigm in force at the onset row, or None
+    unseen: np.ndarray         # an Acclimation one the ledger reads as Main (_unseen_acclimation)
 
     @classmethod
     def of(cls, ctx: _DFMLight, w: int) -> _Activations:
@@ -433,7 +434,9 @@ class _Activations(NamedTuple):
         mine = book[book["Well"] == int(w)]
         row = mine["Row"].to_numpy(dtype=np.int64)
         since = mine["SinceLastOnsetMs"].to_numpy(dtype=float, na_value=np.nan)
-        main = (mine["Phase"] == "M").to_numpy(dtype=bool)
+        paradigm = [ctx.paradigm_by_code[c] for c in ctx.codes[row]]
+        unseen = _unseen_acclimation(ctx, int(w), row)
+        main = (mine["Phase"] == "M").to_numpy(dtype=bool) & ~unseen
         onset = mine["OnsetMs"].to_numpy(dtype=float)
         same_run_next = np.append(~np.isnan(since[1:]), False)
         after_main = np.insert(main[:-1], 0, False) & ~np.isnan(since) if row.size else main
@@ -445,7 +448,7 @@ class _Activations(NamedTuple):
                        & (mine["Boundary"] == al.BOUNDARY_NONE).to_numpy(dtype=bool)),
             main=main, since_ms=since, after_main=after_main,
             next_onset_ms=np.where(same_run_next, np.append(onset[1:], np.nan), np.nan),
-            paradigm=[ctx.paradigm_by_code[c] for c in ctx.codes[row]])
+            paradigm=paradigm, unseen=unseen)
 
     def is_type(self, *types: str) -> np.ndarray:
         """Per Activation: whether its Paradigm is of one of *types*."""
@@ -460,6 +463,31 @@ class _Activations(NamedTuple):
         """``tol`` per Activation, one record wider where it is timed to the
         record (stream S1's rule)."""
         return float(tol) + np.where(self.record, float(record_ms), 0.0)
+
+
+def _unseen_acclimation(ctx: _DFMLight, w: int, row: np.ndarray) -> np.ndarray:
+    """Per Activation of well *w* (onset rows *row*): an Acclimation one
+    that the ledger's Phase reads as Main.
+
+    A Paradigm-state run starts in Acclimation wherever its Paradigm has
+    one (``LEDControl.c`` resets the well's state), so a run's first row
+    that reads Phase ``M`` for a well running it saw that Acclimation start
+    and end inside one record (Acclimation 1 and a short Activation): the
+    first N Activations counted on that row were Acclimation ones.  The
+    ledger reads no program and cannot know the run began in Acclimation;
+    its rule for the row a well leaves Acclimation compares it with the row
+    before, which at a run's first row belongs to another run."""
+    out = np.zeros(row.size, dtype=bool)
+    if not row.size:
+        return out
+    col = int(w) - 1
+    starts = np.asarray([a for a, _b in ctx.state.state_runs()], dtype=np.int64)
+    for r0 in np.unique(row[np.isin(row, starts)]).tolist():
+        p = ctx.paradigm_by_code[ctx.codes[r0]]
+        n = int(p.acclimation or 0) if p is not None and p.type in op.ACCLIMATION_PARADIGMS else 0
+        if n > 0 and ctx.trigger[r0, col] and not ctx.state.phase_a[r0, col]:
+            out[np.flatnonzero(row == r0)[:n]] = True
+    return out
 
 
 def _matrix(frame: pd.DataFrame | None, n: int, dtype) -> np.ndarray:
@@ -626,10 +654,10 @@ def _well_values(ctx: _DFMLight, w: int, win: _Window, *, tol: float = 0.0,
     out["ActivationsPerHour"] = _per_hour(activations, minutes)
     if not ctx.typed:
         return out
-    out.update(_acclimation(ctx, w, win))
-    out.update(_ratio(ctx, w, win))
     acts = ctx.activations(w)
     inside = win.contains(acts.row)
+    out.update(_acclimation(ctx, w, win, acts, inside))
+    out.update(_ratio(ctx, w, win))
     out.update(_closed_loop(ctx, w, win, acts, inside, tol))
     if ctx.type_rows(w, op.ACCLIMATION_PARADIGMS, win, acclimation=True).any():
         out["MainActivations"] = float(np.count_nonzero(inside & acts.main))
@@ -773,24 +801,29 @@ def _open_loop_phases(ctx: _DFMLight, chamber: int, win: _Window) -> dict | None
     return chamber_light_phases(ctx.dfm, ctx.chambers[chamber].wells, lit=ctx.lit, rows=win.rows)
 
 
-def _acclimation(ctx: _DFMLight, w: int, win: _Window) -> dict[str, Any]:
+def _acclimation(ctx: _DFMLight, w: int, win: _Window, acts: _Activations,
+                 inside: np.ndarray) -> dict[str, Any]:
     """The Acclimation columns: defined where the well ran a FixedInterval or
-    ratio Paradigm with Acclimation in the window.  The end is the first row
-    in Main after the window's first run in Phase ``A``; a well still in
-    ``A`` when the window ends has none and is not complete."""
+    ratio Paradigm with Acclimation in the window.  AcclimationActivations
+    counts the ledger's Phase-``A`` Activations with their onset in the
+    window, as MainActivations counts its Phase-``M`` ones, so the two sum
+    to Activations: the row's Phase misreads the row a well leaves
+    Acclimation, where an Acclimation Activation can start and end inside
+    a row that already reads ``M`` (``activation_ledger``).  The end is the
+    first row in Main after the window's first run in Phase ``A``, or the
+    row of an Acclimation that ran inside one row (:func:`_unseen_acclimation`);
+    a well still in ``A`` when the window ends has none and is not
+    complete."""
     if not ctx.type_rows(w, op.ACCLIMATION_PARADIGMS, win, acclimation=True).any():
         return {}
-    state, col = ctx.state, w - 1
+    state = ctx.state
+    count = float(np.count_nonzero(inside & ~acts.main))
     runs = [(a, b) for a, b in state.acclimation_runs(w)
             if any(a < sb and b > sa for sa, sb in win.segments)]
+    ## An Acclimation no row reads as Phase A began and ended in its row.
+    runs = sorted(runs + [(r, r) for r in np.unique(acts.row[inside & acts.unseen]).tolist()])
     if not runs:
-        return {"AcclimationActivations": 0.0}
-    count = 0.0
-    for a, b in runs:
-        for sa, sb in win.segments:
-            lo, hi = max(a, sa), min(b, sb)
-            if lo < hi:
-                count += float(ctx.steps[lo:hi, col].sum())
+        return {"AcclimationActivations": count}
 
     def ended(end: int) -> bool:
         return end < win.end and end < len(state)
@@ -1167,19 +1200,55 @@ def experiment_headline_metrics(exp) -> list[str]:
     return program_headline_metrics([(getattr(exp, "opto_program", None), ids)])
 
 
+#: The light table's columns that count or time a chamber's own Activations
+#: (decision 12 of ``docs/paradigm-analyses-plan.md``): only a chamber whose
+#: Role earns light has them to compare.
+ACTIVATION_COLUMNS: tuple[str, ...] = (
+    "Activations", "ActivationsPerHour",
+    "AcclimationActivations", "AcclimationEndMin", "AcclimationComplete", "MainActivations",
+    "FirmwareEvents", "LastRequirementMet", "ProgressAtEnd", "EventsPerActivation",
+    *CLOSED_LOOP_COLUMNS, *FIXED_INTERVAL_COLUMNS, "Suppressions", "MedianSuppressionSec")
+
+
 def behaviour_rows(frame: pd.DataFrame | None) -> pd.DataFrame | None:
-    """The rows whose light is their own, for comparing light behaviour
-    between treatments.  A Progressive Ratio yoked fly's light is its
-    partner's (its Activations are 0 by construction and its lit time a
-    copy), so a table carrying that type's ``paired`` / ``yoked`` Role keeps
-    the paired rows; every other table is kept whole."""
+    """The light table's rows for comparing light behaviour between
+    treatments, by Role (decision 12 of ``docs/paradigm-analyses-plan.md``).
+
+    * A chamber whose Role earns light (Paired, Self, Mutual:
+      :data:`opto_roles.TRIGGER_ROLES <pyflic.base.opto_roles.TRIGGER_ROLES>`)
+      keeps every column, and so does one whose Role is unknown, since
+      nothing says its light is not its own.
+    * Any other chamber (Yoked, Open, Unlit) keeps its row, its Role and its
+      light (``LitSec``, ``LitFraction``), so a yoked fly's light is seen
+      beside its partner's, but its :data:`ACTIVATION_COLUMNS` are missing:
+      its Activations are 0 by construction, and pooled they would dilute
+      the chambers that earn light.
+    * A table carrying Progressive Ratio's own ``paired`` / ``yoked`` Roles
+      keeps its paired rows, as before: that type compares its paired
+      chambers only.  (A Project pooling such a member with others drops
+      its ``yoked`` rows and keeps its ``paired`` ones whole.)
+    """
+    from .opto_roles import ROLE_UNKNOWN, TRIGGER_ROLES
+
     if frame is None or frame.empty or "Role" not in frame.columns:
         return frame
     roles = frame["Role"].fillna("").astype(str).str.strip()
     known = set(roles[roles != ""])
     if known and known <= set(_PR_ROLES):
         return frame[roles == "paired"]
-    return frame
+    kept = (roles != "yoked").to_numpy()
+    out = frame if kept.all() else frame[kept]
+    blank = ~roles.isin((*TRIGGER_ROLES, ROLE_UNKNOWN, "paired")).to_numpy()[kept]
+    columns = [c for c in ACTIVATION_COLUMNS if c in out.columns]
+    if not blank.any() or not columns:
+        return out
+    out = out.copy()
+    for column in columns:
+        if out[column].dtype == object or out[column].dtype == bool:
+            out[column] = out[column].astype(object).where(~blank, None)
+        else:
+            out[column] = out[column].where(~blank, np.nan)
+    return out
 
 
 def has_generation_2(frame: pd.DataFrame | None) -> bool:

@@ -2777,7 +2777,8 @@ class Experiment:
           4. ``write_feeding_summary()``       → ``experiment_dir/analysis/feeding_summary.csv``
           5. ``write_feeding_summary_facet()`` → ``.../feeding_summary_facet.csv`` (faceted experiments only)
           6. the light tables (optogenetic experiments only) → ``.../light_wells.csv``,
-             ``light_summary.csv`` and, faceted, their ``_facet`` variants
+             ``light_summary.csv`` and, faceted, their ``_facet`` variants; with a
+             yoked group, ``yoked_comparison.csv`` (:func:`analytics.yoked_comparison`)
           7. ``write_feeding_summary_plot()``  → ``.../feeding_summary.{plot_format}``
 
         Auto-removal applies the design's ``constants:`` cutoffs once per
@@ -2892,6 +2893,14 @@ class Experiment:
             print(f"\n[{step}/{n_steps}] Light tables...", flush=True)
             if self.analysis_dir is not None:
                 light_paths = light_summary.write(self, range_minutes=range_minutes)
+                ## Paired minus yoked, where a Linkage Group yokes chambers to a
+                ## Paired one (decision 12 of docs/paradigm-analyses-plan.md).
+                from .analytics import write_yoked_comparison
+
+                yoked = write_yoked_comparison(self, range_minutes=range_minutes,
+                                               transform_licks=transform_licks)
+                if yoked is not None:
+                    light_paths["yoked_comparison"] = yoked
                 print(f"  Done → {', '.join(p.name for p in light_paths.values())}",
                       flush=True)
 
