@@ -23,7 +23,9 @@ the file comes from the PyMCU and firmware source; and a re-run of the real
 Progressive Ratio dataset, which was not on the machine the streams ran on, so
 decision 1's identity check rests on the generation-1 fixtures alone. The
 pyflic-side reference for the data file is
-[firmware-4-data-in-pyflic.md](firmware-4-data-in-pyflic.md).
+[firmware-4-data-in-pyflic.md](firmware-4-data-in-pyflic.md). The follow-on,
+a light QC and summary for each Paradigm type, is planned in
+[paradigm-analyses-plan.md](paradigm-analyses-plan.md).
 
 - [Sources of truth](#sources-of-truth)
 - [What changes for the user](#what-changes-for-the-user)
