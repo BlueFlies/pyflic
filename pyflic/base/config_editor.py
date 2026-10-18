@@ -2292,6 +2292,12 @@ class FLICConfigEditor(QMainWindow):
         if factors:
             global_section["experimental_design_factors"] = factors
 
+        ## The Selection (ADR-0018) has no field here: the Hub's ticks write
+        ## it.  Kept as the file says, or a save would undo every untick.
+        omit = (self._loaded_raw.get("global") or {}).get("omit")
+        if omit:
+            global_section["omit"] = omit
+
         return global_section
 
     def _collect_yaml(self) -> dict[str, Any]:

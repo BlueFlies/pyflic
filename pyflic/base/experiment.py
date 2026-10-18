@@ -21,6 +21,17 @@ _OKABE_ITO = [
 ]
 
 
+#: The QC reports :meth:`Experiment.write_qc_reports` writes, in its order:
+#: the QC Set's *QC reports* and *Optogenetics* items
+#: (:mod:`pyflic.base.selections`), each written by
+#: :meth:`Experiment.write_qc_item`.
+QC_REPORT_ITEMS: tuple[str, ...] = (
+    "integrity", "data_breaks", "raw_signal", "baselined_signal", "cumulative_licks",
+    "simultaneous_feeding", "bleeding",
+    "opto_light_qc", "opto_light_figures", "program_timeline",
+)
+
+
 def _fmt_min(v: float) -> str:
     """Format a minute value for use in a filename.  ``inf`` → ``'end'``."""
     if v == float("inf"):
@@ -447,8 +458,31 @@ class Experiment:
 
         If *out_dir* is not given, defaults to ``experiment_dir/qc``.  Raises
         ``ValueError`` if neither *out_dir* nor ``experiment_dir`` is set.
-        """
 
+        Every item of :data:`QC_REPORT_ITEMS`, in order, each by
+        :meth:`write_qc_item` from one :meth:`compute_qc_for_reports`.  *Run
+        QC* (:func:`pyflic.base.run_selection.run_qc`) calls the same writers
+        for the items its Selection keeps, so with nothing left out the two
+        write the same files.
+        """
+        out = self.qc_output_dir(out_dir)
+        qc = self.compute_qc_for_reports(
+            data_breaks_multiplier=data_breaks_multiplier,
+            bleeding_cutoff=bleeding_cutoff,
+        )
+        print(f"  Writing QC files to {out}", flush=True)
+        for item_id in QC_REPORT_ITEMS:
+            self.write_qc_item(item_id, out, qc,
+                               data_breaks_multiplier=data_breaks_multiplier)
+        print(f"  QC complete — {len(self.dfms)} DFM(s) processed.", flush=True)
+        self.qc_report_dir = out
+        return out
+
+    # ---- the QC reports, one item at a time (the QC Set, ADR-0018) ----------
+
+    def qc_output_dir(self, out_dir: str | Path | None = None) -> Path:
+        """*out_dir*, else ``experiment_dir/qc``, resolved and created.
+        Raises ``ValueError`` if neither is set."""
         if out_dir is None:
             if self.qc_dir is None:
                 raise ValueError(
@@ -457,103 +491,181 @@ class Experiment:
             out_dir = self.qc_dir
         out = Path(out_dir).expanduser().resolve()
         out.mkdir(parents=True, exist_ok=True)
+        return out
 
-        # Subdirectories for each output type
-        dir_integrity = out / "integrity"
-        dir_data_breaks = out / "data_breaks"
-        dir_raw = out / "raw_signal"
-        dir_baselined = out / "baselined"
-        dir_cumulative = out / "cumulative_licks"
-        dir_sim = out / "simultaneous_feeding"
-        dir_bleed = out / "bleeding"
-
-        for d in (dir_integrity, dir_data_breaks, dir_raw, dir_baselined, dir_cumulative):
-            d.mkdir(parents=True, exist_ok=True)
-
-        n_total = len(self.dfms)
-        print(f"  Computing QC for {n_total} DFM(s)...", flush=True)
-        qc = self.compute_qc_results(
+    def compute_qc_for_reports(
+        self,
+        *,
+        data_breaks_multiplier: float = 4.0,
+        bleeding_cutoff: float = 50.0,
+    ) -> dict[int, dict[str, Any]]:
+        """:meth:`compute_qc_results` with the integrity text the reports
+        write, computed once for every item :meth:`write_qc_item` writes."""
+        print(f"  Computing QC for {len(self.dfms)} DFM(s)...", flush=True)
+        return self.compute_qc_results(
             data_breaks_multiplier=data_breaks_multiplier,
             bleeding_cutoff=bleeding_cutoff,
             include_integrity_text=True,
         )
-        print(f"  Writing QC files to {out}", flush=True)
 
-        import matplotlib.pyplot as plt
-        for n, (dfm_id, r) in enumerate(qc.items(), 1):
-            print(f"  DFM {dfm_id}  ({n}/{n_total})...", flush=True)
+    def write_qc_item(
+        self,
+        item_id: str,
+        out: Path,
+        qc: dict[int, dict[str, Any]] | None,
+        *,
+        data_breaks_multiplier: float = 4.0,
+    ) -> list[Path]:
+        """Write the QC report *item_id* (one of :data:`QC_REPORT_ITEMS`) for
+        every DFM into *out* (the ``qc/`` directory) and return the files
+        written.  *qc* is :meth:`compute_qc_for_reports`'s result; the signal
+        plots, the light QC and the Program timeline do not read it.
 
+        An item the experiment cannot have writes nothing: the
+        simultaneous-feeding and bleeding matrices exist only on a two-well
+        layout, the light QC only on an optogenetic experiment and the
+        Program timeline only for a DFM that has one.
+        """
+        writer = {
+            "integrity": self._write_qc_integrity,
+            "data_breaks": self._write_qc_data_breaks,
+            "raw_signal": self._write_qc_raw_signal,
+            "baselined_signal": self._write_qc_baselined_signal,
+            "cumulative_licks": self._write_qc_cumulative_licks,
+            "simultaneous_feeding": self._write_qc_simultaneous_feeding,
+            "bleeding": self._write_qc_bleeding,
+            "opto_light_qc": self._write_qc_opto_light_qc,
+            "opto_light_figures": self._write_qc_opto_light_figures,
+            "program_timeline": self._write_qc_program_timeline,
+        }.get(item_id)
+        if writer is None:
+            raise ValueError(f"{item_id!r} is not a QC report; known: "
+                             f"{', '.join(QC_REPORT_ITEMS)}")
+        return writer(Path(out), qc or {}, float(data_breaks_multiplier))
+
+    def _write_qc_integrity(self, out: Path, qc: dict, _multiplier: float) -> list[Path]:
+        directory = out / "integrity"
+        directory.mkdir(parents=True, exist_ok=True)
+        written: list[Path] = []
+        for dfm_id, r in qc.items():
             ## One row of numbers; the gaps, the Paradigm sequence and the
             ## restarts are lists, and the integrity text lists them.
             integrity = {k: v for k, v in r["integrity"].items()
                          if k not in ("lost_record_gaps", "paradigm_sequence", "restarts")}
-            pd.DataFrame([integrity]).to_csv(
-                dir_integrity / f"DFM{dfm_id}_integrity_report.csv", index=False
-            )
+            path = directory / f"DFM{dfm_id}_integrity_report.csv"
+            pd.DataFrame([integrity]).to_csv(path, index=False)
+            written.append(path)
             if r.get("integrity_text"):
-                (dir_integrity / f"DFM{dfm_id}_integrity_report.txt").write_text(
-                    str(r["integrity_text"]), encoding="utf-8"
-                )
+                path = directory / f"DFM{dfm_id}_integrity_report.txt"
+                path.write_text(str(r["integrity_text"]), encoding="utf-8")
+                written.append(path)
+        return written
 
-            # Data breaks
+    def _write_qc_data_breaks(self, out: Path, qc: dict, multiplier: float) -> list[Path]:
+        ## The folder is made even when no DFM has a break, as it always was,
+        ## so an empty folder says "none found" rather than "not checked".
+        directory = out / "data_breaks"
+        directory.mkdir(parents=True, exist_ok=True)
+        written: list[Path] = []
+        for dfm_id, r in qc.items():
             breaks_head = r.get("data_breaks_head")
             breaks_count = int(r.get("data_breaks_count", 0))
             if breaks_count > 0 and isinstance(breaks_head, pd.DataFrame):
-                print(f"    {breaks_count} data break(s) found — saving CSV", flush=True)
-                dfm = self.dfms[dfm_id]
-                breaks = dfm.data_breaks(multiplier=float(data_breaks_multiplier))
+                print(f"    DFM {dfm_id}: {breaks_count} data break(s) found — saving CSV",
+                      flush=True)
+                breaks = self.dfms[dfm_id].data_breaks(multiplier=float(multiplier))
                 if breaks is not None:
-                    breaks.to_csv(
-                        dir_data_breaks / f"DFM{dfm_id}_data_breaks.csv", index=False
-                    )
+                    path = directory / f"DFM{dfm_id}_data_breaks.csv"
+                    breaks.to_csv(path, index=False)
+                    written.append(path)
+        return written
 
-            # Two-well only
+    def _write_qc_signal_plots(self, directory: Path, suffix: str, draw) -> list[Path]:
+        """One QC signal plot per DFM: ``draw(dfm)`` saved as
+        ``DFM<id>_<suffix>.png`` in *directory*."""
+        import matplotlib.pyplot as plt
+
+        directory.mkdir(parents=True, exist_ok=True)
+        written: list[Path] = []
+        for n, dfm_id in enumerate(sorted(int(k) for k in self.dfms), 1):
+            print(f"    DFM {dfm_id}  ({n}/{len(self.dfms)})...", flush=True)
+            fig = draw(self.dfms[dfm_id])
+            path = directory / f"DFM{dfm_id}_{suffix}.png"
+            fig.savefig(path, dpi=200, bbox_inches="tight")
+            plt.close(fig)
+            written.append(path)
+        return written
+
+    def _write_qc_raw_signal(self, out: Path, _qc: dict, _multiplier: float) -> list[Path]:
+        print("  Raw signal plots...", flush=True)
+        return self._write_qc_signal_plots(out / "raw_signal", "raw",
+                                           lambda dfm: dfm.plot_raw())
+
+    def _write_qc_baselined_signal(self, out: Path, _qc: dict, _multiplier: float) -> list[Path]:
+        print("  Baselined signal plots...", flush=True)
+        return self._write_qc_signal_plots(
+            out / "baselined", "baselined",
+            lambda dfm: dfm.plot_baselined(include_thresholds=True))
+
+    def _write_qc_cumulative_licks(self, out: Path, _qc: dict, _multiplier: float) -> list[Path]:
+        print("  Cumulative licks plots...", flush=True)
+        return self._write_qc_signal_plots(
+            out / "cumulative_licks", "cumulative_licks",
+            lambda dfm: dfm.plot_cumulative_licks(transform_licks=True))
+
+    def _write_qc_simultaneous_feeding(self, out: Path, qc: dict,
+                                       _multiplier: float) -> list[Path]:
+        written: list[Path] = []
+        for dfm_id, r in qc.items():
             sim_df = r.get("simultaneous_feeding_matrix")
             if isinstance(sim_df, pd.DataFrame):
-                dir_sim.mkdir(parents=True, exist_ok=True)
-                sim_df.to_csv(dir_sim / f"DFM{dfm_id}_simultaneous_feeding_matrix.csv")
+                directory = out / "simultaneous_feeding"
+                directory.mkdir(parents=True, exist_ok=True)
+                path = directory / f"DFM{dfm_id}_simultaneous_feeding_matrix.csv"
+                sim_df.to_csv(path)
+                written.append(path)
+        return written
 
+    def _write_qc_bleeding(self, out: Path, qc: dict, _multiplier: float) -> list[Path]:
+        written: list[Path] = []
+        for dfm_id, r in qc.items():
             bleed = r.get("bleeding")
             if isinstance(bleed, dict) and "Matrix" in bleed and "AllData" in bleed:
-                dir_bleed.mkdir(parents=True, exist_ok=True)
-                bleed["Matrix"].to_csv(dir_bleed / f"DFM{dfm_id}_bleeding_matrix.csv")
-                bleed["AllData"].to_csv(
-                    dir_bleed / f"DFM{dfm_id}_bleeding_alldata.csv", header=True
-                )
+                directory = out / "bleeding"
+                directory.mkdir(parents=True, exist_ok=True)
+                matrix = directory / f"DFM{dfm_id}_bleeding_matrix.csv"
+                bleed["Matrix"].to_csv(matrix)
+                alldata = directory / f"DFM{dfm_id}_bleeding_alldata.csv"
+                bleed["AllData"].to_csv(alldata, header=True)
+                written += [matrix, alldata]
+        return written
 
-            # Signal plots
-            dfm = self.dfms[dfm_id]
-            fig = dfm.plot_raw()
-            fig.savefig(dir_raw / f"DFM{dfm_id}_raw.png", dpi=200, bbox_inches="tight")
-            plt.close(fig)
+    def _write_qc_opto_light_qc(self, out: Path, _qc: dict, _multiplier: float) -> list[Path]:
+        if not self.is_optogenetic:
+            return []
+        print("  Optogenetic light QC...", flush=True)
+        written = list(self.opto.write(out / "opto").values())
+        for line in self.opto.lines():
+            print(f"    {line}", flush=True)
+        return written
 
-            fig = dfm.plot_baselined(include_thresholds=True)
-            fig.savefig(dir_baselined / f"DFM{dfm_id}_baselined.png", dpi=200, bbox_inches="tight")
-            plt.close(fig)
+    def _write_qc_opto_light_figures(self, out: Path, _qc: dict,
+                                     _multiplier: float) -> list[Path]:
+        if not self.is_optogenetic:
+            return []
+        print("  Light explained by licks (QC)...", flush=True)
+        return list(self.opto.write_figures(out / "opto").values())
 
-            fig = dfm.plot_cumulative_licks(transform_licks=True)
-            fig.savefig(dir_cumulative / f"DFM{dfm_id}_cumulative_licks.png", dpi=200, bbox_inches="tight")
-            plt.close(fig)
-
-        if self.is_optogenetic:
-            print("  Optogenetic light QC...", flush=True)
-            opto_dir = out / "opto"
-            self.opto.write(opto_dir)
-            self.opto.write_figures(opto_dir)
-            for line in self.opto.lines():
-                print(f"    {line}", flush=True)
-
+    def _write_qc_program_timeline(self, out: Path, _qc: dict,
+                                   _multiplier: float) -> list[Path]:
         ## The Program timeline of every DFM with a Paradigm state or a
         ## Program.txt section (qc/program/).
         from . import program_timeline
 
-        if program_timeline.timeline_dfms(self):
-            print("  Program timeline...", flush=True)
-            program_timeline.write(self, out / program_timeline.QC_SUBDIR)
-
-        print(f"  QC complete — {n_total} DFM(s) processed.", flush=True)
-        self.qc_report_dir = out
-        return out
+        if not program_timeline.timeline_dfms(self):
+            return []
+        print("  Program timeline...", flush=True)
+        return list(program_timeline.write(self, out / program_timeline.QC_SUBDIR).values())
 
     def summary_text(
         self,

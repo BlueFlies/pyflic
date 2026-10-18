@@ -173,7 +173,26 @@ def run_experiment_script(
             exp.execute_basic_analysis(range_minutes=rm, skip_qc=True)
 
         elif action == "run_qc":
-            ctx.log(f"QC reports → {exp.write_qc_reports()}")
+            ## The QC Set minus the Selection (ADR-0018): with nothing left
+            ## out, the files write_qc_reports writes.
+            from ..run_selection import run_qc
+
+            run_qc(exp, log=ctx.log)
+            ctx.log(f"QC reports → {exp.qc_report_dir}")
+
+        elif action in ("run_analysis", "run_plots"):
+            ## The Hub's Run analysis and Generate plots: the set minus the
+            ## Selection.
+            from ..run_selection import run_analysis, run_plots
+
+            raw = step.get("binsize")
+            bs = ctx.binsize if raw is None or str(raw).strip() == "" else float(raw)
+            if action == "run_analysis":
+                run_analysis(exp, binsize_min=bs, log=ctx.log)
+            else:
+                run = run_plots(exp, metric=str(step.get("metric") or "Licks"),
+                                binsize_min=bs, log=ctx.log)
+                figures.extend(run.figures)
 
         elif action == "feeding_csv":
             ctx.log(f"Wrote: {exp.write_feeding_summary(range_minutes=rm)}")

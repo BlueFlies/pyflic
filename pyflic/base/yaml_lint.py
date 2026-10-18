@@ -30,6 +30,8 @@ _KNOWN_GLOBAL_KEYS = {
     "optogenetics",
     # Where the Facets come from: cutoffs | program | program_cycles.
     "facet_source",
+    # The Selection: what Run QC / Run analysis / Generate plots leave out (ADR-0018).
+    "omit",
 }
 _KNOWN_PARAM_KEYS = {
     "baseline_window_minutes", "baseline_window_min", "baseline_window",
@@ -137,6 +139,7 @@ def lint_flic_config(path: str | Path) -> list[LintIssue]:
     for k in g.keys():
         if k not in _KNOWN_GLOBAL_KEYS:
             _emit(issues, "warning", f"unknown global key {k!r}", path=f"global.{k}")
+    _lint_omit(issues, path, g)
 
     g_params = g.get("params") or g.get("parameters") or {}
     chamber_size_global = None
@@ -367,6 +370,23 @@ def _lint_program_present(issues: list[LintIssue], path: Path, g: dict, dfm_id: 
     generation = _file_generation(path.parent / "data", dfm_id)
     if generation is not None and lacking_program({dfm_id: generation}, program):
         _emit(issues, "warning", no_program_warning([dfm_id]), path=f"dfms.{dfm_id}")
+
+
+def _lint_omit(issues: list[LintIssue], path: Path, g: dict) -> None:
+    """The Selection (``global.omit:``, ADR-0018): this config's own, and,
+    for a Member, the Project design's, which its runs read.  A misspelt id
+    leaves nothing out, so it is warned of."""
+    from .project import PROJECT_FILENAME, read_design
+    from .selections import validate_omit
+
+    for problem in validate_omit(g):
+        _emit(issues, "warning", problem, path="global.omit")
+    project_dir = path.parent.parent
+    if (project_dir / PROJECT_FILENAME).is_file():
+        design_global = read_design(project_dir).get("global") or {}
+        for problem in validate_omit(design_global if isinstance(design_global, dict) else {}):
+            _emit(issues, "warning", f"{PROJECT_FILENAME} design: {problem}",
+                  path="design.global.omit")
 
 
 def _lint_facet_source(issues: list[LintIssue], path: Path, g: dict, dfm_items,
