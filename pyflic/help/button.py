@@ -115,6 +115,13 @@ class HelpButton(QToolButton):
     def ref(self) -> str:
         return f"{self._topic_id}#{self._anchor}" if self._anchor else self._topic_id
 
+    def set_ref(self, ref: str, tooltip: str | None = None) -> None:
+        """Point the button at *ref* — for one ``?`` beside a tab bar, which
+        follows the tab showing."""
+        self._topic_id, self._anchor = _topics.parse_ref(ref)
+        if tooltip is not None:
+            self.setToolTip(tooltip)
+
     def _open(self) -> None:
         open_help(self._topic_id, self._anchor)
 
