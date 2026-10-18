@@ -57,7 +57,7 @@ DESIGN_KEYS: tuple[str, ...] = (
     "optogenetics",
     ## The Selection (ADR-0018): what every Member's Run QC, Run analysis and
     ## Generate plots leave out, the same for all of them, since a Project's
-    ## replicates are analysed alike.
+    ## Members are analysed alike.
     "omit",
     ## The Treatment control's level, when the Experiment Type has one
     ## (ADR-0019).
