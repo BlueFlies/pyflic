@@ -279,9 +279,53 @@ def test_every_opto_qc_verdict_is_ok(analysed: Analysed) -> None:
 # ---------------------------------------------------------------------------
 # P0-ledger (C3): the ledger against the truth's Activations.csv
 # ---------------------------------------------------------------------------
-# P0-ledger adds its one test here: ``activation_ledger.ledger`` of each
-# DFM's Paradigm state, from ``analysed.experiment``, equals the truth's
-# Activations.csv (``StartMs`` and ``LitMs``) on every Activation.
+# ``activation_ledger.ledger`` of each DFM's Paradigm state, from
+# ``analysed.experiment``, against the truth's Activations.csv, by well and
+# Activation number.
+
+#: Activations the ledger times exactly on seed 1 (unoverlapped, ``Timing``
+#: exact), of the truth's 191: the other one began in the record after the
+#: one where its Well's previous light went out, which the ledger cannot
+#: tell from light already on (``Overlap``).  A PyMCU change shows here.
+LEDGER_EXACT_ACTIVATIONS = 190
+TRUTH_ACTIVATIONS = 191
+
+
+def test_the_ledger_is_the_truths_activations(simulated: Simulated, analysed: Analysed) -> None:
+    from pyflic.base import activation_ledger as al
+
+    truth = pd.read_csv(simulated.truth / "Activations.csv")
+    exp = analysed.experiment
+    exact = 0
+    misses = []
+    for dfm_id in DFM_IDS:
+        state = exp.dfms[dfm_id].paradigm
+        groups = exp.opto.program.section(dfm_id).linkage_groups()
+        book = al.ledger(state, linked={w: g for g in groups.values() for w in g})
+        assert set(book["Well"]) <= set(TRIGGER_WELLS)
+        for well in TRIGGER_WELLS:
+            mine = book[book["Well"] == well].reset_index(drop=True)
+            theirs = truth[(truth["DFM"] == dfm_id) & (truth["Well"] == well)] \
+                .sort_values("StartMs", kind="stable").reset_index(drop=True)
+            assert len(mine) == len(theirs), (dfm_id, well)
+            ## Activation by Activation: its Kind and Number, and the Requirement met.
+            assert mine["Phase"].tolist() == ["A" if k == "Acclimation" else "M"
+                                              for k in theirs["Kind"]], (dfm_id, well)
+            main = theirs["Kind"] == "Main"
+            assert mine.loc[main, "K"].tolist() == theirs.loc[main, "Number"].tolist()
+            met = mine["RequirementMet"].notna()
+            assert mine.loc[met, "RequirementMet"].tolist() == \
+                theirs.loc[met, "RequirementMet"].astype(int).tolist()
+            for ours, row in zip(mine.itertuples(), theirs.itertuples()):
+                if ours.Overlap or ours.Timing != al.TIMING_EXACT:
+                    continue
+                exact += 1
+                if (ours.OnsetMs, ours.LitMs) != (row.StartMs, row.LitMs):
+                    misses.append(f"DFM {dfm_id} W{well} {row.Kind} {row.Number}: ledger "
+                                  f"{ours.OnsetMs} for {ours.LitMs} ms, truth {row.StartMs} "
+                                  f"for {row.LitMs} ms")
+    assert not misses, "the ledger differs from Activations.csv:\n" + "\n".join(misses)
+    assert (exact, len(truth)) == (LEDGER_EXACT_ACTIVATIONS, TRUTH_ACTIVATIONS)
 
 
 # ---------------------------------------------------------------------------
