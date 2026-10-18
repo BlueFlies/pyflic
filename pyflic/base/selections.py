@@ -112,7 +112,8 @@ QC_SET: tuple[Item, ...] = (
         "Per DFM: every well's raw signal.  Writes qc/raw_signal/DFM<id>_raw.png.", None,
         "qc/raw_signal/DFM*_raw.png"),
     _qc("baselined_signal", "QC reports", "Baselined signal plots",
-        "Per DFM: every well's baselined signal with the feeding and tasting thresholds.  "
+        "Per DFM: every well's baselined signal with its feeding thresholds "
+        "(feeding_threshold and feeding_minimum) as dashed lines.  "
         "Writes qc/baselined/DFM<id>_baselined.png.", None,
         "qc/baselined/DFM*_baselined.png"),
     _qc("cumulative_licks", "QC reports", "Cumulative licks plots",

@@ -381,8 +381,9 @@ with Projects beneath it; `pyflic lint` reports the old constructs. See
 
 ### Loading is slow
 
-Keep **parallel** loading on (the Project panel's load options, or `parallel: true` on the
-`load` step). Loading is the expensive operation; everything after it reuses the result.
+Keep **parallel** loading on (the Project panel's load options, or `parallel=True` in
+`load_experiment_yaml`). Loading is the expensive operation; everything after it reuses the
+result.
 
 ### Do I need to clear the cache?
 

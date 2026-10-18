@@ -296,3 +296,24 @@ def test_drilling_into_a_project_keeps_its_batch(hub):
     assert hub._batch_view_root() is not None
     assert "Batch" in hub.readout.status_text()
     assert "Project" in hub.readout.status_text()
+
+
+def test_clear_cache_with_only_a_project_open_clears_every_members_cache(hub, tmp_path):
+    """A Project keeps no cache of its own: clearing its folder used to clear
+    nothing and report zero."""
+    from pyflic.base.project import Project
+
+    root = tmp_path / "proj"
+    _write(root / "project.yaml", {"name": "ProjC", "design": DESIGN})
+    for name, files in (("rep1", 2), ("rep2", 1)):
+        _member(root / name)
+        for i in range(files):
+            _write(root / name / ".pyflic_cache" / f"entry{i}.parquet", "x")
+    hub._set_project(Project(root))
+    assert hub.experiment is None
+    hub.log.clear_log()
+    hub._clear_cache()
+    assert not any(any((root / name / ".pyflic_cache").iterdir())
+                   for name in ("rep1", "rep2"))
+    assert hub.log.toPlainText().strip() == \
+        "Removed 3 cache file(s) from 2 member(s) of ProjC (rep1 2, rep2 1)"

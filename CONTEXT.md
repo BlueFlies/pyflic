@@ -68,7 +68,8 @@ use it yet), missing member.
 
 **Unfiled Recording**:
 The one Blocked state a button clears: DFM CSVs sitting at a member's root
-because that is where the rig wrote them. **Filing** moves `DFM*.csv` into
+because that is where the rig wrote them. **Filing** moves `DFM*.csv`, with
+the `Program.txt` and `Messages.csv` the loader reads beside them, into
 `data/` and every other loose file into `extra_files/`; every `.yaml`/`.yml`
 and the Exclusion Sheet stay at the root, because there they are configuration
 or declaration, never data. Filing never overwrites and never guesses: an
@@ -992,9 +993,12 @@ _Avoid_: manual, documentation, the docs, USAGE.
   **Paradigms** present (ADR-0017), whatever the type.
 - "the docs" was ambiguous between `doc/` (user prose) and `docs/` (ADRs).
   Resolved: user-facing prose is now **help topics**, which live with the
-  shipped code; `docs/` holds decision records for developers and nothing
-  else. Long-form prose is a **guide**, assembled from topics rather than
-  written. Say **help topic**, **guide**, or **ADR**, never "the docs".
+  shipped code. `docs/` holds the user guides written for researchers
+  (Getting Started, the QC guide, the Progressive Ratio guide), developer
+  references, an index (`docs/README.md`) and the ADRs. Long-form prose in
+  the help window is a **guide**, assembled from topics rather than written.
+  Say **help topic**, **guide**, **developer reference** or **ADR**, never
+  "the docs".
 
 - The Progressive Ratio training flag was described as clearing on all four
   wells of a Chamber Group at once, but the first real dataset

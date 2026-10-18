@@ -277,8 +277,8 @@ In outline:
    writes your answers as `flic_config.yaml` in the recording's folder.
 
    Always name the folder. Started without one, the config editor opens the
-   `flic_config.yaml` of the folder the terminal is in, and the `pyflic` folder holds an
-   example of its own.
+   `flic_config.yaml` of the folder the terminal is in, if it has one. Anywhere else it
+   opens empty, and **File → Save** asks where to save.
 3. **Open the hub on the folder:**
 
    ```
@@ -430,8 +430,8 @@ If macOS asks whether Terminal may access your Documents or Desktop folder, clic
 **Allow**.
 
 **The config editor opened settings you did not enter**
-It was started without a folder, so it opened the example `flic_config.yaml` in the
-`pyflic` folder. Close it without saving, and start it on your recording:
+It was started without a folder, so it opened the `flic_config.yaml` of the folder the
+terminal was in. Close it without saving, and start it on your recording:
 `uv run pyflic config "path/to/my_experiment"`.
 
 **The Experiment tile is greyed, and there is no QC, Analyze or Plots tile**

@@ -98,7 +98,7 @@ def _lint_type_definition(issues: list[LintIssue], path: Path, g: dict, program)
     try:
         etype = get_experiment_type(g.get("experiment_type"), path.parent)
     except ValueError:
-        return  # the unknown type is reported with the other type problems
+        return  # the unknown type is reported by _resolved_layout
     if etype.resolved_from == "library":
         _emit(issues, "warning",
               f"experiment_type '{etype.name}' is read from the lab library and the "
@@ -254,6 +254,7 @@ def lint_flic_config(path: str | Path) -> list[LintIssue]:
         return issues
 
     _lint_facet_source(issues, path, g, dfm_items, program, program_path)
+    layout = _resolved_layout(issues, path, g)
 
     seen_ids: set[int] = set()
     for raw_id, dfm in dfm_items:
@@ -293,13 +294,24 @@ def lint_flic_config(path: str | Path) -> list[LintIssue]:
                       f"DFM {dfm_id}: pi_direction must be 'left' or 'right', got {pi!r}",
                       path=f"dfms.{dfm_id}.params.pi_direction")
 
-        chamber_size = (d_params.get("chamber_size") if isinstance(d_params, dict) else None)
-        if chamber_size is None:
-            chamber_size = chamber_size_global
-        if chamber_size is None:
-            _emit(issues, "error",
-                  f"DFM {dfm_id}: chamber_size must be set in global.params or this DFM's params",
-                  path=f"dfms.{dfm_id}.params.chamber_size")
+        ## The loader never reads chamber_size: it derives it from the layout
+        ## (ADR-0007).  A stated one that disagrees is silently overruled.
+        stated = (d_params.get("chamber_size") if isinstance(d_params, dict) else None)
+        if stated is None:
+            stated = chamber_size_global
+        if layout is not None and stated is not None:
+            from .experiment_types import LAYOUT_CHAMBER_SIZE
+
+            wells = LAYOUT_CHAMBER_SIZE[layout]
+            try:
+                agrees = int(stated) == wells
+            except (TypeError, ValueError):
+                agrees = False
+            if not agrees:
+                _emit(issues, "warning",
+                      f"DFM {dfm_id}: chamber_size {stated!r} is not read; the chamber "
+                      f"layout is {layout} ({wells} well(s) per chamber)",
+                      path=f"dfms.{dfm_id}.params.chamber_size")
 
         problem = _opto.setting_problem(dfm.get(_opto.SETTING_KEY),
                                         where=f"dfms.{dfm_id}.{_opto.SETTING_KEY}")
@@ -409,6 +421,30 @@ def _lint_program_present(issues: list[LintIssue], path: Path, g: dict, dfm_id: 
     generation = _file_generation(path.parent / "data", dfm_id)
     if generation is not None and lacking_program({dfm_id: generation}, program):
         _emit(issues, "warning", no_program_warning([dfm_id]), path=f"dfms.{dfm_id}")
+
+
+def _resolved_layout(issues: list[LintIssue], path: Path, g: dict) -> str | None:
+    """The Chamber Layout the loader will use (ADR-0007): the Experiment
+    Type's own, else ``chamber_layout:``, else two-well, read from this
+    config's ``global:`` over, for a Member, the Project design's, as the
+    loader merges them.  ``None`` when it cannot be resolved: an unknown
+    type or an unknown ``chamber_layout``, which the loader refuses and
+    which are reported here."""
+    from . import experiment_types as _et
+    from .project import design_for_member
+
+    design_global, _source = design_for_member(path.parent)
+    merged = {**(design_global or {}), **g}
+    try:
+        etype = _et.get_experiment_type(merged.get("experiment_type"), path.parent)
+    except ValueError as err:
+        _emit(issues, "error", str(err), path="global.experiment_type")
+        return None
+    try:
+        return etype.resolve_chamber_layout(merged)
+    except ValueError as err:
+        _emit(issues, "error", str(err), path="global.chamber_layout")
+        return None
 
 
 def _lint_omit(issues: list[LintIssue], path: Path, g: dict) -> None:

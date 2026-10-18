@@ -1,12 +1,16 @@
 # Config Editor
 
 ```bash
-pyflic config
+pyflic config my_experiment/
 ```
 
 A form-based editor for `flic_config.yaml`. It knows which keys exist, which values are
 allowed, and which are required, so it writes a valid configuration rather than leaving you
 to discover a typo three steps later.
+
+Name the folder, or the YAML file, to edit. Started without one, the editor opens the
+`flic_config.yaml` of the folder you are in, if it has one; anywhere else it opens empty,
+and **File → Save** asks where to save.
 
 Use it for your first configuration. Hand-editing YAML is fine once you know the format —
 see [Configuration file structure](config-structure.md) — but there is no advantage to

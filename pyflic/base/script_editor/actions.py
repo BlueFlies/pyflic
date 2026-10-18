@@ -117,6 +117,17 @@ class Param:
     inheritable: bool = False               # "inherit from UI / script" toggle
     derived_from: str | None = None         # default derived from another key
     required: bool = False                  # required for the step to be valid
+    two_well_default: Any = None            # the default on a two-well layout,
+                                            # where it differs (param_default)
+
+
+def param_default(p: Param, capabilities=None) -> Any:
+    """*p*'s default for an experiment with *capabilities*
+    (:func:`capabilities_for`): its ``two_well_default`` on a two-well
+    layout, else its ``default``, which every layout has."""
+    if p.two_well_default is not None and "two_well" in (capabilities or ()):
+        return p.two_well_default
+    return p.default
 
 
 @dataclass(frozen=True)
@@ -176,12 +187,14 @@ ACTIONS: list[Action] = [
     Action(
         action="load",
         label="Load experiment",
-        blurb="Read DFM CSVs into memory for the rest of the script.",
+        blurb="Does nothing: the member is loaded before a script runs. Kept so "
+              "older scripts run unchanged.",
         icon="load", category=Category.LOAD, produces="none",
         params=[
             Param(key="parallel", label="Load DFMs in parallel", type="bool",
-                  note="Loads DFMs on a thread pool. Turn off for easier "
-                       "debugging on machines with slow disks.",
+                  note="Changes nothing: the member is already loaded. Parallel "
+                       "loading is on by default; turn it off with the Hub's "
+                       "Load DFMs in parallel option.",
                   default=None, inheritable=True),
             _START, _END,
         ],
@@ -257,6 +270,15 @@ ACTIONS: list[Action] = [
         params=[_START, _END],
     ),
     Action(
+        action="facet_csv",
+        label="Write faceted feeding CSV",
+        blurb="The per-chamber feeding summary for each Facet.",
+        icon="csv", category=Category.ANALYZE, produces="csv",
+        notes="Writes analysis/feeding_summary_facet.csv, which run_analysis "
+              "also writes as part of its core.  Skipped with a log line when "
+              "the experiment has no Facets.",
+    ),
+    Action(
         action="binned_csv",
         label="Write binned feeding CSV",
         blurb="Per-chamber feeding metrics binned over time.",
@@ -270,6 +292,8 @@ ACTIONS: list[Action] = [
         icon="weighted", category=Category.ANALYZE, produces="csv",
         requires="hedonic",
         params=[_START, _END],
+        notes="Writes analysis/treatment_means.csv: per treatment and well, the "
+              "chambers' median bout duration, plain and weighted by events.",
     ),
     Action(
         ## The action key stays ``tidy_export``: it is written into every
@@ -295,12 +319,17 @@ ACTIONS: list[Action] = [
         blurb="Non-parametric bootstrap confidence intervals for a metric.",
         icon="bootstrap", category=Category.ANALYZE, produces="csv",
         params=[
+            ## A single-well layout has no PI; the runner falls back the
+            ## same way when a step names no metric.
             Param(key="metric", label="Metric", type="string",
-                  note="Metric name (e.g. PI, MedDuration, Events).",
-                  default="PI", required=True),
+                  note="Metric name (e.g. PI, Licks, MedDuration, Events). "
+                       "PI by default on a two-well layout, Licks on a "
+                       "single-well one, which has no PI.",
+                  default="Licks", two_well_default="PI", required=True),
             Param(key="mode", label="Mode", type="choice",
-                  choices=["total", "A", "B", "mean_ab"],
-                  note="Which well/aggregation.",
+                  choices=["total", "A", "B", "diff"],
+                  note="Two-well only: which well, their sum (total) or A − B "
+                       "(diff), for a metric with an A and a B column.",
                   default="total"),
             Param(key="n_boot", label="Bootstrap iterations", type="int",
                   note="More = tighter CIs but slower.",
@@ -712,19 +741,38 @@ ACTIONS: list[Action] = [
     ),
 ]
 
-_ACTION_INDEX: dict[str, Action] = {a.action: a for a in ACTIONS}
+class Registry:
+    """The actions one script level offers, which the editor's palette,
+    canvas and inspector read: an Experiment Script's
+    (:data:`EXPERIMENT_REGISTRY`) or a Project Script's
+    (``project_actions.PROJECT_REGISTRY``).  The levels never mix (ADR-0005).
+    """
+
+    def __init__(self, actions) -> None:
+        self.actions = tuple(actions)
+        self._index = {a.action: a for a in self.actions}
+
+    def get(self, name: str):
+        return self._index.get(name)
+
+    def by_category(self) -> dict[Category, list]:
+        """The actions grouped by category, preserving insertion order."""
+        out: dict[Category, list] = {}
+        for a in self.actions:
+            out.setdefault(a.category, []).append(a)
+        return out
+
+
+EXPERIMENT_REGISTRY = Registry(ACTIONS)
 
 
 def get_action(name: str) -> Action | None:
-    return _ACTION_INDEX.get(name)
+    return EXPERIMENT_REGISTRY.get(name)
 
 
 def actions_by_category() -> dict[Category, list[Action]]:
     """Return actions grouped by category, preserving insertion order."""
-    out: dict[Category, list[Action]] = {}
-    for a in ACTIONS:
-        out.setdefault(a.category, []).append(a)
-    return out
+    return EXPERIMENT_REGISTRY.by_category()
 
 
 # ---------------------------------------------------------------------------
@@ -748,14 +796,15 @@ def default_mode_for_metric(metric: str) -> str | None:
 # Step helpers.
 # ---------------------------------------------------------------------------
 
-def describe_step(step: dict[str, Any]) -> str:
+def describe_step(step: dict[str, Any], registry: Registry | None = None) -> str:
     """Return a one-line chip summary used on canvas step cards.
 
     Non-None values from ``step`` (excluding ``action``) are rendered as
-    ``key: value`` segments joined by ' · '.
+    ``key: value`` segments joined by ' · '.  *registry* is the script
+    level's (the Experiment Script's by default).
     """
     action_name = step.get("action", "")
-    act = get_action(action_name)
+    act = (registry or EXPERIMENT_REGISTRY).get(action_name)
     if act is None:
         return "(unknown action)"
     parts: list[str] = []
@@ -777,11 +826,13 @@ def describe_step(step: dict[str, Any]) -> str:
     return " · ".join(parts) if parts else "(no parameters)"
 
 
-def validation_issues(step: dict[str, Any], *, experiment_type=None) -> list[str]:
+def validation_issues(step: dict[str, Any], *, experiment_type=None,
+                      registry: Registry | None = None) -> list[str]:
     """Return a list of human-readable warnings for *step*; *experiment_type*
-    is the experiment's capabilities (:func:`capabilities_for`)."""
+    is the experiment's capabilities (:func:`capabilities_for`), *registry*
+    the script level's (the Experiment Script's by default)."""
     issues: list[str] = []
-    act = get_action(step.get("action", ""))
+    act = (registry or EXPERIMENT_REGISTRY).get(step.get("action", ""))
     if act is None:
         return [f"Unknown action: {step.get('action')!r}"]
     problem = unmet(act.requires, experiment_type)

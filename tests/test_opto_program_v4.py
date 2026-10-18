@@ -419,6 +419,27 @@ def test_an_experiment_loads_with_the_simple_export(tmp_path):
     assert any(op.SIMPLE_WARNING in n for n in e.opto.experiment_notes())
 
 
+@pytest.mark.parametrize("extra, skipped", [("", 0), ("gibberish\n", 1)])
+def test_the_simple_exports_warning_is_not_counted_as_a_skipped_line(tmp_path, extra,
+                                                                     skipped):
+    """The loader's note said "1 line(s) skipped" of a clean simple export:
+    it counted the export's own warning."""
+    from pyflic.base.yaml_config import load_experiment_yaml
+
+    text = SIMPLE.read_text(encoding="utf-8") + extra
+    assert len(op.parse_program(text).skipped) == skipped
+    root = make_opto_dir(tmp_path / "exp", program=text)
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        e = load_experiment_yaml(root, parallel=False, use_disk_cache=False)
+    printed = out.getvalue()
+    assert ("1 line(s) skipped" in printed) == bool(skipped)
+    assert f"Program.txt: {op.SIMPLE_WARNING}" in printed
+    notes = e.opto.experiment_notes()
+    assert f"Program.txt: {op.SIMPLE_WARNING}" in notes
+    assert sum(n.startswith("Program.txt: line ") for n in notes) == skipped
+
+
 # ---------------------------------------------------------------------------
 # The program table
 # ---------------------------------------------------------------------------

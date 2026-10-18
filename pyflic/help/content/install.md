@@ -16,10 +16,11 @@ The usual way to install.
 uv add git+https://github.com/PletcherLab/pyflic.git
 ```
 
-To pin a version, which is what you want once an analysis is underway:
+To pin a version, which is what you want once an analysis is underway, name its release
+tag in place of `<version>`, for example the version `pyflic version` prints:
 
 ```bash
-uv add git+https://github.com/PletcherLab/pyflic.git@v0.3.0
+uv add git+https://github.com/PletcherLab/pyflic.git@v<version>
 ```
 
 Into a standalone environment, or with pip:
@@ -31,12 +32,12 @@ pip install git+https://github.com/PletcherLab/pyflic.git
 
 ## From a wheel file
 
-If you were sent a `.whl`:
+If you were sent a `.whl`, use its file name, which carries its version:
 
 ```bash
-uv add pyflic-0.3.0-py3-none-any.whl
-uv pip install pyflic-0.3.0-py3-none-any.whl
-pip install pyflic-0.3.0-py3-none-any.whl
+uv add pyflic-<version>-py3-none-any.whl
+uv pip install pyflic-<version>-py3-none-any.whl
+pip install pyflic-<version>-py3-none-any.whl
 ```
 
 ## Checking it worked
@@ -59,7 +60,7 @@ Both working means the package and its GUI dependencies are installed correctly.
 |---|---|
 | `pyflic` | Analysis Hub — the same as `pyflic hub` |
 | `pyflic hub [folder]` | Analysis Hub, opened on a Batch, a Project or an Experiment Directory |
-| `pyflic config [folder]` | Config Editor, on the folder's `flic_config.yaml` (or a YAML file you name) |
+| `pyflic config [folder]` | Config Editor, on the folder's `flic_config.yaml` (or a YAML file you name; default: the current folder's, else an empty editor) |
 | `pyflic qc [experiment]` | QC Viewer on an Experiment Directory (default: the current folder) |
 | `pyflic plots [project]` | Plot Editor, on a Project's publication figures |
 | `pyflic help [topic]` | This help window |

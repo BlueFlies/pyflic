@@ -63,6 +63,13 @@ GENERATION_DESCRIPTIONS: dict[int, str] = {
     GENERATION_PARADIGM: "90 columns, firmware 4.0.0 paradigm state",
 }
 
+#: What pyflic says of a generation-2 DFM wherever its Training would show
+#: (decision 15): ``summary.txt``, the report, the Hub's Loaded line, the
+#: Project Report and the light QC.  One wording everywhere, starting "no
+#: training information", which is what ``light_summary`` looks for.
+NO_TRAINING_INFORMATION = ("no training information: recorded with DFM firmware "
+                           "older than 4.0.0")
+
 N_WELLS = 12
 _PER_WELL = ("Phase", "Activations", "Requirement", "Progress", "OnMs")
 

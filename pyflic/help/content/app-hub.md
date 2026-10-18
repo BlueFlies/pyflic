@@ -30,7 +30,7 @@ needs one:
 
 | Note | Means |
 |---|---|
-| *no training information (firmware older than 4.0.0)* | a DFM was recorded by PyMCU 4.0.0 from a DFM whose firmware is older: no Training, so a Progressive Ratio member has one `Recording` Facet and no Test |
+| *no training information: recorded with DFM firmware older than 4.0.0* | a DFM was recorded by PyMCU 4.0.0 from a DFM whose firmware is older: no Training, so a Progressive Ratio member has one `Recording` Facet and no Test |
 | *DFM n: firmware 4.0.0 recording without Program.txt: Paradigm types and settings unknown* | copy the `Program.txt` PyMCU exported for this recording into `data/` |
 
 See [Generations](concepts-optogenetics.md#generations).
@@ -378,7 +378,8 @@ Project open, use **AI narrative…** on the Project panel's Analysis card inste
   hand-edited config three folders down before an unattended run finds it.
 - **Lint / migration check** — the linter and its migration checks, as `pyflic lint`.
 - **Open this folder** — the selected folder in the system file browser.
-- **Clear cache** — removes the loaded member's cached feeding summaries; see
+- **Clear cache** — removes the loaded member's cached feeding summaries or, with only a
+  Project open, every member's, and the log says how many it removed from each; see
   [The disk cache](performance.md#the-disk-cache).
 - **Toggle theme** — light or dark, remembered for next time.
 - **Help** — this help window, at its first page.

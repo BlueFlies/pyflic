@@ -45,6 +45,85 @@ def test_the_two_registries_do_not_overlap():
     assert not (experiment_names & project_names)
 
 
+def _runner_actions() -> set[str]:
+    """Every action name the Experiment Script runner compares a step with."""
+    import ast
+    import inspect
+
+    from pyflic.base.script_editor import runner
+
+    names: set[str] = set()
+    for node in ast.walk(ast.parse(inspect.getsource(runner))):
+        if isinstance(node, ast.Compare) and isinstance(node.left, ast.Name) \
+                and node.left.id == "action":
+            for comparator in node.comparators:
+                names |= {c.value for c in ast.walk(comparator)
+                          if isinstance(c, ast.Constant) and isinstance(c.value, str)}
+    return names
+
+
+def test_the_catalogue_offers_every_action_the_runner_runs():
+    """The Script Editor can only add what its catalogue lists: facet_csv ran
+    but could not be added."""
+    from pyflic.base.script_editor.actions import ACTIONS, get_action
+
+    assert _runner_actions() == {a.action for a in ACTIONS}
+    assert get_action("facet_csv").category == get_action("feeding_csv").category
+
+
+def test_the_load_steps_parallel_note_says_it_changes_nothing(tmp_path: Path):
+    """The member is loaded before a script runs, so `load` and its
+    `parallel` do nothing; the editor's note once offered to switch a thread
+    pool on and off."""
+    from types import SimpleNamespace
+
+    from pyflic.base.script_editor.actions import get_action
+    from pyflic.base.script_editor.runner import run_experiment_script
+
+    lines: list[str] = []
+    run_experiment_script(SimpleNamespace(analysis_dir=tmp_path),
+                          {"steps": [{"action": "load", "parallel": False}]},
+                          log=lines.append)
+    assert "Experiment already loaded." in lines
+    note = next(p.note for p in get_action("load").params if p.key == "parallel")
+    assert "Changes nothing" in note and "on by default" in note
+
+
+@pytest.mark.parametrize("layout, metric", [("single_well", "Licks"), ("two_well", "PI")])
+def test_bootstrap_defaults_to_a_metric_the_layout_has(tmp_path, monkeypatch, layout,
+                                                       metric):
+    """The default was PI everywhere, and a single-well layout has no PI."""
+    from types import SimpleNamespace
+
+    import pandas as pd
+
+    from pyflic.base import analytics
+    from pyflic.base.script_editor.actions import (capabilities_for, get_action,
+                                                   param_default)
+    from pyflic.base.script_editor.runner import run_experiment_script
+    from pyflic.base.yaml_config import load_experiment_yaml
+
+    root = tmp_path / "exp"
+    (root / "data").mkdir(parents=True)
+    columns = {"Sample": list(range(1, 601)), "Seconds": [i / 5 for i in range(600)],
+               **{f"W{w}": [0] * 600 for w in range(1, 13)}}
+    pd.DataFrame(columns).to_csv(root / "data" / "DFM1_0.csv", index=False)
+    (root / "flic_config.yaml").write_text(yaml.safe_dump(
+        {"global": {"chamber_layout": layout, "params": {"feeding_threshold": 10}},
+         "dfms": [{"id": 1, "chambers": {1: "Ctrl", 2: "Exp"}}]}), encoding="utf-8")
+    exp = load_experiment_yaml(root, parallel=False, use_disk_cache=False)
+    assert metric in exp.feeding_summary().columns
+
+    asked: list[str] = []
+    monkeypatch.setattr(analytics, "bootstrap_metric", lambda _e, **kw: (
+        asked.append(kw["metric"]) or SimpleNamespace(summary=pd.DataFrame())))
+    run_experiment_script(exp, {"steps": [{"action": "bootstrap"}]}, log=lambda _l: None)
+    assert asked == [metric]
+    param = next(p for p in get_action("bootstrap").params if p.key == "metric")
+    assert param_default(param, capabilities_for({"chamber_layout": layout})) == metric
+    assert param_default(param, None) == "Licks"
+
+
 def test_an_experiment_action_in_a_project_script_is_rejected_by_name(tmp_path: Path):
     project = _make_project(tmp_path)
     problems = validate_project_script(

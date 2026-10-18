@@ -8,7 +8,8 @@ names those states and repairs the ones that are repairable:
 
 * :func:`classify` — what a directory is, and why a run cannot use it.
 * :func:`plan_filing` / :func:`file_recording` — move an **Unfiled Recording**
-  into ``data/``, everything else loose into ``extra_files/``, and never a
+  into ``data/`` (its ``Program.txt`` and ``Messages.csv`` with it),
+  everything else loose into ``extra_files/``, and never a
   ``.yaml`` or an Exclusion Sheet: at an experiment root those are
   configuration or declaration, never data.  ``flic_config.yaml`` moved is an
   Experiment Directory un-made, and ``remove_chambers.csv`` moved silently
@@ -55,6 +56,13 @@ _DFM_RE_STRICT = re.compile(r"^DFM_?(\d+)(_\d+)?\.csv$")
 #: Never moved.  At an experiment root a YAML file is the config or a
 #: declaration sidecar; both are read from the root by definition.
 KEEP_SUFFIXES = (".yaml", ".yml")
+
+#: What PyMCU exports beside the DFM files, filed into ``data/`` with them:
+#: the loader reads the Opto Program (``opto_program.find_program``) and the
+#: message log (``messages.find_messages``) from ``data/`` only, so either
+#: parked in ``extra_files/`` is silently lost.  Lower case: both are found
+#: case-insensitively.
+_RECORDING_COMPANIONS = ("program.txt", "messages.csv")
 
 #: Excel writes ``~$Book.xlsx`` beside an open workbook, and dotfiles are the
 #: filesystem's business, not ours.
@@ -422,7 +430,8 @@ def _target_problem(directory, target) -> str:
 def plan_filing(directory) -> FilingPlan:
     """Plan the moves that would make *directory* loadable.
 
-    ``DFM*.csv`` goes to ``data/``; every other loose file goes to
+    ``DFM*.csv``, ``Program.txt`` and ``Messages.csv`` go to ``data/``, where
+    the loader reads them; every other loose file goes to
     ``extra_files/``; ``.yaml``/``.yml``, an Exclusion Sheet, hidden files,
     Excel lock files, symlinks, and every subdirectory stay exactly where they
     are.  A destination that already exists is never overwritten — it is
@@ -464,7 +473,8 @@ def plan_filing(directory) -> FilingPlan:
             continue
         if name.lower().endswith(KEEP_SUFFIXES) or _is_sidecar(name):
             continue
-        recording = bool(_DFM_RE_STRICT.match(name))
+        recording = (bool(_DFM_RE_STRICT.match(name))
+                     or name.lower() in _RECORDING_COMPANIONS)
         if not recording:
             ## Checked lazily: a stray file named extra_files/ must not refuse
             ## a filing whose only job is moving the recording.

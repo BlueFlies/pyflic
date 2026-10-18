@@ -167,6 +167,14 @@ def _matches(item: sel.Item, rel: str) -> bool:
 # The sets
 # ---------------------------------------------------------------------------
 
+def test_the_baselined_caption_names_only_the_thresholds_the_plot_draws():
+    """``DFM.plot_baselined`` draws FeedingMax and FeedingMin, no tasting
+    threshold."""
+    caption = sel.item(sel.QC, "baselined_signal").caption
+    assert "feeding_threshold and feeding_minimum" in caption
+    assert "tasting" not in caption
+
+
 def test_the_three_sets_hold_the_plans_items_in_panel_order():
     assert [i.id for i in sel.QC_SET] == [
         "integrity", "data_breaks", "raw_signal", "baselined_signal", "cumulative_licks",
@@ -333,6 +341,34 @@ def test_an_item_the_data_cannot_answer_is_reported_with_its_reason(ran):
     assert sel.applies(sel.item(sel.PLOTS, "hedonic_plot"), ran["hedonic_g2"].exp)
     assert not sel.applies(sel.item(sel.PLOTS, "hedonic_plot"), pr.exp)
     assert sel.applies(sel.item(sel.PLOTS, "well_comparison"), ran["hedonic_g2"].exp)
+
+
+def test_the_hedonic_manifest_names_the_files_its_runs_write(ran):
+    """The Hedonic module once named a weighted_duration.csv nothing writes;
+    the weighted duration summary is treatment_means.csv."""
+    from pyflic.base.analysis_modules.hedonic import HEDONIC
+
+    hedonic = ran["hedonic_g2"]
+    manifest = hedonic.exp.experiment_type.output_manifest()
+    assert set(HEDONIC.outputs) == {"hedonic_feeding_plot.png", "treatment_means.csv"}
+    assert set(HEDONIC.outputs) <= set(manifest)
+    assert "weighted_duration.csv" not in manifest
+    for name in HEDONIC.outputs:
+        assert (hedonic.root / "analysis" / name).is_file(), name
+    table = pd.read_csv(hedonic.root / "analysis" / "treatment_means.csv")
+    assert list(table.columns) == [
+        "Treatment",
+        "MeanDurationA", "SemDurationA", "WeightedMeanDurationA", "WeightedSemDurationA",
+        "SampleSizeA",
+        "MeanDurationB", "SemDurationB", "WeightedMeanDurationB", "WeightedSemDurationB",
+        "SampleSizeB"]
+    ## The script step names the file it wrote, not the table.
+    from pyflic.base.script_editor.runner import run_experiment_script
+
+    lines: list[str] = []
+    run_experiment_script(hedonic.exp, {"steps": [{"action": "weighted_duration"}]},
+                          log=lines.append)
+    assert f"Wrote: {Path(hedonic.exp.analysis_dir) / 'treatment_means.csv'}" in lines
 
 
 def test_the_paired_yoked_difference_is_greyed_without_a_yoked_chamber(ran, monkeypatch):
@@ -659,7 +695,7 @@ def test_analyze_all_keeps_basic_analysis_and_does_not_read_the_selection(
 #: The script actions before this stream; every one stays.
 EXISTING_ACTIONS = {
     "load", "write_summary", "remove_chambers", "basic_analysis", "run_qc", "feeding_csv",
-    "binned_csv", "weighted_duration", "tidy_export", "bootstrap", "compare",
+    "facet_csv", "binned_csv", "weighted_duration", "tidy_export", "bootstrap", "compare",
     "light_phase_summary", "param_sensitivity", "transition_matrix", "pdf_report",
     "plot_feeding_summary", "plot_binned", "plot_dot", "plot_moving_window",
     "plot_moving_median_chambers", "plot_moving_median_treatment", "plot_well_comparison",

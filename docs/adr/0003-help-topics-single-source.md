@@ -40,3 +40,7 @@ One help topic is one markdown file, authored under `pyflic/help/` and shipped i
 - **A markdown → HTML build step becomes part of the release**, feeding both the bundle and the download page.
 - **`QTextBrowser` renders a limited HTML/CSS subset.** Topics will look plain, and the topic list and any search must be built by hand.
 - **The `doc/` versus `docs/` ambiguity is finally closed**: `pyflic/help/` holds authored topics, `doc/` holds derived guides, `docs/` holds ADRs and nothing else.
+
+## Addendum (2026-10-18): what `docs/` holds
+
+`docs/` now also holds user guides written for researchers, developer references and an index (`docs/README.md`), beside the ADRs; the decision above stands for the help topics.

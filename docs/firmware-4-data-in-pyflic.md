@@ -60,18 +60,13 @@ written to `summary.txt` (*DFM details*), the integrity report, the report
 cover's **Generation** line, the `Generation` column of the light table and of
 `opto_light_qc.csv`, and the Project Report's member table.
 
-A generation-2 DFM has no Training, and the note saying so is worded three
-ways, each starting "no training information", which is what `light_summary`
-looks for:
-
-- `progressive_ratio_experiment.NO_TRAINING_INFORMATION`, *no training
-  information: recorded with DFM firmware older than 4.0.0*, in a Progressive
-  Ratio member's `summary.txt` and report;
-- the Progressive Ratio light QC's note (`pr_light_qc`), *no training
-  information (DFM firmware older than 4.0.0)*;
-- `light_summary.NO_TRAINING_INFORMATION`, *no training information (firmware
-  older than 4.0.0)*, on the Hub's Loaded line, in the Project Report's member
-  table and in the Stats text.
+A generation-2 DFM has no Training, and the note saying so has one wording,
+`paradigm_state.NO_TRAINING_INFORMATION`: *no training information: recorded
+with DFM firmware older than 4.0.0*. It appears in a Progressive Ratio member's
+`summary.txt` and report, in the Progressive Ratio light QC's note
+(`pr_light_qc`), on the Hub's Loaded line, in the Project Report's member table
+and in the Stats text. `light_summary` recognises it by its start, "no training
+information".
 
 ## The recording folder
 

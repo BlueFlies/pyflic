@@ -536,6 +536,11 @@ def test_generation_2_is_one_recording_facet_with_no_removals(gen2, tmp_path):
     qc = e.light_qc_table()
     assert qc["TrainingComplete"].isna().all()
     assert not qc["Flags"].str.contains(lqc.IMPLAUSIBLE_TRAINING).any()
+    ## One wording everywhere: the light QC's note, the Hub's and the Project
+    ## Report's (light_summary) are the type's own.
+    lit = ~qc["Notes"].str.startswith("no light events")
+    assert qc.loc[lit, "Notes"].str.startswith(NO_TRAINING_INFORMATION).all() and lit.any()
+    assert ls.NO_TRAINING_INFORMATION == NO_TRAINING_INFORMATION
     assert e.breaking_point_summary().empty
     diff = e.paired_yoked_diff()
     assert set(diff["Facet"]) == {"Recording"} and diff["TrainingComplete"].isna().all()

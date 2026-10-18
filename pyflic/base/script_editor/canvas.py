@@ -33,7 +33,8 @@ from PyQt6.QtWidgets import (
 )
 
 from ..ui import Category, category_color, icon
-from .actions import describe_step, get_action, validation_issues
+from .actions import (EXPERIMENT_REGISTRY, Registry, describe_step, param_default,
+                      validation_issues)
 
 
 # ---------------------------------------------------------------------------
@@ -106,8 +107,9 @@ class _StepCard(QFrame):
         self._btn_del.clicked.connect(lambda: self.deleteRequested.emit(self))
         lay.addWidget(self._btn_del)
 
-    def update_from(self, index: int, step: dict[str, Any], *, experiment_type: str | None) -> None:
-        act = get_action(step.get("action", ""))
+    def update_from(self, index: int, step: dict[str, Any], *, experiment_type: str | None,
+                    registry: Registry = EXPERIMENT_REGISTRY) -> None:
+        act = registry.get(step.get("action", ""))
         if act is None:
             self._title_lbl.setText(step.get("action", "(unknown)"))
             self._chip_lbl.setText("")
@@ -118,11 +120,11 @@ class _StepCard(QFrame):
             self._apply_category_color(Category.NEUTRAL)
             return
         self._title_lbl.setText(act.label)
-        self._chip_lbl.setText(describe_step(step))
+        self._chip_lbl.setText(describe_step(step, registry))
         self._icon_lbl.setPixmap(icon(act.icon, category=act.category).pixmap(20, 20))
         self._num_lbl.setText(f"{index + 1}.")
         self._apply_category_color(act.category)
-        issues = validation_issues(step, experiment_type=experiment_type)
+        issues = validation_issues(step, experiment_type=experiment_type, registry=registry)
         if issues:
             self._warn_lbl.setVisible(True)
             self._warn_lbl.setToolTip("\n".join(f"⚠ {msg}" for msg in issues))
@@ -176,9 +178,12 @@ class Canvas(QWidget):
     stepsChanged = pyqtSignal()
     stepSelected = pyqtSignal(int)
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, parent: QWidget | None = None, *,
+                 registry: Registry | None = None) -> None:
         super().__init__(parent)
         self._experiment_type: str | None = None
+        #: The script level's actions: an Experiment Script's by default.
+        self._registry = registry or EXPERIMENT_REGISTRY
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -316,20 +321,21 @@ class Canvas(QWidget):
         self._emit_changed()
 
     def append_step(self, action_name: str) -> None:
-        act = get_action(action_name)
+        act = self._registry.get(action_name)
         if act is None:
             return
         step: dict[str, Any] = {"action": action_name}
         for p in act.params:
-            if p.default is not None and not p.inheritable:
+            default = param_default(p, self._experiment_type)
+            if default is not None and not p.inheritable:
                 ## A list parameter's default is written as its text
                 ## ("Licks, Events, MedDuration"); save it as the list it is.
-                if p.type in ("list_str", "list_float") and isinstance(p.default, str):
-                    items = [x.strip() for x in p.default.split(",") if x.strip()]
+                if p.type in ("list_str", "list_float") and isinstance(default, str):
+                    items = [x.strip() for x in default.split(",") if x.strip()]
                     step[p.key] = ([float(x) for x in items] if p.type == "list_float"
                                    else items)
                 else:
-                    step[p.key] = p.default
+                    step[p.key] = default
         self._append_item(step)
         self._list.setCurrentRow(self._list.count() - 1)
         self._emit_changed()
@@ -348,7 +354,8 @@ class Canvas(QWidget):
         self._list.setItemWidget(item, card)
         card.deleteRequested.connect(lambda _c=card, i=item: self._delete_item(i))
         card.menuRequested.connect(lambda _c=card, i=item: self._show_context_menu(i))
-        card.update_from(self._list.row(item), step, experiment_type=self._experiment_type)
+        card.update_from(self._list.row(item), step, experiment_type=self._experiment_type,
+                         registry=self._registry)
 
     def _insert_item_at(self, row: int, step: dict[str, Any]) -> None:
         card = _StepCard(self._list)
@@ -359,7 +366,8 @@ class Canvas(QWidget):
         self._list.setItemWidget(item, card)
         card.deleteRequested.connect(lambda _c=card, i=item: self._delete_item(i))
         card.menuRequested.connect(lambda _c=card, i=item: self._show_context_menu(i))
-        card.update_from(row, step, experiment_type=self._experiment_type)
+        card.update_from(row, step, experiment_type=self._experiment_type,
+                         registry=self._registry)
 
     def _rerender_row(self, row: int) -> None:
         if row < 0 or row >= self._list.count():
@@ -368,7 +376,8 @@ class Canvas(QWidget):
         card = self._list.itemWidget(item)
         step = item.data(_STEP_ROLE)
         if isinstance(card, _StepCard) and isinstance(step, dict):
-            card.update_from(row, step, experiment_type=self._experiment_type)
+            card.update_from(row, step, experiment_type=self._experiment_type,
+                         registry=self._registry)
 
     def _rerender_all(self) -> None:
         for i in range(self._list.count()):

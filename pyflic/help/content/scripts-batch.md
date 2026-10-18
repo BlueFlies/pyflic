@@ -99,7 +99,8 @@ blocked. Below it, one row per Project found:
   hand, and the window says so.
 - **Rescan** walks the batch folder again, for changes made outside the app.
 
-**Filing** moves `DFM*.csv` into `data/` and every other loose file into `extra_files/`.
+**Filing** moves `DFM*.csv`, `Program.txt` and `Messages.csv` into `data/` and every
+other loose file into `extra_files/`.
 Every `.yaml` file and any `remove_chambers.csv` stays exactly where it is — at a member
 root those are configuration and declaration, never data. Nothing is ever overwritten: a
 name that already exists is skipped and reported.

@@ -20,7 +20,8 @@ class HedonicModule(AnalysisModule):
     needs_layout = "two_well"
     experiment_class = "pyflic.base.hedonic_experiment:HedonicFeedingExperiment"
     required_wells = ("A", "B")
-    outputs = ("weighted_duration.csv",)
+    #: ``hedonic_feeding_plot`` and ``weighted_duration_summary`` write these.
+    outputs = ("hedonic_feeding_plot.png", "treatment_means.csv")
 
 
 HEDONIC = HedonicModule()
