@@ -1352,16 +1352,26 @@ class FLICConfigEditor(QMainWindow):
         ## The Experiment Type comes from the registry, so adding a type
         ## reaches this menu with no edit here — and so the retired layout
         ## names (two_well, single_well) cannot reappear in it (ADR-0007).
-        from . import experiment_types as _et_mod
-
+        ## A lab's own types are listed too, and New type… builds one in the
+        ## Experiment Type Editor (ADR-0019).
         self._experiment_type_combo = QComboBox()
-        for item in _et_mod.available_experiment_types():
-            self._experiment_type_combo.addItem(item.display_name, item.name)
+        self._fill_type_combo()
         self._experiment_type_combo.setMaximumWidth(240)
         self._last_type_index = self._experiment_type_combo.currentIndex()
         self._experiment_type_combo.currentIndexChanged.connect(
             self._on_experiment_type_changed)
-        self._exp_form.addRow("Experiment Type:", self._experiment_type_combo)
+        self._new_type_btn = QPushButton("New type…")
+        self._new_type_btn.setIcon(icon("add", category=Category.LOAD))
+        self._new_type_btn.setToolTip(
+            "Open the Experiment Type Editor to build a type for your lab; it is "
+            "listed here once saved.")
+        self._new_type_btn.clicked.connect(lambda _checked=False: self._open_type_editor())
+        type_row = QHBoxLayout()
+        type_row.setContentsMargins(0, 0, 0, 0)
+        type_row.addWidget(self._experiment_type_combo)
+        type_row.addWidget(self._new_type_btn)
+        type_row.addStretch(1)
+        self._exp_form.addRow("Experiment Type:", type_row)
 
         ## Shown even when the type owns it: the layout is what decides
         ## whether the other tab has 6 chambers or 12, and a derived value
@@ -1407,6 +1417,16 @@ class FLICConfigEditor(QMainWindow):
         )
         self._transform_licks_check.setChecked(True)
         self._exp_form.addRow("Transform Licks:", self._transform_licks_check)
+
+        ## The Treatment control's level (ADR-0019), shown for a type that
+        ## compares every level of a factor with a control.
+        self._control_level_edit = QLineEdit()
+        self._control_level_edit.setMaximumWidth(200)
+        self._control_level_edit.setToolTip(
+            "control_level — the level of the type's control factor every other "
+            "level is compared with.")
+        self._control_level_row = self._exp_form.rowCount()
+        self._exp_form.addRow("Control Level:", self._control_level_edit)
 
         ## Whether the optogenetic light QC runs (auto | yes | no); a DFM tab
         ## can override it for that DFM.
@@ -1612,6 +1632,7 @@ class FLICConfigEditor(QMainWindow):
         self._sync_layout_control()
         self._refresh_threshold_hints()
         self._update_well_names_visibility()
+        self._sync_control_level()
         self._update_dfm_buttons()
         self._refresh_badges()
 
@@ -1628,13 +1649,59 @@ class FLICConfigEditor(QMainWindow):
     def _n_chambers(self, layout: str | None = None) -> int:
         return 12 if _layout_chamber_size(layout or self._chamber_layout()) == 1 else 6
 
+    def _type_where(self) -> Path | None:
+        """The directory of the file being edited: a lab type is read from
+        the copy beside it (or beside its project.yaml) first (ADR-0019)."""
+        return self._current_path.parent if self._current_path is not None else None
+
+    def _fill_type_combo(self, select: str | None = None) -> None:
+        """List the types this config can name, keeping *select* (or the
+        current choice) selected when it is still there."""
+        from . import experiment_types
+
+        combo = self._experiment_type_combo
+        current = select or combo.currentData()
+        combo.blockSignals(True)
+        combo.clear()
+        for item in experiment_types.available_experiment_types(self._type_where()):
+            label = item.display_name if item.is_shipped else f"{item.display_name}  (lab)"
+            combo.addItem(label, item.name)
+        index = combo.findData(current) if current else -1
+        combo.setCurrentIndex(max(index, 0))
+        combo.blockSignals(False)
+
+    def _reload_types(self, select: str | None = None) -> None:
+        """Re-read the type list after the Experiment Type Editor saved or
+        deleted one; a type it just saved is chosen."""
+        before = self._experiment_type_combo.currentData()
+        self._fill_type_combo(select or None)
+        if self._experiment_type_combo.currentData() != before:
+            self._on_experiment_type_changed(self._experiment_type_combo.currentIndex())
+
+    def _open_type_editor(self):
+        """The Experiment Type Editor on a new type."""
+        from .type_editor import open_type_editor
+
+        editor = open_type_editor(self)
+        editor.typesChanged.connect(self._reload_types)
+        editor.closed.connect(lambda: self._reload_types())
+        return editor
+
+    def _sync_control_level(self) -> None:
+        """Show the control level only for a type with a Treatment control."""
+        item = self._current_type()
+        factor = item.definition.treatment_control if item.definition is not None else None
+        self._exp_form.setRowVisible(self._control_level_row, factor is not None)
+        if factor is not None:
+            self._control_level_edit.setPlaceholderText(f"a level of {factor}")
+
     def _current_type(self):
         """The selected ``ExperimentType``, Custom if anything is amiss."""
         from . import experiment_types
 
         try:
             return experiment_types.get_experiment_type(
-                self._experiment_type_combo.currentData())
+                self._experiment_type_combo.currentData(), self._type_where())
         except Exception:  # noqa: BLE001 - an unknown name is a Custom Experiment
             return experiment_types.get_experiment_type(None)
 
@@ -1691,12 +1758,13 @@ class FLICConfigEditor(QMainWindow):
         self._refresh_threshold_hints()
         self._update_well_names_visibility()
         self._sync_pr_widgets()
+        self._sync_control_level()
         self._refresh_badges()
 
     def _sync_pr_widgets(self) -> None:
         """Show the paired-chamber pickers on every DFM tab for Progressive
         Ratio and hide them otherwise."""
-        enabled = self._current_type().name == "ProgressiveRatio"
+        enabled = self._current_type().has_module("ratio")
         for w in getattr(self, "_dfm_widgets", []):
             w.set_progressive_ratio(enabled)
 
@@ -2001,7 +2069,7 @@ class FLICConfigEditor(QMainWindow):
         factors = self._factors_widget.get_factors() if hasattr(self, "_factors_widget") else {}
         w = DFMWidget(dfm_id=dfm_id, chamber_size=chamber_size)
         w.update_factors(factors)
-        w.set_progressive_ratio(self._current_type().name == "ProgressiveRatio")
+        w.set_progressive_ratio(self._current_type().has_module("ratio"))
         for combo in (*w._paired_combos, w._groups_combo):
             combo.currentIndexChanged.connect(self._refresh_badges)
         w._id_spin.valueChanged.connect(lambda val, _w=w: self._on_dfm_id_changed(_w, val))
@@ -2187,13 +2255,14 @@ class FLICConfigEditor(QMainWindow):
 
         ## ADR-0007 / ADR-0011.  A typed config writes neither
         ## ``chamber_layout`` nor ``params.chamber_size`` — the type owns both
-        ## and they are derived.  A Custom Experiment states the layout,
-        ## because single-well versus two-well silently reinterprets the
-        ## whole plate and is not a thing to leave implicit.
-        if item.is_custom:
-            global_section["chamber_layout"] = self._chamber_layout()
-        else:
+        ## and they are derived.  A type that leaves the layout open (Custom,
+        ## or a lab type with chamber_layout: either) states it, because
+        ## single-well versus two-well silently reinterprets the whole plate
+        ## and is not a thing to leave implicit.
+        if not item.is_custom:
             global_section["experiment_type"] = item.name
+        if item.layout_free:
+            global_section["chamber_layout"] = self._chamber_layout()
 
         global_params = self._global_params.get_values()
         global_params.pop("chamber_size", None)
@@ -2298,6 +2367,11 @@ class FLICConfigEditor(QMainWindow):
         if omit:
             global_section["omit"] = omit
 
+        ## The Treatment control's level, under a type that has one (ADR-0019).
+        level = self._control_level_edit.text().strip()
+        if level and item.definition is not None and item.definition.treatment_control:
+            global_section["control_level"] = level
+
         return global_section
 
     def _collect_yaml(self) -> dict[str, Any]:
@@ -2347,8 +2421,11 @@ class FLICConfigEditor(QMainWindow):
         from . import experiment_types
 
         design = dict(self._design or {})
-        item = experiment_types.get_experiment_type(
-            design.get("experiment_type"))
+        try:
+            item = experiment_types.get_experiment_type(
+                design.get("experiment_type"), self._type_where())
+        except ValueError:
+            item = experiment_types.get_experiment_type(None)
         params = dict(design.get("params") or {})
         params["chamber_size"] = item.resolve_chamber_size(design)
         design["params"] = params
@@ -2385,6 +2462,7 @@ class FLICConfigEditor(QMainWindow):
                   if governed else "")
 
         for widget in (self._chamber_layout_combo, self._experiment_type_combo,
+                       self._new_type_btn, self._control_level_edit,
                        self._well_a_edit, self._well_b_edit,
                        self._transform_licks_check):
             widget.setEnabled(not governed)
@@ -2450,7 +2528,7 @@ class FLICConfigEditor(QMainWindow):
         raw_type = global_cfg.get("experiment_type")
         legacy_layout: str | None = None
         try:
-            item = experiment_types.get_experiment_type(raw_type)
+            item = experiment_types.get_experiment_type(raw_type, self._type_where())
         except ValueError:
             ## Either a retired layout name or one this build does not know.
             ## Both are a Custom Experiment; a retired name also tells us the
@@ -2480,6 +2558,8 @@ class FLICConfigEditor(QMainWindow):
         item, layout = self._resolve_type_and_layout(global_cfg)
         chamber_size = _layout_chamber_size(layout)
 
+        ## The types beside this file (a lab type's copy) join the list.
+        self._fill_type_combo()
         type_idx = self._experiment_type_combo.findData(item.name)
         self._experiment_type_combo.blockSignals(True)
         self._experiment_type_combo.setCurrentIndex(max(0, type_idx))
@@ -2495,6 +2575,8 @@ class FLICConfigEditor(QMainWindow):
         self._sync_layout_control()
         self._refresh_threshold_hints()
         self._update_well_names_visibility()
+        self._control_level_edit.setText(str(global_cfg.get("control_level") or ""))
+        self._sync_control_level()
 
         params_to_load = {k: v for k, v in global_params_raw.items() if k != "chamber_size"}
         self._global_params.load_values(params_to_load, chamber_size)
@@ -2624,9 +2706,12 @@ class FLICConfigEditor(QMainWindow):
         self._dfm_widgets.clear()
 
         self._global_params.reset_defaults(2)
+        self._fill_type_combo('Custom')
+        self._control_level_edit.clear()
         self._sync_layout_control()
         self._refresh_threshold_hints()
         self._update_well_names_visibility()
+        self._sync_control_level()
         self._sync_dfm_tabs(1, 2)
         ## A new config starts at the top of the dependency chain: the type
         ## decides the layout, and the layout decides the other tab's shape.
@@ -2752,9 +2837,25 @@ class FLICConfigEditor(QMainWindow):
                 yaml.dump(cfg, default_flow_style=False, allow_unicode=True, sort_keys=False),
                 encoding="utf-8",
             )
+            self._write_type_copy(path)
             QMessageBox.information(self, "Saved", f"Config saved to:\n{path}")
         except Exception as exc:
             QMessageBox.critical(self, "Error", f"Failed to save config:\n{exc}")
+
+    def _write_type_copy(self, path: Path) -> None:
+        """Carry a standalone experiment's type with it (ADR-0019): a lab type
+        is copied beside *path*, a shipped one leaves no copy behind.  A
+        Member's type is its Project's, copied by the Design editor."""
+        from .experiment_types import library
+
+        directory = Path(path).parent
+        if self._design or library.copy_dir(directory) != directory:
+            return
+        item = self._current_type()
+        if item.is_shipped:
+            library.remove_copy(directory)
+        else:
+            library.write_copy(item.definition, directory)
 
 
 # ---------------------------------------------------------------------------

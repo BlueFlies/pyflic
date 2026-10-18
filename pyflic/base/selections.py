@@ -31,23 +31,23 @@ OMIT_KINDS: tuple[str, ...] = (QC, ANALYSES, PLOTS)
 #: The ``global:`` key that holds the Selection.
 OMIT_KEY = "omit"
 
-#: What an item can require of a member (``Item.requires``).
-TWO_WELL, OPTOGENETIC, PROGRESSIVE_RATIO, HEDONIC = (
-    "two_well", "optogenetic", "progressive_ratio", "hedonic")
-REQUIREMENTS: tuple[str, ...] = (TWO_WELL, OPTOGENETIC, PROGRESSIVE_RATIO, HEDONIC)
+#: What an item can require of a member (``Item.requires``): a two-well
+#: layout, an optogenetic experiment, or an Analysis Module its Experiment
+#: Type includes (ADR-0019).  The groups the Progressive Ratio and Hedonic
+#: items sit in are those modules'.
+TWO_WELL, OPTOGENETIC = "two_well", "optogenetic"
+RATIO, HEDONIC, YOKED = "ratio", "hedonic", "yoked"
+MODULE_REQUIREMENTS: tuple[str, ...] = (RATIO, HEDONIC, YOKED)
+REQUIREMENTS: tuple[str, ...] = (TWO_WELL, OPTOGENETIC, *MODULE_REQUIREMENTS)
 
 #: What a run says of an item whose requirement the member does not meet.
 _NOT_MET: dict[str, str] = {
     TWO_WELL: "needs a two-well chamber layout",
     OPTOGENETIC: ("needs an optogenetic experiment (optogenetics: yes, or a "
                   "data/Program.txt or light data)"),
-    PROGRESSIVE_RATIO: "needs a Progressive Ratio experiment",
-    HEDONIC: "needs a Hedonic experiment",
-}
-#: What a run says of an item the member's type rules out (``Item.excludes``).
-_RULED_OUT: dict[str, str] = {
-    PROGRESSIVE_RATIO: ("not under Progressive Ratio, which keeps its own "
-                        "Paired-Yoked Difference"),
+    RATIO: "needs an experiment type with the Progressive Ratio module",
+    HEDONIC: "needs an experiment type with the Hedonic module",
+    YOKED: "needs an experiment type with the Paired and yoked module",
 }
 
 #: The run's own name for each kind, as the Hub's buttons say it.
@@ -64,11 +64,16 @@ class Item:
     group: str                 #: the group box's title
     label: str
     caption: str               #: the tooltip: what it is and what it writes
-    requires: str | None       #: one of :data:`REQUIREMENTS`, or ``None``
+    #: One of :data:`REQUIREMENTS`, a tuple of them (all needed), or ``None``.
+    requires: str | tuple[str, ...] | None
     outputs: tuple[str, ...]   #: globs under the Experiment Directory
-    #: A requirement that rules the item out (the yoked comparison is not
-    #: Progressive Ratio's, which keeps its own table).
-    excludes: str | None = None
+
+    @property
+    def requirements(self) -> tuple[str, ...]:
+        """Every requirement the item names."""
+        if self.requires is None:
+            return ()
+        return (self.requires,) if isinstance(self.requires, str) else tuple(self.requires)
 
 
 def _qc(id: str, group: str, label: str, caption: str, requires: str | None,
@@ -76,9 +81,9 @@ def _qc(id: str, group: str, label: str, caption: str, requires: str | None,
     return Item(id, QC, group, label, caption, requires, tuple(outputs))
 
 
-def _an(id: str, group: str, label: str, caption: str, requires: str | None,
-        *outputs: str, excludes: str | None = None) -> Item:
-    return Item(id, ANALYSES, group, label, caption, requires, tuple(outputs), excludes)
+def _an(id: str, group: str, label: str, caption: str, requires,
+        *outputs: str) -> Item:
+    return Item(id, ANALYSES, group, label, caption, requires, tuple(outputs))
 
 
 def _pl(id: str, group: str, label: str, caption: str, requires: str | None,
@@ -142,17 +147,17 @@ QC_SET: tuple[Item, ...] = (
     _qc("pr_light_qc", "Progressive Ratio", "Light QC table",
         "Per chamber group: did the paired fly earn its light?  Writes "
         "analysis/pr_light_qc.csv and analysis/pr_light_events.csv, and logs every "
-        "flagged group.", PROGRESSIVE_RATIO,
+        "flagged group.", RATIO,
         "analysis/pr_light_qc.csv", "analysis/pr_light_events.csv"),
     _qc("pr_light_event_figures", "Progressive Ratio", "Licks per light event",
         "Per DFM: the sucrose licks credited to each Test light event; a working "
         "progressive ratio climbs.  Writes analysis/pr_light_events_dfm<id>.png.",
-        PROGRESSIVE_RATIO,
+        RATIO,
         "analysis/pr_light_events_dfm*.png"),
     _qc("pr_resting_level_figures", "Progressive Ratio", "Sucrose Well resting level",
         "Per DFM: the paired Sucrose Well's per-minute median raw signal against the "
         "DFM's other Sucrose Wells.  Writes analysis/pr_resting_level_dfm<id>.png.",
-        PROGRESSIVE_RATIO,
+        RATIO,
         "analysis/pr_resting_level_dfm*.png"),
 )
 
@@ -174,18 +179,18 @@ ANALYSIS_SET: tuple[Item, ...] = (
     _an("yoked_comparison", "Optogenetics", "Paired and yoked comparison",
         "Per yoked linkage group and Facet: the Paired chamber's metrics, its Yoked "
         "chambers' mean and the difference.  Writes analysis/yoked_comparison.csv.",
-        OPTOGENETIC, "analysis/yoked_comparison.csv", excludes=PROGRESSIVE_RATIO),
+        (OPTOGENETIC, YOKED), "analysis/yoked_comparison.csv"),
     _an("paired_yoked_diff", "Progressive Ratio", "Paired-Yoked Difference",
         "Per chamber group and Facet: paired minus yoked, the primary table for "
         "Progressive Ratio statistics.  Writes analysis/paired_yoked_diff.csv.",
-        PROGRESSIVE_RATIO, "analysis/paired_yoked_diff.csv"),
+        RATIO, "analysis/paired_yoked_diff.csv"),
     _an("cumulative_diff", "Progressive Ratio", "Cumulative difference table",
         "The paired minus yoked cumulative licks since training end, in one-minute bins, "
         "which the Project pools.  Writes analysis/pr_cumulative_diff.csv.",
-        PROGRESSIVE_RATIO, "analysis/pr_cumulative_diff.csv"),
+        RATIO, "analysis/pr_cumulative_diff.csv"),
     _an("breaking_point", "Progressive Ratio", "Breaking point",
         "Per chamber group: the paired fly's breaking point, and its sensitivity to the "
-        "gap.  Writes analysis/pr_breaking_point.csv.", PROGRESSIVE_RATIO,
+        "gap.  Writes analysis/pr_breaking_point.csv.", RATIO,
         "analysis/pr_breaking_point.csv"),
     _an("weighted_duration", "Hedonic", "Weighted duration summary",
         "Per treatment: median bout duration at each well, plain and weighted by each "
@@ -216,19 +221,19 @@ PLOT_SET: tuple[Item, ...] = (
         "analysis/dot_*.png"),
     _pl("pr_cumulative_diff_plot", "Progressive Ratio", "Cumulative difference curve",
         "Paired minus yoked cumulative licks since training end, by treatment.  Writes "
-        "analysis/pr_cumulative_diff.png.", PROGRESSIVE_RATIO,
+        "analysis/pr_cumulative_diff.png.", RATIO,
         "analysis/pr_cumulative_diff.png"),
     _pl("pr_cumulative_licks", "Progressive Ratio", "Training-aligned traces",
         "Per DFM: paired and yoked cumulative licks since training end, one panel per "
         "chamber group.  Writes analysis/pr_cumulative_licks_dfm<id>.png.",
-        PROGRESSIVE_RATIO, "analysis/pr_cumulative_licks_dfm*.png"),
+        RATIO, "analysis/pr_cumulative_licks_dfm*.png"),
     _pl("pr_still_responding", "Progressive Ratio", "Still-responding curve",
         "Per treatment: the fraction of paired flies whose breaking point reached each "
-        "ratio.  Writes analysis/pr_still_responding.png.", PROGRESSIVE_RATIO,
+        "ratio.  Writes analysis/pr_still_responding.png.", RATIO,
         "analysis/pr_still_responding.png"),
     _pl("pr_breaking_point_plots", "Progressive Ratio", "Breaking-point plots",
         "Per DFM: licks per light-on period since training end, the break marked.  "
-        "Writes analysis/breaking_point_dfm<id>.png.", PROGRESSIVE_RATIO,
+        "Writes analysis/breaking_point_dfm<id>.png.", RATIO,
         "analysis/breaking_point_dfm*.png"),
     _pl("hedonic_plot", "Hedonic", "Hedonic feeding plot",
         "Median bout duration at each well, one point per chamber, by treatment.  "
@@ -269,33 +274,28 @@ def groups(kind: str) -> list[str]:
 # ---------------------------------------------------------------------------
 
 def _meets(experiment: Any, requirement: str) -> bool:
-    """Whether *experiment* meets *requirement*, tested as the script runner
-    gates the single actions (the class for the layout and the types, the
-    light QC's coverage for optogenetic)."""
+    """Whether *experiment* meets *requirement*: the class for the layout,
+    the light QC's coverage for optogenetic, and its Experiment Type's
+    modules for a module (ADR-0019)."""
     if requirement == OPTOGENETIC:
         return getattr(experiment, "is_optogenetic", False) is True
     if requirement == TWO_WELL:
         from .two_well_experiment import TwoWellExperiment
 
         return isinstance(experiment, TwoWellExperiment)
-    if requirement == PROGRESSIVE_RATIO:
-        from .progressive_ratio_experiment import ProgressiveRatioExperiment
-
-        return isinstance(experiment, ProgressiveRatioExperiment)
-    if requirement == HEDONIC:
-        from .hedonic_experiment import HedonicFeedingExperiment
-
-        return isinstance(experiment, HedonicFeedingExperiment)
+    if requirement in MODULE_REQUIREMENTS:
+        etype = getattr(experiment, "experiment_type", None)
+        has = getattr(etype, "has_module", None)
+        return bool(has(requirement)) if callable(has) else False
     raise ValueError(f"Unknown requirement {requirement!r}; use {', '.join(REQUIREMENTS)}.")
 
 
 def not_applicable_reason(item: Item, experiment: Any) -> str | None:
-    """Why *item* does not apply to *experiment* (its layout, its type or
-    its light rules it out), or ``None`` when it applies."""
-    if item.requires is not None and not _meets(experiment, item.requires):
-        return _NOT_MET[item.requires]
-    if item.excludes is not None and _meets(experiment, item.excludes):
-        return _RULED_OUT[item.excludes]
+    """Why *item* does not apply to *experiment* (its layout, its type's
+    modules or its light rule it out), or ``None`` when it applies."""
+    for requirement in item.requirements:
+        if not _meets(experiment, requirement):
+            return _NOT_MET[requirement]
     return None
 
 

@@ -383,13 +383,15 @@ def test_basic_analysis_writes_the_pr_outputs(tmp_path):
 # Publication figures and gating
 # ---------------------------------------------------------------------------
 
-def test_pr_diff_plot_spec_is_type_gated():
-    assert "timecourse_pr_diff" in pubfigures.plots_for_layout("two_well", "ProgressiveRatio")
-    assert "scatter_pr_breaking_point" in pubfigures.plots_for_layout(
-        "two_well", "ProgressiveRatio")
-    assert "dot_pr_breaking_point" in pubfigures.plots_for_layout(
-        "two_well", "ProgressiveRatio")
-    assert "timecourse_pr_diff" not in pubfigures.plots_for_layout("two_well", "Hedonic")
+def test_pr_diff_plot_spec_is_gated_on_the_ratio_module():
+    """ADR-0019: a plot of the Ratio analysis is offered to any type that
+    includes the module, and to no other."""
+    pr = et.get_experiment_type("ProgressiveRatio")
+    assert "timecourse_pr_diff" in pubfigures.plots_for_layout("two_well", pr)
+    assert "scatter_pr_breaking_point" in pubfigures.plots_for_layout("two_well", pr)
+    assert "dot_pr_breaking_point" in pubfigures.plots_for_layout("two_well", ("ratio",))
+    assert "timecourse_pr_diff" not in pubfigures.plots_for_layout(
+        "two_well", et.get_experiment_type("Hedonic"))
     assert "timecourse_pr_diff" not in pubfigures.plots_for_layout("two_well")
     assert pubfigures.source_of("timecourse_pr_diff") == "pr_diff"
     assert pubfigures.source_of("scatter_pr_breaking_point") == "pr_breaking"
@@ -497,19 +499,26 @@ def test_member_diff_curve_mean_is_truncated_but_traces_are_not(exp):
     exp.plot_cumulative_diff().draw()
 
 
-@pytest.mark.parametrize("spelling,key", [
-    ("ProgressiveRatio", "progressive_ratio"),
-    ("progressive_ratio", "progressive_ratio"),
-    ("Progressive-Ratio", "progressive_ratio"),
-    ("Hedonic", "hedonic"),
-    ("", None),
-    (None, None),
-    ("Custom", None),
+@pytest.mark.parametrize("spelling,layout,caps", [
+    ("ProgressiveRatio", None, {"ratio", "light_dark", "two_well"}),
+    ("progressive_ratio", None, {"ratio", "light_dark", "two_well"}),
+    ("Progressive-Ratio", None, {"ratio", "light_dark", "two_well"}),
+    ("Hedonic", None, {"hedonic", "two_well"}),
+    ("", "two_well", {"yoked", "light_dark", "two_well"}),
+    (None, "single_well", {"yoked", "light_dark"}),
+    ("Custom", None, {"yoked", "light_dark", "two_well"}),
 ])
-def test_script_editor_type_key_matches_the_registry_spelling(spelling, key):
-    from pyflic.base.script_editor.actions import requires_key_for
+def test_script_editor_capabilities_follow_the_layout_and_the_modules(spelling, layout, caps):
+    """The Script Editor gates an action on a two-well layout or on an
+    Analysis Module the type includes (ADR-0019), from any spelling the
+    registry accepts; Custom's layout is the config's."""
+    from pyflic.base.script_editor.actions import capabilities_for
 
-    assert requires_key_for(spelling) == key
+    g = {"experiment_type": spelling}
+    if layout:
+        g["chamber_layout"] = layout
+    assert capabilities_for(g) == frozenset(caps)
+    assert capabilities_for({"experiment_type": "NoSuchType"}) is None
 
 
 def test_dfm_qc_figures_are_built_without_pyplot_and_save_in_a_thread(exp):

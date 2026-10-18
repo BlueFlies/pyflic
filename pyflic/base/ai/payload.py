@@ -78,7 +78,7 @@ def build_project_payload(project) -> SummaryPayload:
             continue
         info = pubfigures.PLOT_TYPES[plot_id]
         if not pubfigures.plot_allowed(plot_id, project.chamber_layout,
-                                       project.experiment_type.name):
+                                       project.experiment_type):
             continue
         source = pubfigures.frame_for(plot_id, facet, binned, project)
         if source is None or source.empty:

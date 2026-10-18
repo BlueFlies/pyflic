@@ -275,17 +275,21 @@ In outline:
 
 ### Which Experiment Type?
 
-The Experiment Type describes the feeding design. It does not have to match the light
-program: whatever Paradigms `Program.txt` names, pyflic checks the light against each
-one's rule and reports its own measures, under every type.
+The Experiment Type is the assay. It states the light the recording should have, and a
+recording whose `Program.txt` runs other light fails to load with the Paradigm named.
+Whatever the type, pyflic judges the light against each Paradigm's own rule and reports
+its own measures.
 
 | Your experiment | Experiment Type |
 |---|---|
-| No light, or a light program of OpenLoop, ClosedLoop, FixedInterval or NonFeeding Paradigms | **Custom**, with its chamber layout (single-well or two-well) |
-| A two-well hedonic design, where bout duration matters, with no light or under any of those programs | **Hedonic** |
+| No light, or any light program you do not want to declare | **Custom**, with its chamber layout (single-well or two-well) |
+| A two-well hedonic design, where bout duration matters, without light | **Hedonic** |
 | A ratio program (ProgressiveRatio or FixedRatio Paradigms), with or without yoked controls | **ProgressiveRatio** |
+| Anything your lab runs again and again: a hedonic design under closed-loop light, ClosedLoop Training before a ratio, a genotype panel against its control | a **type of your own**, built once in the Experiment Type Editor (`uv run pyflic-types`, or *New type…* beside the type list) |
 
-A paired and yoked design under Custom or Hedonic still gets its paired − yoked comparison.
+A paired and yoked design under Custom, or under a type with the *Paired and yoked*
+module, gets its paired − yoked comparison. A type of your own travels with the data as
+`experiment_type.yaml`, so a colleague's machine analyses it the same way.
 
 Two more guides sit beside this one:
 

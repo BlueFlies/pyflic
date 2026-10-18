@@ -608,6 +608,21 @@ class AnalysisHubWindow(QMainWindow):
         self.project_summary = QLabel("")
         self.project_summary.setWordWrap(True)
         card.add_body(self.project_summary)
+        ## The Project's copy of a lab type, when it differs from the
+        ## library's master (ADR-0019): said here, with the update beside it.
+        self.type_drift_label = QLabel("")
+        self.type_drift_label.setWordWrap(True)
+        self.type_drift_btn = ActionButton("Update the type copy from the library",
+                                           Category.NEUTRAL, "refresh")
+        self.type_drift_btn.setToolTip(
+            "Replace the experiment_type.yaml beside project.yaml with the lab "
+            "library's version of the type.  The members' results then need a "
+            "re-run to reflect it.")
+        self.type_drift_btn.clicked.connect(self._update_type_copy)
+        card.add_body(self.type_drift_label)
+        card.add_body(self.type_drift_btn)
+        self.type_drift_label.setVisible(False)
+        self.type_drift_btn.setVisible(False)
         self.panels["project"].add_card(card)
 
     def _build_project_experiments_card(self) -> None:
@@ -813,12 +828,25 @@ class AnalysisHubWindow(QMainWindow):
     # menu, the buttons) and _fill_selection makes the groups for each
     # member.
 
+    #: The object name of :meth:`_muted`'s notes, so :meth:`_restyle` finds them.
+    _MUTED_NOTE = "PyflicMutedNote"
+
     @staticmethod
-    def _muted(text: str) -> QLabel:
+    def _muted_qss() -> str:
+        """The muted notes' tint for the CURRENT theme, from ``surface_colors``.
+
+        Not ``palette(mid)``: qdarktheme leaves that role one grey for both
+        themes, 1.8:1 on the light theme's band, so the notes read as empty
+        boxes (``CardGroup.restyle`` avoids it for the same reason)."""
+        return f"color: {surface_colors()['muted']}; font-style: italic;"
+
+    @classmethod
+    def _muted(cls, text: str) -> QLabel:
         """A quiet, wrapping line: a note on the controls around it."""
         label = QLabel(text)
+        label.setObjectName(cls._MUTED_NOTE)
         label.setWordWrap(True)
-        label.setStyleSheet("color: palette(mid); font-style: italic;")
+        label.setStyleSheet(cls._muted_qss())
         return label
 
     def _selection_host(self, kind: str, card: Card) -> None:
@@ -1232,6 +1260,7 @@ class AnalysisHubWindow(QMainWindow):
         ## home beside the button that writes what it shows.
         for label, icon_name, handler in (
             ("Config editor", "config", self._open_config_editor),
+            ("Experiment type editor", "settings", self._open_type_editor),
             ("Validate every YAML here", "lint", self._validate_yaml),
             ("Lint / migration check", "lint", self._run_lint),
             ("Open this folder", "open", self._open_folder),
@@ -1377,6 +1406,8 @@ class AnalysisHubWindow(QMainWindow):
             ## theme toggle has to reach them or half the panel stays light.
             for card in panel.cards():
                 card.restyle()
+            for note in panel.findChildren(QLabel, self._MUTED_NOTE):
+                note.setStyleSheet(self._muted_qss())
 
     # ------------------------------------------------------------------
     # Selection
@@ -2621,6 +2652,55 @@ class AnalysisHubWindow(QMainWindow):
             return self.batch_root
         return None
 
+    def _open_type_editor(self) -> None:
+        """The Experiment Type Editor (ADR-0019): a type it saves reaches the
+        Design and Config editors' lists the next time they fill them."""
+        from .type_editor import open_type_editor
+
+        editor = open_type_editor(self)
+        editor.typesChanged.connect(lambda _name: self._refresh_type_drift())
+
+    def _refresh_type_drift(self) -> None:
+        """Show whether the open Project's copy of its lab type differs from
+        the library's master."""
+        from .experiment_types import library
+
+        directory = getattr(self.project, "project_directory", None)
+        try:
+            drift = library.copy_drift(directory) if directory else None
+        except OSError:
+            drift = None
+        self.type_drift_label.setText(f"⚠ {drift}" if drift else "")
+        self.type_drift_label.setVisible(bool(drift))
+        self.type_drift_btn.setVisible(bool(drift))
+
+    def _update_type_copy(self) -> None:
+        """Replace the Project's copy with the library's master, and reload."""
+        from .experiment_types import library
+
+        if self.project is None:
+            return
+        directory = self.project.project_directory
+        try:
+            copy = library.read_copy(directory)
+            master = library.library_definition(copy.name) if copy is not None else None
+            if master is None:
+                return
+            library.write_copy(master, directory)
+        except (OSError, ValueError) as err:
+            QMessageBox.warning(self, "Experiment type", str(err))
+            return
+        self.log.append_line(
+            f"[design] {library.copy_path(directory)}: updated from the library's "
+            f"'{master.name}' — re-run the members' analysis to reflect it")
+        try:
+            self._set_project(project_mod.Project(directory))
+        except Exception as err:  # noqa: BLE001
+            self._set_project(None)
+            QMessageBox.critical(self, "Project does not load", str(err))
+            self._log_issue(f"ERROR: {err}")
+        self.refresh()
+
     def _open_config_editor(self) -> None:
         directory = self._current_dir()
         config = os.path.join(directory, "flic_config.yaml") if directory else None
@@ -3069,6 +3149,7 @@ class AnalysisHubWindow(QMainWindow):
         ## Experiments card stays visible-but-gated so an empty state still
         ## shows where members will appear.
         self.project_analysis_card.setVisible(self.project is not None)
+        self._refresh_type_drift()
         if self.project is None:
             tile.set_summary(["no project open", "open one to begin"])
             self.project_summary.setText("")

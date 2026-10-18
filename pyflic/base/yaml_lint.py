@@ -32,6 +32,8 @@ _KNOWN_GLOBAL_KEYS = {
     "facet_source",
     # The Selection: what Run QC / Run analysis / Generate plots leave out (ADR-0018).
     "omit",
+    # The Treatment control's level, under a type with one (ADR-0019).
+    "control_level",
 }
 _KNOWN_PARAM_KEYS = {
     "baseline_window_minutes", "baseline_window_min", "baseline_window",
@@ -83,6 +85,42 @@ def _emit(
         line = node.start_mark.line + 1
         column = node.start_mark.column + 1
     issues.append(LintIssue(severity, message, line, column, path))
+
+
+def _lint_type_definition(issues: list[LintIssue], path: Path, g: dict, program) -> None:
+    """The Experiment Type as ADR-0019 keeps it: a lab type's copy beside
+    the data and its agreement with the library, and the light it expects
+    against the Opto Program (which the loader checks too, unless
+    ``optogenetics: no`` keeps it from reading the program)."""
+    from . import opto_program as _opto
+    from .experiment_types import COPY_NAME, get_experiment_type, library
+
+    try:
+        etype = get_experiment_type(g.get("experiment_type"), path.parent)
+    except ValueError:
+        return  # the unknown type is reported with the other type problems
+    if etype.resolved_from == "library":
+        _emit(issues, "warning",
+              f"experiment_type '{etype.name}' is read from the lab library and the "
+              f"data carries no copy of it: save the design or the config in the "
+              f"editor to write {COPY_NAME} beside it, so another machine analyses "
+              f"it the same way", path="global.experiment_type")
+    drift = library.copy_drift(path.parent)
+    if drift:
+        _emit(issues, "warning", drift, path="global.experiment_type")
+    if program is None:
+        return
+    try:
+        setting = _opto.normalize_setting(g.get(_opto.SETTING_KEY))
+    except ValueError:
+        setting = _opto.SETTING_AUTO
+    if setting == _opto.SETTING_NO:
+        return
+    for problem in etype.light_problems(program):
+        if etype.name == "Hedonic":
+            problem += (" (Hedonic expects no light: build a hedonic type that expects "
+                        "this light in the Experiment Type Editor)")
+        _emit(issues, "error", problem, path="global.experiment_type")
 
 
 def lint_flic_config(path: str | Path) -> list[LintIssue]:
@@ -185,6 +223,7 @@ def lint_flic_config(path: str | Path) -> list[LintIssue]:
             for dfm_id, reason in sorted(program.rejected.items()):
                 _emit(issues, "warning", f"{program_path.name}: DFM {dfm_id} section "
                                          f"dropped — {reason}")
+    _lint_type_definition(issues, path, g, program)
 
     factors = g.get("experimental_design_factors") or {}
     factor_names = list(factors.keys()) if isinstance(factors, dict) else []
@@ -275,7 +314,7 @@ def lint_flic_config(path: str | Path) -> list[LintIssue]:
         ## after what the Opto Program fills in, exactly as the loader does it.
         try:
             from . import experiment_types as _et
-            _type = _et.get_experiment_type(g.get("experiment_type"))
+            _type = _et.get_experiment_type(g.get("experiment_type"), path.parent)
         except Exception:  # noqa: BLE001 — the type problem is reported elsewhere
             _type = None
         if _type is not None:
@@ -403,7 +442,7 @@ def _lint_facet_source(issues: list[LintIssue], path: Path, g: dict, dfm_items,
         return
     try:
         from . import experiment_types as _et
-        etype = _et.get_experiment_type(g.get("experiment_type"))
+        etype = _et.get_experiment_type(g.get("experiment_type"), path.parent)
     except Exception:  # noqa: BLE001 — the type problem is reported elsewhere
         etype = None
     if etype is not None and etype.owns_facet_source:

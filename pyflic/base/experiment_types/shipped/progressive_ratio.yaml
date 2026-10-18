@@ -1,0 +1,22 @@
+format: 1
+name: ProgressiveRatio
+display_name: Progressive Ratio
+description: >-
+  A progressive-ratio assay: in each chamber group the paired fly earns
+  light-driven stimulation by feeding at the sucrose well (well A); in a
+  paired group its yoked partner is lit at the same moments regardless of
+  behaviour. Training is closed-loop and ends at a time the data defines per
+  group; the Test phase follows. The headline results are the breaking point
+  and, where groups have a yoked control, the paired-minus-yoked difference
+  within each group.
+chamber_layout: two_well
+## Both ratio Paradigms of firmware 4.0.0 (decision 6 of docs/v4-data-plan.md),
+## with OpenLoop and dark intervals beside them.
+light: [ProgressiveRatio, FixedRatio]
+required_wells: [A, B]
+modules: [ratio, light_dark]
+plots: [faceted_licks, faceted_events, faceted_pi]
+constants:
+  min_untransformed_licks_cutoff: 20
+  max_med_duration_cutoff: 13.0
+  max_events_cutoff: 150000.0

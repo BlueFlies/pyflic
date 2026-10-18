@@ -524,20 +524,22 @@ class OptoLightQC:
                     path=None, start=None, end=None, duration_min=None, baseline=True,
                     dfms=sections))
                 etype = getattr(exp, "experiment_type", None)
-                is_pr = getattr(etype, "name", "") == "ProgressiveRatio"
+                has = getattr(etype, "has_module", None)
+                is_pr = bool(has("ratio")) if callable(has) else False
                 display = getattr(etype, "display_name", "Custom")
-                ## The Progressive Ratio type covers both ratio Paradigms.
+                ## The Progressive Ratio module covers both ratio Paradigms.
                 ratios = [p for p in op.RATIO_PARADIGMS if p in paradigms]
                 if ratios and not is_pr:
                     names = " and a ".join(ratios)
                     notes.append(f"Program.txt runs a {names}, but the experiment "
-                                 f"type is {display}: the breaking point and the paired / "
-                                 f"yoked analysis need experiment_type ProgressiveRatio")
+                                 f"type {display} has no Progressive Ratio module: the "
+                                 f"breaking point and the paired / yoked analysis need a "
+                                 f"type that includes it, such as ProgressiveRatio")
                 if is_pr and not ratios:
                     listed = ", ".join(sorted(paradigms)) or "no triggered interval"
-                    notes.append(f"the experiment type is Progressive Ratio, but Program.txt "
-                                 f"runs no progressive-ratio or fixed-ratio interval "
-                                 f"({listed})")
+                    notes.append(f"the experiment type {display} runs the Progressive "
+                                 f"Ratio module, but Program.txt runs no progressive-ratio "
+                                 f"or fixed-ratio interval ({listed})")
         generations = self.generations()
         if any(g != GENERATION_FLAG for g in generations.values()):
             by_generation: dict[int, list[int]] = {}

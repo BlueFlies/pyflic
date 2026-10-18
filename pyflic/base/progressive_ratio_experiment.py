@@ -1716,8 +1716,6 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
             self, range_minutes=range_minutes,
             min_untransformed_licks_cutoff=min_untransformed_licks_cutoff)
         constants = self.global_constants or {}
-        max_dur = constants.get("max_med_duration_cutoff")
-        max_events = constants.get("max_events_cutoff")
         require_training = _truthy(constants.get("require_training_complete", True))
 
         fs = self.feeding_summary(range_minutes=range_minutes,
@@ -1732,15 +1730,8 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
             key = (int(row["DFM"]), int(row["Chamber"]))
             if key in already or key in to_remove:
                 continue
-            reasons: list[str] = []
-            for col in ("MedDurationA", "MedDurationB"):
-                v = row.get(col)
-                if max_dur is not None and pd.notna(v) and float(v) > float(max_dur):
-                    reasons.append(f"{col}={float(v):.6g} > max_med_duration_cutoff={max_dur}")
-            for col in ("EventsA", "EventsB"):
-                v = row.get(col)
-                if max_events is not None and pd.notna(v) and float(v) > float(max_events):
-                    reasons.append(f"{col}={float(v):.6g} > max_events_cutoff={max_events}")
+            ## The cutoffs every two-well type applies (ADR-0019).
+            reasons: list[str] = self.two_well_removal_reasons(row)
             ## Only a group known not to have trained: on a DFM that records no
             ## Training, TrainingComplete is NA and removes nothing.
             if require_training and _flag(row.get("TrainingComplete", True)) is False:
@@ -1771,15 +1762,8 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
             combined = pd.concat([base, extra], ignore_index=True)
         self.filtered_chambers = combined
 
-        lines = ["", "Progressive Ratio filter (additional criteria)", ""]
-        lines.append(f"  • max_med_duration_cutoff = {float(max_dur):g}: excluded if "
-                     f"MedDurationA or MedDurationB > {float(max_dur):g}"
-                     if max_dur is not None else
-                     "  • max_med_duration_cutoff: not configured.")
-        lines.append(f"  • max_events_cutoff = {float(max_events):g}: excluded if "
-                     f"EventsA or EventsB > {float(max_events):g}"
-                     if max_events is not None else
-                     "  • max_events_cutoff: not configured.")
+        lines = ["", "Progressive Ratio filter (additional criteria)", "",
+                 *self.two_well_criteria_lines()]
         whose = self._group_chambers_phrase("a chamber group")
         verb = "is" if whose.startswith("the chamber") else "are"
         lines.append(f"  • require_training_complete = true: {whose} whose paired fly "

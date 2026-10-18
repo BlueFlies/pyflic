@@ -1,0 +1,19 @@
+format: 1
+name: Hedonic
+display_name: Hedonic Feeding
+description: >-
+  A hedonic feeding assay: each chamber offers a choice between two food
+  sources. Positive PI means a preference for well A over well B; the well
+  names below say which is which.
+chamber_layout: two_well
+## No light: a hedonic design under a light program is a type of its own,
+## built for that light (ADR-0019).
+light: none
+required_wells: [A, B]
+modules: [hedonic]
+plots: [faceted_pi, faceted_licks, faceted_medduration, timecourse_pi,
+        timecourse_licks]
+constants:
+  min_untransformed_licks_cutoff: 20
+  max_med_duration_cutoff: 13.0
+  max_events_cutoff: 150000.0

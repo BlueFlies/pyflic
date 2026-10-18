@@ -59,6 +59,9 @@ DESIGN_KEYS: tuple[str, ...] = (
     ## Generate plots leave out, the same for all of them, since a Project's
     ## replicates are analysed alike.
     "omit",
+    ## The Treatment control's level, when the Experiment Type has one
+    ## (ADR-0019).
+    "control_level",
 )
 
 
@@ -405,8 +408,9 @@ class Project:
             source = self._own_global(self.member_names[0])
         else:
             source = {}
+        ## A lab type is read from the copy beside project.yaml (ADR-0019).
         self.experiment_type = experiment_types.get_experiment_type(
-            source.get("experiment_type"))
+            source.get("experiment_type"), self.project_directory)
         self.chamber_layout = self.experiment_type.resolve_chamber_layout(source)
         self.design_factors = {
             str(k): [str(v) for v in (vals or [])]
@@ -485,8 +489,13 @@ class Project:
                 ## canonical spelling, so a hand-written 'hedonic' under a
                 ## design saying 'Hedonic' names the same type.  Comparing the
                 ## strings made that a fatal deviation.
-                if experiment_types.get_experiment_type(value).name == \
-                        experiment_types.get_experiment_type(expected).name:
+                where = getattr(self, "project_directory", None)
+                try:
+                    same = (experiment_types.get_experiment_type(value, where).name
+                            == experiment_types.get_experiment_type(expected, where).name)
+                except ValueError:
+                    same = False
+                if same:
                     continue
             if _normalize(value) != _normalize(expected):
                 problems.append(
@@ -1367,7 +1376,7 @@ class Project:
                    facet: pd.DataFrame | None,
                    diff: pd.DataFrame | None = None) -> str:
         rows = self.comparison_rows(summary, facet)
-        if diff is None and getattr(self.experiment_type, "data_derived_facets", False):
+        if diff is None and self.experiment_type.has_module("ratio"):
             diff = self.combined_diff_frame()
         diff_rows = self.diff_comparison_rows(diff)
         bar = "=" * 72

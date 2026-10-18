@@ -186,6 +186,102 @@ class TwoWellExperiment(Experiment):
         )
 
     # ------------------------------------------------------------------
+    # Auto-removal: the cutoffs every two-well type applies
+    # ------------------------------------------------------------------
+
+    def two_well_removal_reasons(self, row) -> list[str]:
+        """Why the feeding-summary *row* fails the two-well cutoffs —
+        ``max_med_duration_cutoff`` on ``MedDurationA``/``B`` and
+        ``max_events_cutoff`` on ``EventsA``/``B``, from ``global_constants``
+        — or ``[]``.  Every two-well type applies them (ADR-0019); an unset
+        cutoff is off."""
+        constants = self.global_constants or {}
+        reasons: list[str] = []
+        for key, columns in (("max_med_duration_cutoff", ("MedDurationA", "MedDurationB")),
+                             ("max_events_cutoff", ("EventsA", "EventsB"))):
+            cutoff = constants.get(key)
+            if cutoff is None:
+                continue
+            for col in columns:
+                value = row.get(col) if hasattr(row, "get") else None
+                if value is not None and pd.notna(value) and float(value) > float(cutoff):
+                    reasons.append(f"{col}={float(value):.6g} > {key}={cutoff}")
+        return reasons
+
+    def two_well_criteria_lines(self) -> list[str]:
+        """The two-well cutoffs as ``summary.txt``'s filter section states them."""
+        constants = self.global_constants or {}
+        max_dur = constants.get("max_med_duration_cutoff")
+        max_events = constants.get("max_events_cutoff")
+        return [
+            f"  • max_med_duration_cutoff = {float(max_dur):g}: excluded if "
+            f"MedDurationA or MedDurationB > {float(max_dur):g}"
+            if max_dur is not None else "  • max_med_duration_cutoff: not configured.",
+            f"  • max_events_cutoff = {float(max_events):g}: excluded if "
+            f"EventsA or EventsB > {float(max_events):g}"
+            if max_events is not None else "  • max_events_cutoff: not configured.",
+        ]
+
+    def auto_remove_chambers(
+        self,
+        *,
+        range_minutes: Sequence[float] = (0, 0),
+        transform_licks: bool = True,
+        min_untransformed_licks_cutoff: float | None = None,
+    ) -> pd.DataFrame:
+        """The general lick filter (:meth:`Experiment.auto_remove_chambers`),
+        then the two-well cutoffs (:meth:`two_well_removal_reasons`) on what
+        it kept.  With neither cutoff set — a Custom two-well design that
+        states none — this is the general filter alone."""
+        base = Experiment.auto_remove_chambers(
+            self, range_minutes=range_minutes,
+            min_untransformed_licks_cutoff=min_untransformed_licks_cutoff)
+        constants = self.global_constants or {}
+        if constants.get("max_med_duration_cutoff") is None \
+                and constants.get("max_events_cutoff") is None:
+            return base
+        fs = self.feeding_summary(range_minutes=range_minutes,
+                                  transform_licks=transform_licks)
+        already: set[tuple[int, int]] = set()
+        if base is not None and not base.empty:
+            already = {(int(r["DFM"]), int(r["Chamber"])) for _, r in base.iterrows()}
+        to_remove: set[tuple[int, int]] = set()
+        removed_rows: list[dict[str, object]] = []
+        for _, row in fs.iterrows():
+            key = (int(row["DFM"]), int(row["Chamber"]))
+            if key in already or key in to_remove:
+                continue
+            reasons = self.two_well_removal_reasons(row)
+            if reasons:
+                to_remove.add(key)
+                removed_rows.append({"DFM": key[0], "Chamber": key[1],
+                                     "Treatment": str(row["Treatment"]),
+                                     "Reason": "; ".join(reasons)})
+                print(f"  [auto_remove_chambers] Removing DFM {key[0]} Chamber {key[1]}"
+                      f" ({row['Treatment']}): {'; '.join(reasons)}", flush=True)
+        if to_remove:
+            self._remove_chambers_from_design(to_remove)
+        extra = pd.DataFrame(removed_rows, columns=["DFM", "Chamber", "Treatment", "Reason"])
+        if extra.empty:
+            print("auto_remove_chambers (two-well cutoffs): no additional chambers removed.",
+                  flush=True)
+        else:
+            print(f"auto_remove_chambers (two-well cutoffs): done — {len(extra)} additional "
+                  f"chamber(s) removed.", flush=True)
+        if base is None or base.empty:
+            combined = extra
+        elif extra.empty:
+            combined = base
+        else:
+            combined = pd.concat([base, extra], ignore_index=True)
+        self.filtered_chambers = combined
+        lines = ["", "Two-well filter (additional criteria)", "",
+                 *self.two_well_criteria_lines()]
+        self.filter_criteria_summary = self.filter_criteria_summary + "\n" + "\n".join(lines)
+        self.write_removed_chambers()
+        return combined
+
+    # ------------------------------------------------------------------
     # Feeding summary plot
     # ------------------------------------------------------------------
 

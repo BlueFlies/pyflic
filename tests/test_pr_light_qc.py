@@ -345,7 +345,7 @@ def test_the_script_actions_run(tmp_path):
         "Licks per light event — DFM 1", "Licks per light event — DFM 2",
         "Sucrose Well resting level — DFM 1", "Sucrose Well resting level — DFM 2"]
     for action in ("pr_light_qc", "plot_pr_light_events", "plot_pr_resting_level"):
-        assert get_action(action).requires == "progressive_ratio"
+        assert get_action(action).requires == "ratio"
 
 
 def test_a_parameter_recompute_keeps_the_training_flags(fexp):

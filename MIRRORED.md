@@ -24,7 +24,7 @@ it.
 | `pyflic/base/ui/tiles.py` | `pytrackinganalysis/apps/_hub_tiles.py` | **structure ported**, docstrings rewritten; `StatusReadout` here is upstream's `StatusPanel`. Now carries the full dim treatment (background, title *and* icon), `TilePanel._content_height`, and `TilePanel.cards()` |
 | `pyflic/base/ui/widgets.py` | `pytrackinganalysis/ui/widgets.py` | pyflic is the **origin** of this file; upstream vendored it and grew. Taken back: `Card.set_dimmed`/`restyle`, `OutputLog.append_stream`/`clear_log`/`line_appended`, `PlotDock`'s Errors tab, clear bar, and `add_widget`. `Card.add_title_widget` keeps pyflic's insert-after-title placement (upstream right-aligns it); `add_figure` keeps returning its content `QSize`. Since 2026-09-24 `CardGroup.add_title_widget` puts the widget at the right of the group's first member when the group has no note, rather than on a row of its own, which opened an empty band under the title; `CardGroup.reflow_title_widget()` moves it beside the first member not hidden by hand, for groups that show and hide members |
 | `pyflic/base/ui/zoom.py` | `pytrackinganalysis/ui/zoom.py` | **verbatim** |
-| `pyflic/base/ui/textformat.py` | `pytrackinganalysis/ui/textformat.py` | **verbatim** |
+| `pyflic/base/ui/textformat.py` | `pytrackinganalysis/ui/textformat.py` | **verbatim but one line**: since 2026-10-18 `_ERRISH` takes a bare `Error` as a failure only when it opens a message (`Error:`, `ValueError:`), because the DFM's firmware column is named `Error` and the integrity report names it on a clean recording, which painted three lines red. Upstream still has the old rule |
 | `pyflic/base/ui/theme.py` | `pytrackinganalysis/ui/theme.py` | pyflic's own; + `blocked_color()`, so the Batch table, the Project table, and the preflight tree paint one fact one way |
 | `pyflic/base/gui_env.py` | `pytrackinganalysis/gui_env.py` | **verbatim** — same toolkit, same Wayland/IBus complaint at startup |
 | `pyflic/base/layout.py` | `pytrackinganalysis/layout.py` | **structure ported, body rewritten** — same `classify` / members-in contract, the same "decide with the loader's own rule" principle, and the same filing allowlist. The recording is many `DFM*.csv` rather than one workbook, so "several recordings here" is normal and the ambiguity is "which copy", not "which file". Since 2026-10-17 a `DFM99_*.csv` (the Environmental Monitor's id) is filed with the recording but is never a DFM, so it alone does not make a folder experiment-shaped |
@@ -119,6 +119,17 @@ validation, the batch AI narrative, and the sheet-preview/decline switch.
 * **`script_editor/` is not part of this pass.** Upstream's palette height fix
   and its `textformat`-driven inspector changes were left alone; only
   `textformat.py` itself came across, for the Output log.
+
+* **Experiment Types are definitions a lab builds, not classes** (ADR-0019,
+  2026-10-18; originates here). Upstream's ADR-0001 keeps its types in code, as
+  pyflic did. Here a type is a yaml definition combining Analysis Modules, the
+  three shipped types are read-only definitions, a lab builds the rest in an
+  Experiment Type Editor, and the data carries a copy (`experiment_type.yaml`).
+  The cause is pyflic's own: optogenetic light, layout and controls multiplied
+  the assays past what a fixed set of types could name. The siblings: not
+  planned. The `ExperimentType` interface the shared surfaces call (`name`,
+  `display_name`, `chamber_layout`, `report_set`, `validate`) is unchanged, so a
+  later port would not disturb them.
 
 ## Keeping this honest
 

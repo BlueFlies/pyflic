@@ -1,0 +1,12 @@
+format: 1
+name: Custom
+display_name: Custom Experiment
+description: >-
+  A FLIC feeding experiment analysed without a specific experiment type. No
+  type-level constraints were applied: the chamber layout, facets and quality
+  cutoffs are whatever the config states.
+chamber_layout: either
+light: any
+modules: [yoked, light_dark]
+plots: [faceted_pi, faceted_licks, faceted_events, faceted_medduration,
+        timecourse_pi, timecourse_licks]

@@ -58,21 +58,49 @@ ParamType = Literal[
     "list_float", # comma-separated list of floats
 ]
 
-Requires = Literal["two_well", "hedonic", "progressive_ratio"]
+#: What an action can require: a two-well Chamber Layout, or an Analysis
+#: Module the experiment's type includes (ADR-0019).
+Requires = Literal["two_well", "hedonic", "ratio"]
 
-#: Experiment Type name (registry spelling) -> the ``requires`` key above.
-_REQUIRES_KEY_BY_TYPE = {"hedonic": "hedonic", "progressiveratio": "progressive_ratio"}
 
+def capabilities_for(global_cfg: dict | None, where=None) -> frozenset[str] | None:
+    """The ``requires`` keys an experiment answers to: ``two_well`` for a
+    two-well layout, and the id of every Analysis Module its type includes.
+    *global_cfg* is its ``global:`` (the Project's design for a Member) and
+    *where* its directory, whose ``experiment_type.yaml`` a lab type is read
+    from.  ``None`` when the type cannot be resolved."""
+    from ..experiment_types import get_experiment_type
 
-def requires_key_for(experiment_type: str | None) -> str | None:
-    """The ``requires`` key an Experiment Type answers to, from any spelling
-    the registry accepts (``ProgressiveRatio``, ``progressive_ratio``, …), or
-    ``None`` for a Custom Experiment / unknown value."""
-    raw = str(experiment_type or "").strip().lower().replace("-", "_").replace(" ", "_")
-    if not raw:
+    g = global_cfg or {}
+    try:
+        etype = get_experiment_type(g.get("experiment_type"), where)
+        layout = etype.resolve_chamber_layout(g)
+    except ValueError:
         return None
-    compact = raw.replace("_", "")
-    return _REQUIRES_KEY_BY_TYPE.get(compact)
+    caps = set(etype.module_ids)
+    if layout == "two_well":
+        caps.add("two_well")
+    return frozenset(caps)
+
+
+def requirement_text(requires: str) -> str:
+    """What *requires* asks of an experiment, in words."""
+    if requires == "two_well":
+        return "a two-well chamber layout"
+    try:
+        from ..analysis_modules import get_module
+
+        return f"an experiment type with the {get_module(requires).title} module"
+    except KeyError:
+        return repr(requires)
+
+
+def unmet(requires: str | None, capabilities) -> str | None:
+    """Why an action that *requires* something cannot run with
+    *capabilities* (:func:`capabilities_for`), or ``None`` when it can."""
+    if not requires or requires in (capabilities or ()):
+        return None
+    return f"Requires {requirement_text(requires)}."
 
 
 @dataclass(frozen=True)
@@ -503,7 +531,7 @@ ACTIONS: list[Action] = [
         label="Paired − yoked difference table",
         blurb="Per chamber group, per Facet: paired minus yoked (progressive ratio).",
         icon="csv", category=Category.ANALYZE, produces="csv",
-        requires="progressive_ratio",
+        requires="ratio",
         params=[],
         notes="Writes analysis/paired_yoked_diff.csv — one row per chamber "
               "group per Facet (Training, Test), the primary table for "
@@ -514,7 +542,7 @@ ACTIONS: list[Action] = [
         label="Breaking point table",
         blurb="Per chamber group: the paired fly's breaking point (progressive ratio).",
         icon="csv", category=Category.ANALYZE, produces="csv",
-        requires="progressive_ratio",
+        requires="ratio",
         params=[],
         notes="Writes analysis/pr_breaking_point.csv — one row per chamber group: "
               "the lick-backed Test light events the paired fly completed before "
@@ -528,7 +556,7 @@ ACTIONS: list[Action] = [
         label="Light QC table",
         blurb="Per chamber group: did the paired fly earn its light? (progressive ratio)",
         icon="qc", category=Category.QC, produces="csv",
-        requires="progressive_ratio",
+        requires="ratio",
         params=[],
         notes="Writes analysis/pr_light_qc.csv (one row per chamber group: "
               "training and Test light events, lick-free light events, the "
@@ -573,7 +601,7 @@ ACTIONS: list[Action] = [
         label="Cumulative difference curve",
         blurb="Paired − yoked cumulative licks since training end, by treatment.",
         icon="plot", category=Category.PLOTS, produces="figure",
-        requires="progressive_ratio",
+        requires="ratio",
         params=[
             Param(key="binsize", label="Bin size", type="float", unit="min",
                   note="Resolution of the cumulative curve.", default=1.0),
@@ -588,7 +616,7 @@ ACTIONS: list[Action] = [
         label="Training-aligned traces (QC)",
         blurb="Per DFM: paired and yoked cumulative licks since training end.",
         icon="plot", category=Category.PLOTS, produces="figure",
-        requires="progressive_ratio",
+        requires="ratio",
         params=[
             Param(key="binsize", label="Bin size", type="float", unit="min",
                   note="Resolution of the cumulative curve.", default=1.0),
@@ -603,7 +631,7 @@ ACTIONS: list[Action] = [
         label="Licks per light event (QC)",
         blurb="Per DFM: sucrose licks credited to each Test light event.",
         icon="plot", category=Category.QC, produces="figure",
-        requires="progressive_ratio",
+        requires="ratio",
         params=[],
         notes="One panel per chamber group.  A working progressive ratio "
               "climbs; lick-free light events are hollow red rings, the dashed "
@@ -616,7 +644,7 @@ ACTIONS: list[Action] = [
         label="Sucrose Well resting level (QC)",
         blurb="Per DFM: the paired Sucrose Well's raw level over the recording.",
         icon="plot", category=Category.QC, produces="figure",
-        requires="progressive_ratio",
+        requires="ratio",
         params=[],
         notes="One panel per chamber group: the per-minute median raw signal of "
               "the paired chamber's Sucrose Well against the DFM's other Sucrose "
@@ -629,7 +657,7 @@ ACTIONS: list[Action] = [
         label="Breaking-point plots",
         blurb="Per-DFM ΔLicks per light-on period since training end.",
         icon="plot", category=Category.PLOTS, produces="figure",
-        requires="progressive_ratio",
+        requires="ratio",
         params=[],
         notes="One panel per chamber, the group's breaking point in the paired "
               "strip.  A dashed line marks the break (the last light event the "
@@ -642,7 +670,7 @@ ACTIONS: list[Action] = [
         label="Still-responding curve",
         blurb="Fraction of paired flies reaching each ratio, by treatment.",
         icon="plot", category=Category.PLOTS, produces="figure",
-        requires="progressive_ratio",
+        requires="ratio",
         params=[],
         notes="Kaplan-Meier: per treatment, the fraction of paired flies whose "
               "breaking point reached each ratio, a censored fly (still "
@@ -749,17 +777,16 @@ def describe_step(step: dict[str, Any]) -> str:
     return " · ".join(parts) if parts else "(no parameters)"
 
 
-def validation_issues(step: dict[str, Any], *, experiment_type: str | None) -> list[str]:
-    """Return a list of human-readable warnings for *step*."""
+def validation_issues(step: dict[str, Any], *, experiment_type=None) -> list[str]:
+    """Return a list of human-readable warnings for *step*; *experiment_type*
+    is the experiment's capabilities (:func:`capabilities_for`)."""
     issues: list[str] = []
     act = get_action(step.get("action", ""))
     if act is None:
         return [f"Unknown action: {step.get('action')!r}"]
-    if act.requires and act.requires != experiment_type:
-        issues.append(
-            f"Requires an experiment of type {act.requires!r}; current is "
-            f"{experiment_type or 'unspecified'}."
-        )
+    problem = unmet(act.requires, experiment_type)
+    if problem:
+        issues.append(problem)
     for p in act.params:
         if p.required and p.key not in step:
             issues.append(f"Missing required field: {p.label} ({p.key}).")

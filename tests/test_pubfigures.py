@@ -7,6 +7,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from pyflic.base import experiment_types as et
 from pyflic.base import pubfigures
 
 
@@ -311,11 +312,11 @@ def _breaking_point_frame() -> pd.DataFrame:
     })
 
 
-def test_breaking_point_scatter_is_progressive_ratio_only():
+def test_breaking_point_scatter_is_the_ratio_modules_only():
     assert "scatter_pr_breaking_point" in pubfigures.plots_for_layout(
-        "two_well", "ProgressiveRatio")
+        "two_well", et.get_experiment_type("ProgressiveRatio"))
     assert "scatter_pr_breaking_point" not in pubfigures.plots_for_layout(
-        "two_well", "Hedonic")
+        "two_well", et.get_experiment_type("Hedonic"))
     assert "scatter_pr_breaking_point" not in pubfigures.plots_for_layout(
         "two_well")
     assert pubfigures.source_of("scatter_pr_breaking_point") == "pr_breaking"
@@ -340,11 +341,10 @@ def test_breaking_point_scatter_renders(tmp_path: Path):
     assert Path(out).stat().st_size > 1000
 
 
-def test_breaking_point_by_treatment_is_progressive_ratio_only():
-    assert "dot_pr_breaking_point" in pubfigures.plots_for_layout(
-        "two_well", "ProgressiveRatio")
+def test_breaking_point_by_treatment_is_the_ratio_modules_only():
+    assert "dot_pr_breaking_point" in pubfigures.plots_for_layout("two_well", ("ratio",))
     assert "dot_pr_breaking_point" not in pubfigures.plots_for_layout(
-        "two_well", "Hedonic")
+        "two_well", ("hedonic",))
     assert pubfigures.source_of("dot_pr_breaking_point") == "pr_breaking"
     spec = pubfigures.default_spec("dot_pr_breaking_point")
     assert spec.x_label == ""

@@ -89,6 +89,7 @@ TOC: tuple[Section, ...] = (
             "app-plot-editor",
             "app-qc-viewer",
             "app-config-editor",
+            "app-type-editor",
         ),
     ),
     Section(
@@ -135,6 +136,7 @@ GUIDES: tuple[Guide, ...] = (
         "Two-well designs, preference index, and the plots that go with them",
         (
             "concepts-experiment-types",
+            "app-type-editor",
             "concepts-two-well-pi",
             "config-dfms-chambers",
             "plots-catalog",

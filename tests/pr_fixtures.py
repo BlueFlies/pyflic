@@ -197,6 +197,34 @@ def pr_config(dfms: list[dict], *, factors: dict | None = None,
     return {"global": g, "dfms": nodes}
 
 
+#: A lab type for programs that run a ClosedLoop Training interval before the
+#: ratio Paradigm: the shipped ProgressiveRatio with ClosedLoop expected too
+#: (ADR-0019; the shipped type takes ratio Paradigms only).
+TRAINED_PR = "TrainedProgressiveRatio"
+
+
+def write_trained_pr_type(root: Path) -> Path:
+    """Copy :data:`TRAINED_PR` beside the config at *root* (its
+    ``experiment_type.yaml``) and return the copy's path."""
+    from dataclasses import replace
+
+    from pyflic.base.experiment_types import library
+
+    shipped = library.shipped_definition("ProgressiveRatio")
+    trained = replace(shipped.with_name(TRAINED_PR, "Progressive Ratio"),
+                      light=("ClosedLoop", "ProgressiveRatio", "FixedRatio"))
+    return library.write_copy(trained, root)
+
+
+def use_trained_pr_type(root: Path) -> None:
+    """Make the config at *root* name :data:`TRAINED_PR`, and copy it beside."""
+    path = Path(root) / "flic_config.yaml"
+    cfg = yaml.safe_load(path.read_text())
+    cfg["global"]["experiment_type"] = TRAINED_PR
+    path.write_text(yaml.safe_dump(cfg, sort_keys=False))
+    write_trained_pr_type(Path(root))
+
+
 def make_pr_experiment_dir(
     root: Path,
     *,

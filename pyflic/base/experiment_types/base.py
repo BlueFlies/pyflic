@@ -1,29 +1,39 @@
-"""The ``ExperimentType`` base class (ADR-0007).
+"""The ``ExperimentType`` (ADR-0007, ADR-0019).
 
-An Experiment Type is a named bundle that selects one **Chamber Layout** and
-constrains the rest of an experiment — the required ``well_names``, the facet
-cutoffs and phase labels, the default ``constants:``, the analyses that run, the
-plot set, and the report produced.  It is a *composed strategy object*, not an
-``Experiment`` subclass: the subclass hierarchy stays where it belongs, one
-level down, expressing the data shape.
+An Experiment Type is a reusable definition of an assay's shape that selects
+a **Chamber Layout** and constrains the rest of an experiment — the required
+``well_names``, the facet cutoffs and phase labels, the default
+``constants:``, the light it expects, the **Analysis Modules** that run, the
+Plot Specs of its report, and the report produced.  It is a *composed
+strategy object*, not an ``Experiment`` subclass: the subclass hierarchy
+stays where it belongs, one level down, expressing the data shape, and a
+module that carries maths of its own names its subclass.
 
-Per ADR-0007 a type **owns** its fixed fields — a typed ``flic_config.yaml``
-omits ``chamber_layout`` and ``params.chamber_size`` and they are derived here,
-never written to disk.  The base class is the permissive default, which is what
-a Custom Experiment uses directly.
+Since ADR-0019 a type is data: one instance of this class built from a
+:class:`~pyflic.base.experiment_types.definition.TypeDefinition` — a
+shipped one (Custom, Hedonic, ProgressiveRatio) or a lab's own — whose
+modules supply the behaviour that used to be subclass code.  Per ADR-0007 a
+type **owns** its fixed fields — a typed ``flic_config.yaml`` omits
+``chamber_layout`` and ``params.chamber_size`` and they are derived here,
+never written to disk.  Built from no definition, the class is the
+permissive default.
 """
 
 from __future__ import annotations
 
+from .. import opto_program as op
 from .. import program_facets, windowing
 
 #: Chamber Layout -> the ``params.chamber_size`` it implies.
 LAYOUT_CHAMBER_SIZE: dict[str, int] = {"single_well": 1, "two_well": 2}
 LAYOUTS = tuple(LAYOUT_CHAMBER_SIZE)
 
+#: The ``global:`` key naming a Treatment control's control level (ADR-0019).
+CONTROL_LEVEL_KEY = "control_level"
+
 
 class ExperimentType:
-    """Permissive base type.  A Custom Experiment uses this behaviour directly."""
+    """A type built from a definition; with none, the permissive default."""
 
     #: Canonical key stored in the yaml (``experiment_type:``).  Case-insensitive.
     name: str = "Custom"
@@ -64,11 +74,84 @@ class ExperimentType:
     #: cutoffs.  A yaml value always wins.
     default_constants: dict = {}
 
+    #: The definition the type was built from, or ``None``.
+    definition = None
+    #: Where the registry found it: ``"shipped"``, ``"copy"`` (beside the
+    #: data) or ``"library"``; ``None`` when built directly.
+    resolved_from: str | None = None
+    #: Its Analysis Modules, in the order :data:`analysis_modules.MODULES`
+    #: lists them.
+    modules: tuple = ()
+
+    def __init__(self, definition=None) -> None:
+        if definition is not None:
+            self._apply(definition)
+
+    def _apply(self, definition) -> None:
+        """Take every attribute the definition and its modules decide."""
+        from ..analysis_modules import MODULES
+
+        self.definition = definition
+        self.modules = tuple(m for m in MODULES if m.id in definition.modules)
+        self.name = definition.name
+        self.display_name = definition.label
+        self.chamber_layout = definition.chamber_layout
+        wells = list(definition.required_wells)
+        for module in self.modules:
+            wells += [w for w in module.required_wells if w not in wells]
+        self.required_wells = tuple(wells) or None
+        derived = next((m for m in self.modules if m.data_derived_facets), None)
+        if derived is not None:
+            self.facet_cutoffs = None
+            self.facets_fixed = True
+            self.data_derived_facets = True
+            self.phase_labels = tuple(derived.phase_labels)
+        else:
+            self.facet_cutoffs = definition.facet_cutoffs
+            self.facets_fixed = definition.facets_fixed
+            self.data_derived_facets = False
+            self.phase_labels = tuple(definition.facet_labels)
+        self.experiment_class = next(
+            (m.experiment_class for m in self.modules if m.experiment_class), None)
+        constants: dict = {}
+        for module in self.modules:
+            constants.update(module.default_constants)
+        constants.update(definition.constants)
+        self.default_constants = constants
+
     # ---- identity -----------------------------------------------------
 
     @property
     def is_custom(self) -> bool:
+        """Whether this is the Custom Experiment: the type a config with no
+        ``experiment_type`` key has."""
+        return self.name == "Custom"
+
+    @property
+    def layout_free(self) -> bool:
+        """Whether the config states the Chamber Layout (``chamber_layout:``)
+        because the type leaves it open."""
         return self.chamber_layout is None
+
+    @property
+    def is_shipped(self) -> bool:
+        """Whether pyflic ships the type (read-only), rather than a lab."""
+        return self.definition is None or bool(self.definition.shipped)
+
+    @property
+    def module_ids(self) -> tuple[str, ...]:
+        return tuple(m.id for m in self.modules)
+
+    def has_module(self, module_id: str) -> bool:
+        """Whether the type includes the Analysis Module *module_id*."""
+        return module_id in self.module_ids
+
+    @property
+    def light(self):
+        """The light the type expects: ``"none"``, ``"any"`` or a tuple of
+        Paradigm types (``definition.LIGHT_*``); ``"any"`` without a
+        definition."""
+        return "any" if self.definition is None else self.definition.light
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return f"<{type(self).__name__} {self.name}>"
@@ -203,11 +286,15 @@ class ExperimentType:
         """Problems with one ``dfms:`` entry under this type.
 
         *chamber_assignments* is the parsed ``{chamber: treatment}`` mapping as
-        the config states it (before any exclusion is applied).  The base type
-        has no per-DFM constraints; a type with a chamber-level structure
-        (Progressive Ratio's paired/yoked roles) checks it here.  Never raises.
+        the config states it (before any exclusion is applied).  The type has
+        no per-DFM constraints of its own; a module with a chamber-level
+        structure (the Ratio analysis's paired/yoked roles) checks it here.
+        Never raises.
         """
-        return []
+        out: list[str] = []
+        for module in self.modules:
+            out += module.validate_dfm(dfm_id, node, chamber_assignments)
+        return out
 
     def complete_dfm_node(self, dfm_id: int, node: dict, *, params=None,
                           dfm_program=None) -> tuple[dict, list[str]]:
@@ -217,17 +304,71 @@ class ExperimentType:
 
         *params* is the DFM's resolved :class:`~pyflic.base.parameters.Parameters`
         and *dfm_program* its :class:`~pyflic.base.opto_program.DFMProgram`, or
-        ``None`` without a ``Program.txt`` section.  The base type takes
-        nothing from the program; Progressive Ratio derives ``paired_chambers``
-        from its trigger wells.  Never raises.
+        ``None`` without a ``Program.txt`` section.  The type takes nothing
+        from the program; the Ratio analysis derives ``paired_chambers`` from
+        its trigger wells.  Never raises.
         """
-        return node, []
+        notes: list[str] = []
+        for module in self.modules:
+            node, more = module.complete_dfm_node(dfm_id, node, params=params,
+                                                  dfm_program=dfm_program)
+            notes += more
+        return node, notes
 
     def report_facets(self) -> list[str] | None:
         """Facet labels the type's report figures show by default, or ``None``
         for every Facet.  A default, not a gate — the Plot Editor can still
         name any Facet."""
+        for module in self.modules:
+            if module.report_facets is not None:
+                return list(module.report_facets)
         return None
+
+    # ---- the light ----------------------------------------------------
+
+    def light_problems(self, program, dfm_ids=None) -> list[str]:
+        """Where *program* (an :class:`~pyflic.base.opto_program.OptoProgram`)
+        runs light the type does not expect, for *dfm_ids* (default every
+        section), as one line per Program Interval (ADR-0019).
+
+        A lit interval runs its Paradigm's type for its level Wells and
+        OpenLoop for its ``On`` Wells; an interval whose Wells are all
+        ``Off`` runs nothing, whatever its Paradigm (PyMCU's ``Idle`` is a
+        ClosedLoop).  A type that expects no light takes none; one that
+        expects a set of Paradigm types takes those, with OpenLoop beside
+        them as a control; ``any`` takes everything.  Never raises.
+        """
+        light = self.light
+        if program is None or light == "any":
+            return []
+        if getattr(program, "grammar", None) == op.GRAMMAR_SIMPLE:
+            return []
+        expected = set(light) | {op.TYPE_NAMES[op.OPEN_LOOP]} if isinstance(light, tuple) \
+            else set()
+        ids = sorted(program.dfms) if dfm_ids is None else sorted({int(d) for d in dfm_ids})
+        found: dict[str, list[str]] = {}
+        for dfm_id in ids:
+            section = program.section(dfm_id)
+            if section is None:
+                continue
+            for number, iv in enumerate(section.intervals, start=1):
+                kinds: set[str] = set()
+                if iv.open_wells():
+                    kinds.add(op.TYPE_NAMES[op.OPEN_LOOP])
+                if iv.trigger_wells():
+                    kinds.add(op.TYPE_NAMES.get(iv.paradigm.type, iv.paradigm.type_name))
+                for kind in sorted(kinds - expected):
+                    found.setdefault(kind, []).append(f"DFM {dfm_id} interval {number}")
+        if not found:
+            return []
+        if light == "none":
+            wanted = "expects no light"
+        else:
+            wanted = (f"expects {', '.join(light)}, with OpenLoop and dark intervals "
+                      f"beside them")
+        return [f"the Opto Program runs {kind} ({'; '.join(where)}), and experiment_type "
+                f"'{self.name}' {wanted}; choose or build a type that expects it"
+                for kind, where in found.items()]
 
     def validate(self, global_cfg: dict | None) -> list[str]:
         """Problems with *global_cfg* under this type, as human-readable lines.
@@ -281,37 +422,109 @@ class ExperimentType:
         if problem:
             problems.append(problem)
         problems += opto_constant_problems(g.get("constants"))
+        for module in self.modules:
+            problems += module.validate(g)
+        problems += self._design_problems(g)
         return problems
+
+    def _design_problems(self, g: dict) -> list[str]:
+        """The type's factor names and its Treatment control (ADR-0019):
+        the config declares every factor the type names, and may add more;
+        a Treatment control's level is one of its factor's levels."""
+        if self.definition is None:
+            return []
+        problems: list[str] = []
+        declared = g.get("experimental_design_factors") or {}
+        if not isinstance(declared, dict):
+            declared = {}
+        missing = [f for f in self.definition.factors if f not in declared]
+        if missing:
+            problems.append(
+                f"experiment_type '{self.name}' needs the experimental design factor"
+                f"{'s' if len(missing) > 1 else ''} {', '.join(missing)} declared")
+        factor = self.definition.treatment_control
+        level = g.get(CONTROL_LEVEL_KEY)
+        if factor is None:
+            if level is not None:
+                problems.append(
+                    f"'{CONTROL_LEVEL_KEY}' is set, and experiment_type '{self.name}' has "
+                    f"no Treatment control (remove it)")
+        elif level is None or str(level).strip() == "":
+            problems.append(
+                f"experiment_type '{self.name}' compares every {factor} with a control: "
+                f"name it with '{CONTROL_LEVEL_KEY}', one of the levels of {factor}")
+        elif factor in declared and str(level) not in [str(v) for v in
+                                                       (declared.get(factor) or [])]:
+            problems.append(
+                f"'{CONTROL_LEVEL_KEY}' {level!r} is not a level of {factor} "
+                f"({', '.join(str(v) for v in declared.get(factor) or [])})")
+        return problems
+
+    def control_level(self, global_cfg: dict | None) -> str | None:
+        """The Treatment control's level the config names, or ``None``."""
+        if self.definition is None or self.definition.treatment_control is None:
+            return None
+        level = (global_cfg or {}).get(CONTROL_LEVEL_KEY)
+        return None if level is None or str(level).strip() == "" else str(level)
 
     # ---- outputs ------------------------------------------------------
 
     def report_intro(self) -> str:
         """One paragraph for the report cover."""
+        if self.definition is not None and self.definition.description:
+            return self.definition.description
         return ("A FLIC feeding experiment analysed without a specific "
                 "experiment type, so no type-level constraints were applied.")
 
     def report_set(self, chamber_layout: str) -> list[str]:
         """Ordered Plot Spec ids the type's report and the Standard Pipeline
-        produce with no authoring.  A **default**, never a gate — any action the
+        produce with no authoring: its modules' first, then the built-in
+        plots it picks, then those it has a Plot Spec of its own for, each
+        once and only where *chamber_layout* can draw it (a preference index
+        needs two wells).  A **default**, never a gate — any action the
         layout and type permit stays available in the Script Editor.
         """
-        if chamber_layout == "two_well":
-            return ["faceted_pi", "faceted_licks", "faceted_events",
-                    "faceted_medduration", "timecourse_pi", "timecourse_licks"]
-        return ["faceted_licks", "faceted_events", "faceted_medduration",
-                "timecourse_licks"]
+        if self.definition is None:
+            picked = ["faceted_pi", "faceted_licks", "faceted_events",
+                      "faceted_medduration", "timecourse_pi", "timecourse_licks"]
+            ids = picked
+        else:
+            ids = [p for m in self.modules for p in m.plots]
+            ids += list(self.definition.plots) + list(self.definition.plot_specs)
+        from ..pubfigures import plot_allowed
+
+        out: list[str] = []
+        for plot_id in ids:
+            if plot_id not in out and plot_allowed(plot_id, chamber_layout, self.module_ids):
+                out.append(plot_id)
+        return out
+
+    def plot_specs(self) -> dict:
+        """The type's own Plot Specs, by plot id, as ``plot_specs.yaml``
+        holds them under ``plots:``: what a new Project of the type starts
+        with (ADR-0019)."""
+        if self.definition is None:
+            return {}
+        return {k: dict(v) if isinstance(v, dict) else v
+                for k, v in self.definition.plot_specs.items()}
 
     def output_manifest(self) -> list[str]:
         """Analysis outputs a run of this type is expected to leave in
         ``analysis/``.  Used by status displays to answer "has this been
         analysed?" without loading any data."""
-        return ["feeding_summary.csv", "feeding_summary_facet.csv", "summary.txt"]
+        out = ["feeding_summary.csv", "feeding_summary_facet.csv", "summary.txt"]
+        for module in self.modules:
+            out += [f for f in module.outputs if f not in out]
+        return out
 
     def project_results_blocks(self, project) -> list:
         """Pooled figures of the type's own for the Project Report's Results,
         after the report set (``report_layout`` blocks, from the Project's
-        saved Combined Analysis).  None by default."""
-        return []
+        saved Combined Analysis): its modules', in turn.  None by default."""
+        blocks: list = []
+        for module in self.modules:
+            blocks += module.project_results_blocks(self, project)
+        return blocks
 
     # ---- scaffolding --------------------------------------------------
 
@@ -321,19 +534,21 @@ class ExperimentType:
                      factors: dict | None = None,
                      facet_cutoffs=None,
                      transform_licks: bool | None = None,
-                     facet_source: str | None = None) -> dict:
+                     facet_source: str | None = None,
+                     chamber_layout: str | None = None) -> dict:
         """A ``global:`` block for a fresh experiment of this type.
 
         Keys the type owns are deliberately absent — that is the whole point of
-        ADR-0007's "derived, never written to disk".  A *facet_source* of
-        ``program`` or ``program_cycles`` is written in place of any cutoffs;
-        ``cutoffs``, the default, is never written.
+        ADR-0007's "derived, never written to disk".  A type that leaves the
+        layout open writes *chamber_layout* (``two_well`` by default).  A
+        *facet_source* of ``program`` or ``program_cycles`` is written in
+        place of any cutoffs; ``cutoffs``, the default, is never written.
         """
         g: dict = {}
-        if self.name != "Custom":
+        if not self.is_custom:
             g["experiment_type"] = self.name
-        elif self.chamber_layout is None:
-            g["chamber_layout"] = "two_well"
+        if self.layout_free:
+            g["chamber_layout"] = chamber_layout or "two_well"
         if transform_licks is not None:
             g["transform_licks"] = bool(transform_licks)
         source = (program_facets.SOURCE_CUTOFFS if self.owns_facet_source

@@ -1,6 +1,8 @@
-"""Registry mapping an ``experiment_type`` name to its ``ExperimentType``.
+"""Mapping an ``experiment_type`` name to its ``ExperimentType`` (ADR-0019).
 
-Adding a type = adding a subclass and one line here (ADR-0007).
+A name resolves to a definition (:mod:`.library`): shipped, else the copy
+beside the data, else the lab library.  Adding a type takes no code: build
+it in the Experiment Type Editor.
 
 Note what is *not* here: ``two_well`` and ``single_well``.  Those stopped being
 experiment types — they are Chamber Layouts, one level down.  A config still
@@ -11,58 +13,55 @@ change which analyses run.
 
 from __future__ import annotations
 
-from .base import ExperimentType
-from .custom import CustomExperimentType
-from .hedonic import HedonicExperimentType
-from .progressive_ratio import ProgressiveRatioExperimentType
+from pathlib import Path
 
-# name (lowercase, punctuation-insensitive) -> class
-_REGISTRY: dict[str, type[ExperimentType]] = {
-    CustomExperimentType.name.lower(): CustomExperimentType,
-    HedonicExperimentType.name.lower(): HedonicExperimentType,
-    ProgressiveRatioExperimentType.name.lower(): ProgressiveRatioExperimentType,
-    # Tolerated spellings of the same names.
-    "progressive_ratio": ProgressiveRatioExperimentType,
-    "progressiveratio": ProgressiveRatioExperimentType,
-}
+from . import library
+from .base import ExperimentType
 
 #: Values that used to be experiment types and are now Chamber Layouts.
 RETIRED_AS_LAYOUT = {"two_well", "twowell", "single_well", "singlewell"}
 
 
-def _key(name) -> str:
-    return str(name).strip().lower().replace("-", "_").replace(" ", "_")
-
-
-def get_experiment_type(name) -> ExperimentType:
+def get_experiment_type(name, where: str | Path | None = None) -> ExperimentType:
     """Return an ExperimentType instance for *name*.
 
-    ``None`` or blank resolves to the Custom Experiment.  A retired layout name
-    raises with the migration spelled out; any other unknown name raises with
-    the known list.
+    ``None`` or blank resolves to the Custom Experiment.  *where* is the
+    Experiment Directory or Project the config belongs to, whose
+    ``experiment_type.yaml`` copy a lab type is read from first.  A retired
+    layout name raises with the migration spelled out; any other unknown
+    name raises with the known list.
     """
     if name is None or str(name).strip() == "":
-        return CustomExperimentType()
-    key = _key(name)
-    if key in _REGISTRY:
-        return _REGISTRY[key]()
-    if key in RETIRED_AS_LAYOUT:
-        layout = "single_well" if "single" in key else "two_well"
+        etype = ExperimentType(library.shipped_definition("Custom"))
+        etype.resolved_from = "shipped"
+        return etype
+    if library.name_key(name) in {library.name_key(r) for r in RETIRED_AS_LAYOUT}:
+        layout = "single_well" if "single" in str(name).lower() else "two_well"
         raise ValueError(
             f"experiment_type '{name}' is no longer an experiment type — it is "
             f"a chamber layout (ADR-0007). Remove the experiment_type key and "
             f"set 'chamber_layout: {layout}' under global: instead. Run "
             f"'pyflic lint' for the full migration."
         )
-    known = ", ".join(sorted({cls.name for cls in _REGISTRY.values()}))
-    raise ValueError(f"Unknown experiment_type '{name}'. Known types: {known}.")
+    definition, found = library.resolve(name, where)
+    etype = ExperimentType(definition)
+    etype.resolved_from = found
+    return etype
 
 
-def available_experiment_types() -> list[ExperimentType]:
-    """One instance of each registered type, Custom first."""
-    seen: dict[str, type[ExperimentType]] = {}
-    for cls in _REGISTRY.values():
-        seen[cls.name] = cls
-    ordered = sorted(seen.values(),
-                     key=lambda c: (c is not CustomExperimentType, c.name))
-    return [cls() for cls in ordered]
+def available_experiment_types(where: str | Path | None = None) -> list[ExperimentType]:
+    """One instance of each type a config here can name: the shipped ones
+    (Custom first), the lab library's, and the copy beside the data at
+    *where* when the library lacks it.  A library file that cannot be used is
+    left out (``pyflic lint`` and the editor report it)."""
+    definitions = list(library.shipped_definitions())
+    lab, _problems = library.library_definitions()
+    definitions += sorted(lab, key=lambda d: d.name.lower())
+    try:
+        copy = library.read_copy(where)
+    except ValueError:
+        copy = None
+    if copy is not None and library.name_key(copy.name) not in {
+            library.name_key(d.name) for d in definitions}:
+        definitions.append(copy)
+    return [ExperimentType(d) for d in definitions]
