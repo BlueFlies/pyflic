@@ -828,12 +828,25 @@ class AnalysisHubWindow(QMainWindow):
     # menu, the buttons) and _fill_selection makes the groups for each
     # member.
 
+    #: The object name of :meth:`_muted`'s notes, so :meth:`_restyle` finds them.
+    _MUTED_NOTE = "PyflicMutedNote"
+
     @staticmethod
-    def _muted(text: str) -> QLabel:
+    def _muted_qss() -> str:
+        """The muted notes' tint for the CURRENT theme, from ``surface_colors``.
+
+        Not ``palette(mid)``: qdarktheme leaves that role one grey for both
+        themes, 1.8:1 on the light theme's band, so the notes read as empty
+        boxes (``CardGroup.restyle`` avoids it for the same reason)."""
+        return f"color: {surface_colors()['muted']}; font-style: italic;"
+
+    @classmethod
+    def _muted(cls, text: str) -> QLabel:
         """A quiet, wrapping line: a note on the controls around it."""
         label = QLabel(text)
+        label.setObjectName(cls._MUTED_NOTE)
         label.setWordWrap(True)
-        label.setStyleSheet("color: palette(mid); font-style: italic;")
+        label.setStyleSheet(cls._muted_qss())
         return label
 
     def _selection_host(self, kind: str, card: Card) -> None:
@@ -1393,6 +1406,8 @@ class AnalysisHubWindow(QMainWindow):
             ## theme toggle has to reach them or half the panel stays light.
             for card in panel.cards():
                 card.restyle()
+            for note in panel.findChildren(QLabel, self._MUTED_NOTE):
+                note.setStyleSheet(self._muted_qss())
 
     # ------------------------------------------------------------------
     # Selection

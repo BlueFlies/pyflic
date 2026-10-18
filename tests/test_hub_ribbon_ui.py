@@ -815,3 +815,62 @@ def test_a_card_group_places_its_title_widget_without_a_row_of_its_own(app):
     empty = CardGroup("Empty")
     empty.add_title_widget(QLabel("?"))              # nothing to sit beside yet
     assert empty._body.itemAt(0).layout() is not None
+
+
+# ---------------------------------------------------------------------------
+# The panels' muted notes stay readable in either theme
+# ---------------------------------------------------------------------------
+
+def _contrast(a, b) -> float:
+    def lum(rgb):
+        def ch(c):
+            c = c / 255.0
+            return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+        return 0.2126 * ch(rgb[0]) + 0.7152 * ch(rgb[1]) + 0.0722 * ch(rgb[2])
+    hi, lo = sorted((lum(a), lum(b)), reverse=True)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def _note_contrasts(hub) -> dict[str, float]:
+    """Each muted note of the open Analyze panel: the contrast between its
+    text and the box behind it, read from the rendered pixels."""
+    from collections import Counter
+
+    notes = ("Used by the binned summary", "The core always runs",
+             "Not offered for this member")
+    out = {}
+    for label in hub.panels["analyze"].findChildren(QLabel):
+        if not label.isVisible() or not label.text().startswith(notes):
+            continue
+        image = label.grab().toImage()
+        counts = Counter((image.pixelColor(x, y).red(), image.pixelColor(x, y).green(),
+                          image.pixelColor(x, y).blue())
+                         for x in range(image.width()) for y in range(image.height()))
+        box = counts.most_common(1)[0][0]
+        out[label.text()[:40]] = max(_contrast(rgb, box) for rgb in counts)
+    return out
+
+
+def test_the_muted_notes_are_readable_in_the_light_theme_and_after_a_toggle(app, hub):
+    """The Analyze panel's notes ("Used by the binned summary…", "The core
+    always runs…", "Not offered…") were palette(mid), which qdarktheme leaves
+    at one grey for both themes: 1.8:1 on the light theme's band, so they
+    read as empty boxes.  They take the family's muted colour now, and the
+    theme toggle re-tints them."""
+    from pyflic.base.ui import apply_theme
+
+    apply_theme(app, mode="light")
+    hub._restyle()
+    _member(hub, "progressive_ratio", optogenetic=True)
+    hub._open_panel("analyze")
+    app.processEvents()
+    light = _note_contrasts(hub)
+    assert len(light) >= 3, light
+    assert min(light.values()) >= 3.0, light
+    hub._toggle_theme()                       # to dark
+    app.processEvents()
+    dark = _note_contrasts(hub)
+    assert min(dark.values()) >= 3.0, dark
+    hub._toggle_theme()                       # and back
+    app.processEvents()
+    assert min(_note_contrasts(hub).values()) >= 3.0
