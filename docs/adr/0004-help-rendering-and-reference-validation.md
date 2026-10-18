@@ -121,3 +121,18 @@ three points where the implementation currently diverges from 0003.
 Divergences 1 and 3 are coupled: adding the download page brings back a build step, and at
 that point emitting HTML for the app too becomes cheap. They were left open rather than
 guessed at, because they belong to the deployment plan rather than to this change.
+
+## Addendum (2026-10-18): help over a modal dialog, and F1
+
+Two more mechanics a future reader might "correct":
+
+- **Help opened over an application-modal dialog is made modal over it**
+  (`_match_modality` in `pyflic/help/window.py`). Such a dialog (any `QDialog.exec()`)
+  blocks input to every other window, and the help window has no parent, so it came up
+  looking alive but took no clicks, keys or scrolling. Opened from one, the help window is
+  application-modal itself, so it takes input; opened from anywhere else, it is modeless
+  again. The change is made while the window is hidden, because a visible window's modality
+  takes effect only on its next `show`.
+- **F1 is bound exactly once per window** (`install_help_shortcut` in
+  `pyflic/help/button.py`). Two bindings of one key in one window, such as a `QShortcut`
+  and a menu action's shortcut, make the key ambiguous, and Qt then fires neither.

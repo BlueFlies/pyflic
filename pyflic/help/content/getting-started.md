@@ -54,7 +54,9 @@ plots from badly chosen detection parameters, so understanding what a *lick* and
   panel does the same.
 - Press **F1** in any pyflic window or dialog — the Hub, the QC Viewer, the editors, the
   Project design dialog — to open help for the screen you are on. In the QC Viewer it opens
-  the topic for the tab you are on.
+  the topic for the tab you are on. The small standard prompts that ask one thing — a name
+  to type, a Yes or No, an OK — have no F1: answer or close the prompt, then press F1 in
+  the window behind it.
 - Run `pyflic help` from a terminal to open this window without launching an app.
 - Search, at the top of this window, looks through every topic; **Guides** in the topic
   list are reading paths through a whole subject.
