@@ -19,7 +19,9 @@ start a type of your own from it.
 
 - **New** starts an empty type.
 - **New from…** copies the selected type, shipped or not, under a new name.
-- **Save to library** writes the type to the lab's type library.
+- **Save to library** writes the type to the lab's type library. Renaming a type saves
+  it under the new name and leaves the old one; delete the old one if it is no longer
+  wanted.
 - **Delete** removes a lab type from the library. Projects that carry a copy of it keep
   analysing with their copy.
 

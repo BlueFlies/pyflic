@@ -227,8 +227,8 @@ class ExperimentTypeEditor(QMainWindow):
             from ..help import HelpButton
 
             card.add_title_widget(HelpButton(
-                "concepts-experiment-types",
-                tooltip="Experiment Types, Analysis Modules and the light they expect"))
+                "app-type-editor",
+                tooltip="The Experiment Type Editor: what a type states and where it lives"))
         except Exception:  # noqa: BLE001 - help is optional, the editor is not
             pass
         form = QFormLayout()

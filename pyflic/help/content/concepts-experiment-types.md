@@ -124,7 +124,8 @@ A type may name what its reports lead with, before the general results:
   Progressive Ratio, whose own paired − yoked difference it then is);
 - a **Treatment control** — one of the type's factors. The Design names the control level
   with `control_level:`, one of that factor's levels, and every other level is compared
-  with it.
+  with it. The Project design editor and the Config Editor show a **Control level** field
+  for such a type.
 
 ```yaml
 global:
