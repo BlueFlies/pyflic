@@ -32,6 +32,7 @@ authority; PyMCU's `docs/ProgramFormat.md` states them in words.
 - [Stream S5: the yoked comparison for every type](#stream-s5-the-yoked-comparison-for-every-type)
 - [Stream S6: help, guides and records](#stream-s6-help-guides-and-records)
 - [Delivery](#delivery)
+- [As built](#as-built)
 - [Not in this plan](#not-in-this-plan)
 
 ---
@@ -916,6 +917,51 @@ P0-sim (C1 simulator, C2 restarts, C6 integrity)     P0-ext (C8 PyMCU test)
   - the acceptance criteria met, with test names;
   - any decision found unworkable;
   - the calibration evidence for each constant default.
+
+## As built
+
+Where the build departed from the plan, stream by stream.
+
+**P0-ext** (79a5d0f):
+- **AcclimationEndMin is aligned, not exact.** The PyMCU test converts the
+  truth's origin (the start of record 1) onto pyflic's `Minutes` (the first
+  row's stamp, 0.57 s later on seed 1) before comparing. The measure then
+  agrees to within one record. The plan's "where pyflic stands" had called
+  it exact, from a check with a quarter-minute tolerance.
+
+**P0-sim** (4d44efd):
+- **The lead-in's `Paradigm` is `NA`**, as PyMCU writes it. Four tests that
+  pinned `Idle` changed.
+- **The restart checks run on generation 3 only.** C6's restart section,
+  the No Ack note and the lost-records cross-check do not run on
+  generations 1 and 2.
+- **No Ack note.** "Lost" includes a restart's gap, so a recording with a
+  restart never gets the No Ack note.
+- **Restarts sit on the record grid.** A restart must come more than 54
+  records into the DFM's count, or PyMCU would read it as a resend.
+
+**P0-ledger** (d28ae8f):
+- **C7 keeps the onset row.** pyflic's count leaves out feeding events
+  that start in `Row + 1` to `EndRow` of the well's own Activation, not
+  `Row` to `EndRow`. The Event that meets the Requirement starts in the
+  onset row, in the millisecond the light comes on, and the firmware counts
+  it. Dropping it took one event per Activation, and made healthy
+  FixedRatio chambers warn.
+- **`Overlap` gains a case**: a break in `Index` right before `Row`, since
+  the Activation may have started in the lost records.
+- **Leaving Acclimation.** On the row where a well leaves Acclimation under
+  a ratio Paradigm, its Activations are Acclimation ones unless the
+  Requirement advanced there, as `requirement_met` reads that row.
+- **The registry.** The every-family QC columns are in
+  `COMMON_QC_COLUMNS`. Fixed length's figure is given per branch
+  (`BRANCH_FIGURE`, `rule_figure`). `rule_sentence` leaves out frequency and
+  pulse width.
+
+**Coordination:**
+- **The checks live in a module of their own**, `rule_checks.py`, so that
+  S4 can import the series check.
+- **S4 leaves the *requirement series wrong* call** in the Progressive
+  Ratio light QC to the merge after S1.
 
 ## Not in this plan
 
