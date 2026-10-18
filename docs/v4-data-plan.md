@@ -17,9 +17,10 @@ Event*, *Phase* / *Acclimation*, *Hold*, and the redefined *Training* and
 
 **Status (2026-10-17):** implemented on `v4_Dev` (Phase 0 and streams 3 to 7
 merged); where the build departed from this plan is listed under
-[As built](#as-built). Still open: the [bench checkpoint](#the-bench-checkpoint),
-because no recording from a 4.0.0 board exists yet, so every statement about
-the file comes from the PyMCU and firmware source; and a re-run of the real
+[As built](#as-built). Still open: the rest of the
+[bench checkpoint](#the-bench-checkpoint). The first recording from a 4.0.0
+board (2026-10-17, a quiet all-Off run) and PyMCU's own simulator have
+confirmed part of it, as `firmware-4-data-in-pyflic.md` lists; and a re-run of the real
 Progressive Ratio dataset, which was not on the machine the streams ran on, so
 decision 1's identity check rests on the generation-1 fixtures alone. The
 pyflic-side reference for the data file is

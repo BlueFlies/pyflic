@@ -213,12 +213,14 @@ The same topics are readable here on GitHub — they are ordinary markdown in
 
 ## Experiment types
 
-| Type | Chamber size | Use case |
+The Experiment Type (`experiment_type:`) names the assay; the chamber layout
+(`chamber_layout:`, `single_well` or `two_well`) is set apart from it (ADR-0007).
+
+| Type | Chamber layout | Use case |
 |---|---|---|
-| `single_well` | 1 | 12 independent wells per DFM |
-| `two_well` | 2 | Two-well choice assays with preference index |
-| `hedonic` | 2 | Hedonic feeding with weighted duration analysis |
-| `progressive_ratio` | 2 | Progressive-ratio schedules with breakpoint detection |
+| `Custom` (the default) | `single_well` or `two_well` | Any design: feeding summary, preference index on two wells, and for an optogenetic recording the light QC and light behaviour of whatever Paradigms it ran (OpenLoop, ClosedLoop, FixedInterval, NonFeeding) |
+| `Hedonic` | `two_well` | Hedonic feeding with weighted duration analysis |
+| `ProgressiveRatio` | `two_well` | Progressive or fixed ratio training and test, with breaking point detection, with or without yoked controls |
 
 ## Migrating from R
 

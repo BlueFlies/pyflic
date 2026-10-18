@@ -282,7 +282,8 @@ the firmware's own record:
   that earned no light. Contact below the firmware's threshold, a sensor that stopped
   responding, or a `feeding_threshold` that counts noise. Look at the baselined trace.
 - **non-feeding dark**: a NonFeeding light that stayed off when the fly was not feeding. A
-  dead LED, or contact the firmware read and pyflic did not: a drifting baseline.
+  resting signal that drifted up, which the firmware reads as contact, or a longer
+  `OnDelayMs` than `Program.txt` states.
 - **interval started late**: a Program Interval's first row came more than
   `opto_interval_lag_warn_sec` (5 s) after its `Program.txt` time. The DFM took its
   instruction late and PyMCU sent it again; the light before it ran the previous

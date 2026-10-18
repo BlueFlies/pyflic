@@ -254,7 +254,9 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
         missing = sorted(set(self.dfms) - set(out))
         if missing:
             raise ValueError(
-                f"DFM(s) {missing} have no '{PAIRED_KEY}' entry in the config.")
+                f"DFM(s) {missing} have no chamber groups: give '{PAIRED_KEY}', or "
+                f"'chamber_groups: single' for a design without yoked controls, or a "
+                f"Program.txt whose Linkage sets them.")
         self._pr_groups = out
         return out
 
@@ -907,8 +909,8 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
         name, paradigm = self.test_paradigm(dfm_id, group)
         ## Requirement series wrong (decision 6), on the Test window's Main
         ## Activations of the Paired Sucrose Well against the Test Paradigm's
-        ## series: lqc.requirement_series_mismatches is the place for stream
-        ## S1's check, and gives None until it is merged.
+        ## series: lqc.requirement_series_mismatches calls the optogenetic
+        ## light QC's own check (rule_checks) rather than repeating it.
         series = (lqc.requirement_series_mismatches(
                       self._test_ledger_rows(dfm_id, group), paradigm)
                   if phase and paradigm is not None and paradigm.type in RATIO_PARADIGMS
@@ -1786,8 +1788,8 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
                      "  • require_training_complete = false: incomplete-training "
                      "groups are kept (TrainingComplete = false).")
         lines.append(f"  • exclude_failed_pr_groups = true: {whose} whose light QC fails "
-                     f"(self-triggered light, implausible training) {verb} excluded — see "
-                     f"pr_light_qc.csv"
+                     f"(self-triggered light, implausible training, a requirement series "
+                     f"the program does not give) {verb} excluded — see pr_light_qc.csv"
                      if light_settings.exclude else
                      "  • exclude_failed_pr_groups = false: groups that fail the light "
                      "QC are kept; pr_light_qc.csv still lists them.")

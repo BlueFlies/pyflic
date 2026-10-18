@@ -1004,6 +1004,20 @@ class OptoLightQC:
                 "light with no lick behind it — is the sign of a drifting sensor, a "
                 "sustained contact or a hardware fault.  Computed over the whole recording.")
         blocks: list[Any] = [rl.Heading("Optogenetic light QC", level=2), rl.Paragraph(intro)]
+        older = sorted(d for d, g in generations.items() if g != GENERATION_PARADIGM)
+        if older:
+            ## Decision 3 of docs/paradigm-analyses-plan.md: name the checks
+            ## that did not run, and why.
+            which = (f"DFM {older[0]}" if len(older) == 1
+                     else "DFMs " + ", ".join(str(d) for d in older[:-1]) + f" and {older[-1]}")
+            blocks.append(rl.Paragraph(
+                f"The firmware 4.0.0 rule checks (short activations, max on exceeded, wrong "
+                f"activation length, lockout broken, contact without activation, requirement "
+                f"series wrong, non-feeding dark, interval started late and DFM restarted) did "
+                f"not run for {which}: {'its' if len(older) == 1 else 'their'} data come from "
+                f"older DFM firmware, which records only which LEDs were lit at each 200 ms "
+                f"record, and that cannot time a light period.  The checks above did run.",
+                size=rl.SIZE_SMALL, color=rl.MUTED))
         program_tone = "info" if self.program is not None else "warning"
         blocks.append(rl.Callout(self.program_line(), tone=program_tone, title="Program"))
         program = self.program_table()

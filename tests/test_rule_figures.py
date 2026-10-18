@@ -397,7 +397,18 @@ def test_generation_1_keeps_its_light_qc(tmp_path):
     assert rf.rule_dfms(e.opto) == [] and rf.rule_sections(e.opto) == []
     blocks = e.opto.report_qc_blocks()
     assert [b.text for b in blocks if isinstance(b, rl.Heading)] == ["Optogenetic light QC"]
-    assert "within the interval's light decay" in _blocks_text(blocks)
+    text = _blocks_text(blocks)
+    assert "within the interval's light decay" in text
+    ## Decision 3: the report names the checks that did not run, and why.
+    dfms = sorted(e.opto.dfm_ids())
+    assert "The firmware 4.0.0 rule checks (short activations," in text
+    assert "lockout broken" in text and "cannot time a light period" in text
+    assert (f"did not run for DFM {dfms[0]}:" if len(dfms) == 1 else "did not run for DFMs ") in text
+
+
+def test_a_firmware_4_member_does_not_say_the_rule_checks_did_not_run(clean):
+    text = _blocks_text(clean("one_of_each").opto.report_qc_blocks())
+    assert "did not run for" not in text
 
 
 def test_the_glance_callout_counts_the_new_flags(tmp_path, clean):

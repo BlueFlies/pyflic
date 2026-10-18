@@ -398,7 +398,9 @@ pooled within a group, and each fraction is judged on the Paradigm's total.
   activity at the trigger well for longer than `OnDelayMs` plus the tolerance, and with
   `MaxOnMs` within the first `MaxOnMs` after that. **Warns** above
   `opto_non_feeding_dark_warn_fraction` (10%) of the time the rule says lit, once that is
-  10 s: a dead LED, or contact the firmware read and pyflic did not.
+  10 s: contact the firmware read and pyflic did not (a drifting baseline), or a longer
+  `OnDelayMs` than `Program.txt` states. A lamp that fails in the lid does not show in the
+  data: `OnMs` is the firmware's record of driving the LED.
 - **max on exceeded**, with `MaxOnMs` above 0, as for closed loop.
 - `RelightDelayMs` is reported, not judged: the median time from the end of the fly's last
   activity sample to the light coming back, against `OnDelayMs`. Activity is good to a

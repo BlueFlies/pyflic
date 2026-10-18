@@ -582,6 +582,38 @@ def test_a_restarts_gap_is_not_lost_records(tmp_path):
     assert "the 50 record(s) the DFM's restart(s) lost are not counted" in note
 
 
+def test_a_restarts_rows_before_the_resend_are_not_unknown_instruction_rows(tmp_path):
+    """After a restart the DFM records under no instruction until PyMCU
+    resends it.  Those rows are the restart's, which DFM restarted reports,
+    so even with no unknown-instruction rows allowed they raise nothing
+    more; rows under an unknown instruction elsewhere still warn."""
+    base = vf.fixed_ratio_spec(minutes=10.0)
+    spec = replace(base, dfms=(replace(base.dfms[0],
+                                       restarts=(vf.Restart(300.0, resend_s=2.0),)),))
+    strict = oq.OptoQCSettings.from_constants({"opto_unknown_rows_warn_fraction": 0})
+    e = load(tmp_path / "restart", "", spec=spec)
+    state = e.dfms[1].paradigm
+    assert int(state.unknown_rows().sum()) == 10              # 2 s at 5 records a second
+    flags: list[str] = []
+    notes: list[str] = []
+    oq._record_checks(state, strict, 5.0, flags, notes)
+    assert flags == [oq.DFM_RESTARTED]
+
+    def unknown_elsewhere(rows):
+        frame = rows[1]
+        at = frame.index[2000:2005]
+        frame.loc[at, "Interval"] = pd.NA
+        frame.loc[at, "Paradigm"] = pd.NA
+
+    e = load(tmp_path / "elsewhere", "", spec=spec, edit=unknown_elsewhere)
+    flags, notes = [], []
+    oq._record_checks(e.dfms[1].paradigm, strict, 5.0, flags, notes)
+    assert flags == [oq.DFM_RESTARTED, oq.UNKNOWN_INSTRUCTION_ROWS]
+    note = next(n for n in notes if n.startswith(oq.UNKNOWN_INSTRUCTION_ROWS))
+    assert note.startswith(f"{oq.UNKNOWN_INSTRUCTION_ROWS}: 5 of the ")
+    assert "the 10 row(s) after the DFM's restart(s)" in note
+
+
 # ---------------------------------------------------------------------------
 # No new flag on clean data
 # ---------------------------------------------------------------------------

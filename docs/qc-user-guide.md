@@ -935,6 +935,7 @@ settings. Without the file, or without the DFM's section, they do not run,
 their columns are `NA`, and the report says that each rule is checked only
 with `Program.txt`'s settings. Generations 1 and 2 keep the checks of
 section 6: `OptoCol1`, sampled every 200 ms, cannot time a light period.
+Their report says so, naming the checks that did not run.
 
 **By Paradigm Family.** The firmware lights the six Paradigm types by four
 mechanisms, and pyflic checks each **Paradigm Family** with one set of rules:
@@ -1133,8 +1134,10 @@ be revisited once bench recordings of each Paradigm type exist.
   level `Program.txt` states plus the well's baseline. pyflic's activity is
   its own detection, and it includes tasting samples, brief touches that can
   sit below the firmware's threshold. Some missed runs are normal.
-- **Likely causes.** Many: a threshold in the program set high for this
-  fly's contact, a sensor that reads low, or a dead LED.
+- **Likely causes.** A threshold in the program set high for this fly's
+  contact; a resting signal that drifted down, since the firmware measures
+  its threshold from the baseline it took at the start; a sensor that reads
+  low; or a `Program.txt` whose lockout is shorter than the one that ran.
 - **What to do.** Look at the trigger well's baselined trace around the
   missed runs, and at its threshold in `Program.txt`. Brief, low deflections
   are the threshold; clear licks with no Activation are a fault.
@@ -1199,9 +1202,12 @@ be revisited once bench recordings of each Paradigm type exist.
 - **Verdict.** A warning when the light was dark for more than
   `opto_non_feeding_dark_warn_fraction` (default 0.10) of that time, judged
   once at least 10 seconds are expected lit.
-- **Likely causes.** A dead LED; or contact the firmware read and pyflic did
-  not. A drifting baseline keeps the firmware in contact, so it keeps the
-  light off.
+- **Likely causes.** Contact the firmware read and pyflic did not: a
+  resting signal that drifted up keeps the firmware in contact, so it keeps
+  the light off. Or the program that ran had a longer `OnDelayMs` than
+  `Program.txt` states. This is not a failed lamp: the light pyflic reads
+  is the firmware's own record of driving the LED, so a lamp that fails in
+  the lid does not show in the data at all.
 - **What to do.** Look at the Program timeline's blue strip for the trigger
   wells, and at their raw signal for drift.
 
@@ -1557,7 +1563,7 @@ groups and the exclusion counts per treatment (section 9).
 | **Short activations**, **max on exceeded**, **wrong activation length**, **lockout broken** or **requirement series wrong** fails a group | the light broke its Paradigm's rule, which the firmware keeps exactly: the `Program.txt` in `data/` is probably not the program that ran, or the LED or its `OnMs` report is faulty | find the `Program.txt` exported with this recording and run again; the reason names the setting, and the rule figure shows which Activations break it (sections 7.3, 7.4 and 7.8) |
 | **Contact without activation** | pyflic saw licks or touches at a free FixedInterval well that brought no Activation: contact below the firmware's threshold, or a dead sensor or LED | look at the trigger well's baselined trace around the misses and at its threshold in `Program.txt`; a few are normal (section 7.4) |
 | **Non-feeding light during feeding** | a NonFeeding light stayed on while the fly fed | check the linkage and the lid; look at the trigger well's trace (section 7.5) |
-| **Non-feeding dark** | a NonFeeding light stayed off where its rule says lit: a dead LED, or contact the firmware read and pyflic did not | look at the trigger wells' strips in the Program timeline and their raw signal for drift (section 7.5) |
+| **Non-feeding dark** | a NonFeeding light stayed off where its rule says lit: a resting signal that drifted up, which the firmware reads as contact, or a longer `OnDelayMs` than `Program.txt` states | look at the trigger wells' strips in the Program timeline and their raw signal for drift (section 7.5) |
 | `RelightDelayMs` far from `OnDelayMs` | the program that ran had another `OnDelayMs`; no flag watches it | check that `Program.txt` is this recording's (section 7.5) |
 | **Interval started late** | the DFM took up a Program Interval's instruction late, and PyMCU sent it again | note the minutes; many late Intervals point at the DFM's connection (section 7.6) |
 | **DFM restarted** | the DFM restarted mid-recording, after a power dip or a loose cable; its Paradigm started over | check its power and cable; results across the restart are two runs of the program, and a Progressive Ratio Test ends at it (sections 7.6 and 8) |

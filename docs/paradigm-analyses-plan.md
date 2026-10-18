@@ -135,7 +135,7 @@ yoking checks apply across families, as today.
 | Closed loop | explained light; *unlit feeding*; *no light events*; Acclimation count | *short activations*; *max on exceeded*; cut-offs counted | LitSec, Activations, the Acclimation columns | MedianActivationSec, CutOffs, MainActivations |
 | Fixed length, Interval | onset backed by contact | *wrong activation length*; *lockout broken*; *contact without activation* | LockedOutContactSec, defined from `OnMs == 0`, so linked light hides it | LockedOutContactSec from the well's own lockout; MaxActivations, RewardEfficiency, MedianReturnSec |
 | Fixed length, Ratio | onset backed by contact; Acclimation count; *firmware events disagree* (like with unlike, decision 16) | *wrong activation length*; *requirement series wrong* | FirmwareEvents, LastRequirementMet, ProgressAtEnd, EventsPerActivation | MainActivations |
-| Non-feeding | *non-feeding light during feeding*, on borrowed constants; a dead LED goes unflagged | its own constants; *non-feeding dark*; *max on exceeded*; the relight delay reported | UnlitSec; Suppressions, counted per record, which also counts `MaxOnMs` ends | Suppressions from the light periods themselves; MedianSuppressionSec |
+| Non-feeding | *non-feeding light during feeding*, on borrowed constants; a NonFeeding light that never comes on goes unflagged | its own constants; *non-feeding dark*; *max on exceeded*; the relight delay reported | UnlitSec; Suppressions, counted per record, which also counts `MaxOnMs` ends | Suppressions from the light periods themselves; MedianSuppressionSec |
 
 The settings `MaxOnMs`, `LockoutMs`, `OnDelayMs`, `EventGapMs` and the series
 are parsed today but used by no check. Of the light-table measures, only
@@ -1096,11 +1096,33 @@ tolerance through `OptoQCSettings`.
   `#each-paradigms-own-rule` and `#paired-and-yoked-designs`,
   `plots-catalog#rule-figures` and
   `concepts-progressive-ratio#without-yoked-controls`.
-- **Decision 3 is half built.** Generations 1 and 2 keep their checks, but
-  their report does not name the rule checks that did not run, as the
-  decision asks; only a firmware 4.0.0 DFM without `Program.txt` gets such a
-  sentence. The guides describe the reports as they are.
+- **Decision 3 was half built** when S6 documented it: generations 1 and
+  2 kept their checks, but their report did not name the rule checks that
+  did not run. The coordinator then added that sentence to the light QC
+  section, for every generation-1 or -2 DFM (see "After the streams").
 - **No README row**: no new guide was added.
+
+**After the streams** (the coordinator, on the merged tip):
+- **Decision 3 completed.** The light QC section names, for each
+  generation-1 or -2 DFM, the firmware 4.0.0 rule checks that did not run,
+  and why: older firmware records only which LEDs were lit at each record,
+  which cannot time a light period.
+- **A restart raises one warning.** Its rows under no instruction, before
+  PyMCU resent it, no longer count toward *unknown-instruction rows*, as
+  its gap no longer counts toward *lost records*: *DFM restarted* reports
+  both.
+- **No dead LED.** The new checks no longer give "a dead LED" as a cause.
+  `OnMs` and `OptoCol1` are the firmware's record of driving the LED, and
+  nothing senses light, so a lamp that fails in the lid does not show in
+  the data. *Non-feeding dark* is a drifting signal read as contact, or a
+  longer `OnDelayMs` than `Program.txt` states.
+- **Progressive Ratio wording** says that a group leaves with its yoked
+  chamber "when it has one". It names *requirement series wrong* among the
+  light QC failures, and the missing-groups error names all three ways to
+  set groups.
+- **The README's Experiment Types table** listed chamber layouts as types,
+  as they were before ADR-0007; it now lists Custom, Hedonic and
+  ProgressiveRatio.
 
 **Coordination:**
 - **The checks live in a module of their own**, `rule_checks.py`, so that

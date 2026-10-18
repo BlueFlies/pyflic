@@ -474,15 +474,17 @@ def resolve_chamber_groups(node: Mapping[str, Any] | None, dfm_program=None, *,
 PR_CONSTANT_FIELDS: tuple[ConstantField, ...] = (
     ConstantField(
         "require_training_complete", "Exclude groups whose training never completed",
-        "require_training_complete — both chambers of a chamber group whose paired "
-        "fly never finished training leave the analysis.",
+        "require_training_complete — a chamber group whose paired fly never "
+        "finished training leaves the analysis, with its yoked chamber when it has "
+        "one.",
         "switch", short_label="Training never completed",
         choices=("exclude the group", "keep the group")),
     ConstantField(
         "exclude_failed_pr_groups", "Exclude groups that fail the light QC",
-        "exclude_failed_pr_groups — both chambers of a chamber group whose light "
-        "followed the sensor rather than the fly (self-triggered light, "
-        "implausible training) leave the analysis.  Off keeps them; "
+        "exclude_failed_pr_groups — a chamber group whose light QC fails leaves the "
+        "analysis, with its yoked chamber when it has one: light that followed the "
+        "sensor rather than the fly (self-triggered light, implausible training), or "
+        "a requirement series the program does not give.  Off keeps them; "
         "pr_light_qc.csv lists them either way.",
         "switch", short_label="Light QC failed",
         choices=("exclude the group", "keep the group")),

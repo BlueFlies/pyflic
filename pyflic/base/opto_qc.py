@@ -239,8 +239,9 @@ OPTO_CONSTANT_FIELDS: tuple[ConstantField, ...] = (
         "opto_non_feeding_dark_warn_fraction", "Non-feeding dark, warning (fraction)",
         "opto_non_feeding_dark_warn_fraction — firmware 4.0.0 only: a NonFeeding light is "
         "on OnDelayMs after the fly's last contact (for at most MaxOnMs); dark for more "
-        "than this fraction of that time, the group gets a warning (a dead LED, or contact "
-        "pyflic did not see).  Default 0.10.",
+        "than this fraction of that time, the group gets a warning (contact the firmware "
+        "read that pyflic did not, such as a drifting baseline, or a longer OnDelayMs "
+        "than Program.txt states).  Default 0.10.",
         "opto", minimum=0, maximum=1),
     ConstantField(
         "opto_interval_lag_warn_sec", "Interval started late, warning (s)",
@@ -1572,14 +1573,24 @@ def _record_checks(state: ParadigmState, settings: OptoQCSettings, sps: float,
                             f"not counted, as {DFM_RESTARTED} reports them"
                             if to_restarts else ""))
     after_lead = len(state) - state.lead_in_rows()
-    unknown = int(state.unknown_rows().sum())
+    ## A restart's rows under no instruction, until PyMCU resent it, are the
+    ## restart's too: DFM restarted reports them, as it reports its gap.
+    unknown_rows = state.unknown_rows().copy()
+    in_restarts = 0
+    for span in spans:
+        in_restarts += int(unknown_rows[span.row:span.resume_row].sum())
+        unknown_rows[span.row:span.resume_row] = False
+    unknown = int(unknown_rows.sum())
     if after_lead > 0 and unknown / after_lead > settings.unknown_rows_fraction:
         dfm_flags.append(UNKNOWN_INSTRUCTION_ROWS)
         dfm_notes.append(f"{UNKNOWN_INSTRUCTION_ROWS}: {unknown} of the {after_lead} rows "
                          f"after the lead-in ({100.0 * unknown / after_lead:.1f}%) were "
                          f"recorded under an instruction outside the program and are not "
                          f"judged; opto_unknown_rows_warn_fraction is "
-                         f"{settings.unknown_rows_fraction:g}")
+                         f"{settings.unknown_rows_fraction:g}"
+                         + (f"; the {in_restarts} row(s) after the DFM's restart(s), "
+                            f"before PyMCU resent the instruction, are not counted, as "
+                            f"{DFM_RESTARTED} reports them" if in_restarts else ""))
     late = int(state.late_rows().sum())
     if late > settings.late_records_warn:
         dfm_flags.append(LATE_RECORDS)

@@ -792,8 +792,9 @@ def non_feeding_dark(on_ms: Mapping[int, np.ndarray], activity: Mapping[int, np.
                   f"activity at {op.wells_label(sorted(eligible))} for longer than its "
                   f"OnDelayMs of {int(paradigm.on_delay_ms or 0)} ms plus {tol_ms:g} ms "
                   f"(opto_activation_tolerance_ms){window}; "
-                  f"opto_non_feeding_dark_warn_fraction is {warn_fraction:g}.  A dead LED, or "
-                  f"contact the firmware read that pyflic did not (a drifting baseline)")
+                  f"opto_non_feeding_dark_warn_fraction is {warn_fraction:g}.  Contact the "
+                  f"firmware read that pyflic did not (a drifting baseline), or a longer "
+                  f"OnDelayMs than Program.txt states")
     return CheckResult(NON_FEEDING_DARK, True, value=dark, judged=expected, fired=fired,
                        reason=reason)
 
