@@ -283,6 +283,27 @@ the one that handles it, so "which button is mine" is never a guess. Mirrors
 PyTrackingAnalysis's Create/Load and Experiments cards.
 _Avoid_: card column (the pre-overhaul layout), Load card.
 
+**QC Set** / **Analysis Set** / **Plot Set**:
+What a member's *Run QC*, *Run analysis* and *Generate plots* can produce:
+the outputs the Hub's QC, Analyze and Plots panels list, each as one
+checkbox. Items only some designs have sit in a group of their own
+(Optogenetics, Progressive Ratio, Hedonic); an item the member's layout,
+type or light rules out is not offered. The Analysis Set does not include
+the **core** (the feeding summary, its Facet variant, `summary.txt` and the
+removed chambers), which every run writes because every other item reads it.
+_Avoid_: menu, button list, the options.
+
+**Selection**:
+Which items of the three sets a member's runs include, recorded as what they
+leave *out*: `global.omit:` with `qc:`, `analyses:` and `plots:` lists of
+item ids, in the Project's design for a Member and in `flic_config.yaml` for
+a standalone experiment. A config with no `omit:` runs everything, and an
+item a later version adds is included until someone unticks it. The Hub's
+ticks, a script's `run_qc` / `run_analysis` / `run_plots` steps and a Batch
+Run all read the same Selection, so they produce the same files; a run states
+what it left out, apart from what did not apply.
+_Avoid_: ticks as session state, "include list", preset.
+
 **Experiment Script**:
 A saved, re-runnable step list of experiment-level actions. Lives in an
 Experiment Directory's `flic_config.yaml` `scripts:` — or, for Members,
