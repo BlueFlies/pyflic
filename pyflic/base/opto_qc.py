@@ -59,8 +59,10 @@ from typing import Any, Mapping
 import numpy as np
 import pandas as pd
 
+from . import activation_ledger as al
 from . import opto_program as op
 from . import opto_roles as orl
+from . import paradigm_families as pfam
 from .constant_fields import ConstantField
 from .constant_fields import constant_problems as _constant_problems
 from .paradigm_state import GENERATION_FLAG, GENERATION_PARADIGM, IDLE, ParadigmState
@@ -145,7 +147,9 @@ OPTO_CONSTANT_FIELDS: tuple[ConstantField, ...] = (
         "opto_event_disagreement_warn_fraction — firmware 4.0.0 only: under a ratio "
         "Paradigm's Main phase the DFM counts its own Firmware Events; a trigger well "
         "whose count differs from pyflic's feeding events by more than this fraction "
-        "of the Firmware Events gets a warning.  Default 0.25.",
+        "of the Firmware Events gets a warning.  Like the firmware, pyflic's count "
+        "leaves out bouts that start while the well's own Activation is lit.  "
+        "Default 0.25.",
         "opto", minimum=0),
     ConstantField(
         "opto_yoking_fail_fraction", "Broken yoking, failure (fraction)",
@@ -163,7 +167,7 @@ OPTO_CONSTANT_FIELDS: tuple[ConstantField, ...] = (
     ConstantField(
         "opto_unknown_rows_warn_fraction", "Unknown-instruction rows, warning (fraction)",
         "opto_unknown_rows_warn_fraction — firmware 4.0.0 only: rows recorded under "
-        "an instruction outside the program (Interval NA), after the Idle lead-in, "
+        "an instruction outside the program (Interval NA), after the lead-in, "
         "are not judged; more than this fraction of them warns.  Default 0.01.",
         "opto", minimum=0, maximum=1),
     ConstantField(
@@ -266,8 +270,11 @@ CAUSE_HARDWARE = "light without firmware-visible contact: hardware, linkage or "
 #: ``FirmwareEventsWithoutActivity`` counts rises in Progress with none
 #: either.  ``Roles`` names each chamber's Role (``opto_roles``);
 #: ``FirmwareEvents`` / ``PyflicEvents`` compare the two event counts under a
-#: ratio Paradigm's Main phase; ``AcclimationActivations`` /
-#: ``AcclimationExpected`` sum the Trigger Wells' completed Acclimation runs.
+#: ratio Paradigm's Main phase, like with like: pyflic's leaves out feeding
+#: events that start within the well's own Activation, after its onset row,
+#: as the firmware starts no Event while its light is on;
+#: ``AcclimationActivations`` / ``AcclimationExpected`` sum the Trigger Wells'
+#: completed Acclimation runs.
 #: These are ``NA`` on generations 1 and 2, as is ``EmulationApproximate`` on
 #: generation 3, where nothing is emulated.
 OPTO_QC_COLUMNS: tuple[str, ...] = (
@@ -298,11 +305,25 @@ OPTO_INTERVAL_COLUMNS: tuple[str, ...] = (
 #: Activation of a Trigger Well (``activations``), with its ``Well``,
 #: ``Phase``, the Requirement it met and the Firmware Events behind it
 #: (``NA`` for an Acclimation Activation, which no Firmware Event earns).
+#: The generation-3 rows also carry the Activation ledger's columns
+#: (:data:`LEDGER_EVENT_COLUMNS`, :mod:`pyflic.base.activation_ledger`) and
+#: the ``Family`` of their ``Mode`` and ``Phase``
+#: (:func:`paradigm_families.family_of`); ``OptoCol1`` rows have them ``NA``.
+LEDGER_EVENT_COLUMNS: tuple[str, ...] = (
+    "OnsetMs", "EndMs", "LitMs", "Timing", "Overlap", "Boundary", "SinceLastOnsetMs", "K",
+)
 OPTO_EVENT_COLUMNS: tuple[str, ...] = (
     "DFM", "Group", "Event", "Well", "OnsetMin", "EndMin", "DurationSec", "Interval",
     "Mode", "Phase", "RequirementMet", "FirmwareEvents", "UnexplainedSec", "Explained",
-    "OverrunSec", "Source",
+    "OverrunSec", "Source", *LEDGER_EVENT_COLUMNS, "Family",
 )
+#: The light-events table's whole-number ledger columns, held as nullable
+#: integers (``NA`` on the ``OptoCol1`` rows, and where the ledger has none).
+OPTO_EVENT_INTEGER_COLUMNS: tuple[str, ...] = (
+    "OnsetMs", "EndMs", "LitMs", "SinceLastOnsetMs", "K",
+)
+#: The ledger's columns on a light event the ledger does not time.
+_NO_LEDGER: dict[str, Any] = {c: np.nan for c in (*LEDGER_EVENT_COLUMNS, "Family")}
 #: ``qc/opto/opto_program.csv`` — one row per DFM interval of the program.
 #: ``Paradigm`` is the Paradigm's name and ``ParadigmType`` PyMCU's spelling of
 #: its type; the settings columns are the Paradigm's, ``NA`` where its type has
@@ -1063,7 +1084,7 @@ def analyze_dfm(inp: DFMInputs, *, program: op.OptoProgram | None, setting: str,
                 "DurationSec": (b - a) / sps, "Interval": interval, "Mode": mode,
                 "Phase": np.nan, "RequirementMet": np.nan, "FirmwareEvents": np.nan,
                 "UnexplainedSec": un_sec, "Explained": explained_flag,
-                "OverrunSec": overrun, "Source": EVENT_SOURCE_OPTOCOL1,
+                "OverrunSec": overrun, "Source": EVENT_SOURCE_OPTOCOL1, **_NO_LEDGER,
             })
 
         if n:
@@ -1399,7 +1420,7 @@ def _record_checks(state: ParadigmState, settings: OptoQCSettings, sps: float,
     if after_lead > 0 and unknown / after_lead > settings.unknown_rows_fraction:
         dfm_flags.append(UNKNOWN_INSTRUCTION_ROWS)
         dfm_notes.append(f"{UNKNOWN_INSTRUCTION_ROWS}: {unknown} of the {after_lead} rows "
-                         f"after the Idle lead-in ({100.0 * unknown / after_lead:.1f}%) were "
+                         f"after the lead-in ({100.0 * unknown / after_lead:.1f}%) were "
                          f"recorded under an instruction outside the program and are not "
                          f"judged; opto_unknown_rows_warn_fraction is "
                          f"{settings.unknown_rows_fraction:g}")
@@ -1530,6 +1551,30 @@ def _analyze_paradigm_state(inp: DFMInputs, *, program: op.OptoProgram | None,
         linkage_source = "data"
     roles = (orl.chamber_roles(orl.linkage_view(section, state, None), inp.chamber_of_well)
              if inp.chamber_of_well else {})
+
+    ## ---- the Activation ledger, once for the DFM (contract C3, C4) ----
+    ## Each Activation's light period to the millisecond; the light events
+    ## join it on (Well, onset row, order within the row).
+    book = al.ledger(state, linked={w: tuple(g) for g in groups.values() for w in g},
+                     record_ms=int(round(record_ms)))
+    book_at = {key: pos for pos, key in enumerate(zip(
+        book["Well"].tolist(), book["Row"].tolist(),
+        book.groupby(["Well", "Row"]).cumcount().tolist()))}
+    book_values = {c: book[c].to_numpy(dtype=float, na_value=np.nan)
+                   for c in OPTO_EVENT_INTEGER_COLUMNS}
+    book_values.update({c: book[c].to_numpy() for c in ("Timing", "Overlap", "Boundary",
+                                                        "Phase")})
+
+    def ledger_fields(well: int, row: int, j: int) -> dict[str, Any]:
+        """The ledger's columns for the *j*-th Activation of *well* counted
+        on *row*, ``NA`` when the ledger has none."""
+        pos = book_at.get((well, row, j))
+        if pos is None:
+            return dict(_NO_LEDGER)
+        out: dict[str, Any] = {c: book_values[c][pos] for c in LEDGER_EVENT_COLUMNS}
+        out["Overlap"] = bool(out["Overlap"])
+        out["_phase_a"] = book_values["Phase"][pos] == "A"
+        return out
 
     near_cache: dict[tuple, np.ndarray] = {}
 
@@ -1836,7 +1881,14 @@ def _analyze_paradigm_state(inp: DFMInputs, *, program: op.OptoProgram | None,
                 continue
             ratio_seen = True
             fe = sum(state.firmware_events_between(t, a, b) for a, b in _true_runs(main))
-            pe = int(((feeding[:, t - 1] > 0) & main).sum())
+            ## Like with like (decision 16): no Firmware Event starts while
+            ## the well's own Activation is lit, so a pyflic feeding event
+            ## whose first sample lies in its light period's rows is left
+            ## out.  Not in the onset row: the Event that met the Requirement
+            ## starts there, in the millisecond the light comes on, and the
+            ## firmware counts it.
+            own = al.activation_rows(book, t, n, onset_row=False)
+            pe = int(((feeding[:, t - 1] > 0) & main & ~own).sum())
             firmware_total += fe
             pyflic_total += pe
             if max(fe, pe) < MIN_FEEDING_EVENTS:
@@ -1872,6 +1924,7 @@ def _analyze_paradigm_state(inp: DFMInputs, *, program: op.OptoProgram | None,
                                        minlength=m)
         last_seen: dict[int, int] = {}
         last_activity: dict[tuple, np.ndarray] = {}
+        in_row: Counter = Counter()
         unexplained_events = 0
         for i in range(m):
             r, well, k = int(unit_row[i]), int(unit_well[i]), int(unit_window[i])
@@ -1879,7 +1932,11 @@ def _analyze_paradigm_state(inp: DFMInputs, *, program: op.OptoProgram | None,
             mode, trig, _hold = modes[k]
             cls = int(unit_cls[i])
             w = windows[k]
-            in_a = bool(unit_in_a[i])
+            timed = ledger_fields(well, r, in_row[(well, r)])
+            in_row[(well, r)] += 1
+            ## The ledger's Phase: the row where a well leaves Acclimation
+            ## reads M though an Acclimation Activation can be counted on it.
+            in_a = bool(timed.pop("_phase_a", unit_in_a[i]))
             requirement = np.nan
             events = np.nan
             if in_a:
@@ -1932,7 +1989,8 @@ def _analyze_paradigm_state(inp: DFMInputs, *, program: op.OptoProgram | None,
                 "Mode": mode, "Phase": "A" if in_a else "M",
                 "RequirementMet": requirement, "FirmwareEvents": events,
                 "UnexplainedSec": un_sec, "Explained": explained, "OverrunSec": overrun,
-                "Source": EVENT_SOURCE_ACTIVATIONS,
+                "Source": EVENT_SOURCE_ACTIVATIONS, **timed,
+                "Family": pfam.family_of(mode, acclimation=in_a) or np.nan,
             })
 
         if n:

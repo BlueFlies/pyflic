@@ -385,8 +385,17 @@ class OptoLightQC:
         return pd.DataFrame(rows, columns=list(oq.OPTO_INTERVAL_COLUMNS))
 
     def events_table(self) -> pd.DataFrame:
+        """One row per light event of every DFM the QC covers —
+        ``qc/opto/opto_light_events.csv`` (:data:`oq.OPTO_EVENT_COLUMNS`).
+        The ledger's millisecond columns are nullable integers and
+        ``Overlap`` a nullable boolean, ``NA`` on the ``OptoCol1`` rows."""
         rows = [r for d in self.dfm_ids() for r in self.result(d).events]
-        return pd.DataFrame(rows, columns=list(oq.OPTO_EVENT_COLUMNS))
+        frame = pd.DataFrame(rows, columns=list(oq.OPTO_EVENT_COLUMNS))
+        for column in oq.OPTO_EVENT_INTEGER_COLUMNS:
+            frame[column] = pd.array(pd.to_numeric(frame[column]), dtype="Int64")
+        frame["Overlap"] = pd.array(frame["Overlap"].astype(object).where(
+            frame["Overlap"].notna(), None), dtype="boolean")
+        return frame
 
     def program_table(self) -> pd.DataFrame:
         """The program as read, one row per interval of every DFM the QC

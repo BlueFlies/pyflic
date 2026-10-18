@@ -27,6 +27,13 @@ from pyflic.base.yaml_config import load_experiment_yaml
 
 from v4_fixtures import (
     CHOICE_PR_CASES,
+    CHOICE_THRESHOLDS,
+    START,
+    Bout,
+    DFMSpec,
+    IntervalSpec,
+    ParadigmSpec,
+    RecordingSpec,
     SimResult,
     choice_pr_spec,
     fixed_ratio_spec,
@@ -40,6 +47,20 @@ from v4_fixtures import (
 )
 
 FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def returning_fly_spec(minutes: float = 10.0):
+    """FixedRatio 3 with an 8 s Activation, on W1 and W3 of flies that come
+    back every 3 s: most bouts start while their own light is on, which the
+    firmware does not count as Firmware Events (decision 16)."""
+    paradigm = ParadigmSpec("FR3Long", "FixedRatio", activation_ms=8000, ratio=3)
+    bouts = {w: tuple(Bout(round(6.0 + 3.0 * i + 0.37 * w, 3), 1.0)
+                      for i in range(int((minutes * 60 - 10) / 3.0))) for w in (1, 3)}
+    dfm = DFMSpec(1, (IntervalSpec(paradigm.name, True, CHOICE_THRESHOLDS, minutes),), bouts)
+    return RecordingSpec(start=START, duration_min=minutes, paradigms={paradigm.name: paradigm},
+                         dfms=(dfm,))
+
+
 SPECS = {
     "choice": lambda: choice_pr_spec(),
     "choice1": lambda: choice_pr_spec(dfm_ids=(1,)),
@@ -47,6 +68,7 @@ SPECS = {
     "yoked": lambda: yoked_controls_spec(minutes=12.0),
     "fixed_ratio": lambda: fixed_ratio_spec(minutes=15.0),
     "repeating": lambda: repeating_open_loop_spec(),
+    "returning": returning_fly_spec,
 }
 
 
@@ -552,6 +574,116 @@ def test_generation_2_keeps_the_clock_schedule_and_leaves_the_new_columns_na(tmp
     assert set(e.opto.events_table()["Source"]) == {oq.EVENT_SOURCE_OPTOCOL1}
     assert any(n.startswith("DFM generations: DFM 1 generation 2")
                for n in e.opto.experiment_notes())
+    ## The ledger's columns are the firmware's record: none from OptoCol1.
+    events = e.opto.events_table()
+    assert events[[*oq.LEDGER_EVENT_COLUMNS, "Family"]].isna().all().all()
+
+
+# ---------------------------------------------------------------------------
+# The Activation ledger in the light events (C4) and like with like (C7)
+# ---------------------------------------------------------------------------
+
+def test_the_light_events_carry_the_ledger(choice, tmp_path):
+    """Each generation-3 light event is its Activation's ledger row, joined
+    on (Well, onset row, order within the row), with its Family; the timed
+    ones are the truth's to the millisecond."""
+    from pyflic.base import activation_ledger as al
+    from pyflic.base import paradigm_families as pf
+
+    spec, results = simulated("choice")
+    events = choice.opto.events_table()
+    assert list(events.columns) == list(oq.OPTO_EVENT_COLUMNS)
+    assert list(oq.OPTO_EVENT_COLUMNS[-9:]) == [*oq.LEDGER_EVENT_COLUMNS, "Family"]
+    for column in oq.OPTO_EVENT_INTEGER_COLUMNS:
+        assert str(events[column].dtype) == "Int64", column
+    assert str(events["Overlap"].dtype) == "boolean"
+    timed = 0
+    for dfm_id in (1, 2):
+        state = choice.dfms[dfm_id].paradigm
+        groups = choice.opto.program.section(dfm_id).linkage_groups()
+        book = al.ledger(state, linked={w: g for g in groups.values() for w in g})
+        truth = results[dfm_id].truth
+        for well in sorted(state.wells_with_activations()):
+            mine = events[(events["DFM"] == dfm_id) & (events["Well"] == well)]
+            theirs = book[book["Well"] == well]
+            assert len(mine) == len(theirs) == len(truth.activation_onset_ms[well])
+            for column in oq.LEDGER_EVENT_COLUMNS:
+                got, want = mine[column].tolist(), theirs[column].tolist()
+                assert [None if pd.isna(v) else v for v in got] == \
+                    [None if pd.isna(v) else v for v in want], (dfm_id, well, column)
+            assert mine["OnsetMin"].tolist() == pytest.approx(theirs["OnsetMin"].tolist())
+            spans = dict(truth.lit_spans_ms[well])
+            for row, t0 in zip(mine.itertuples(), truth.activation_onset_ms[well]):
+                if not row.Overlap and row.Timing == al.TIMING_EXACT:
+                    assert (row.OnsetMs, row.EndMs, row.LitMs) == (t0, spans[t0], spans[t0] - t0)
+                    timed += 1
+            ## Acclimation and Closed are closed loop, PR10's Main fixed length.
+            expected = [pf.CLOSED_LOOP if phase == "A" or mode == op.CLOSED_LOOP_MAX
+                        else pf.FIXED_LENGTH for phase, mode in zip(mine["Phase"], mine["Mode"])]
+            assert mine["Family"].tolist() == expected
+            main = mine[(mine["Phase"] == "M") & (mine["Mode"] == op.PROGRESSIVE_RATIO)]
+            assert main["K"].tolist() == list(range(1, len(main) + 1))
+    assert timed > 250
+    ## The file carries them.
+    written = choice.opto.write(tmp_path / "opto")
+    back = pd.read_csv(written["opto_light_events"])
+    assert list(back.columns) == list(oq.OPTO_EVENT_COLUMNS)
+    assert back["OnsetMs"].dtype.kind == "i" and set(back["Timing"]) <= {"exact", "record"}
+
+
+def test_firmware_events_disagree_compares_like_with_like(tmp_path):
+    """Decision 16: a bout that starts while the well's own Activation is
+    lit is no Firmware Event, so pyflic's count leaves out feeding events
+    whose first sample lies in the Activation's light period after its onset
+    row.  The onset row stays: the Event that met the Requirement starts
+    there, as the light comes on.  A fly coming back every 3 s under an 8 s
+    light starts most bouts lit; counted like with like, the two agree."""
+    from pyflic.base import activation_ledger as al
+    from pyflic.base import opto_light as ol
+
+    e = load(tmp_path / "exp", "returning")
+    groups = _groups(e, 1)
+    state = e.dfms[1].paradigm
+    n = len(state)
+    feeding = ol._matrix(e.dfms[1].event_df, n, np.int64)
+    book = al.ledger(state)
+    for well, group in ((1, 1), (3, 2)):
+        row = groups.loc[group]
+        assert row["Verdict"] == "ok" and _flags(row) == []
+        assert row["PyflicEvents"] == row["FirmwareEvents"] > 100
+        main = state.ratio_rows(well) & ~state.phase_a[:, well - 1]
+        starts = (feeding[:, well - 1] > 0) & main
+        ## Every bout pyflic sees: like with unlike, far more than the firmware's.
+        assert starts.sum() > 1.5 * row["FirmwareEvents"]
+        ## Leaving out the onset row too would leave out the Events that
+        ## earned the light, as many too few.
+        whole = al.activation_rows(book, well, n)
+        assert (starts & ~whole).sum() < 0.75 * row["FirmwareEvents"]
+
+
+def test_like_with_like_keeps_the_choice_rigs_verdicts(choice):
+    """On the choice rig no bout starts within a 500 ms Activation, so the
+    counts are as before: the drifting chamber still disagrees (thousands of
+    Firmware Events, no pyflic event) and the healthy ones agree."""
+    from pyflic.base import opto_light as ol
+
+    for dfm_id in (1, 2):
+        groups = _groups(choice, dfm_id)
+        state = choice.dfms[dfm_id].paradigm
+        n = len(state)
+        feeding = ol._matrix(choice.dfms[dfm_id].event_df, n, np.int64)
+        for chamber, case in CHOICE_PR_CASES.items():
+            row = groups.loc[chamber]
+            well = 2 * chamber - 1
+            if case == "drifting":
+                assert oq.EVENT_DISAGREEMENT in _flags(row)
+                assert row["PyflicEvents"] == 0 and row["FirmwareEvents"] > 1000
+            elif case == "healthy":
+                assert oq.EVENT_DISAGREEMENT not in _flags(row)
+                main = state.ratio_rows(well) & ~state.phase_a[:, well - 1]
+                assert row["PyflicEvents"] == int(((feeding[:, well - 1] > 0) & main).sum())
+                assert abs(row["FirmwareEvents"] - row["PyflicEvents"]) \
+                    < 0.25 * row["FirmwareEvents"]
 
 
 # ---------------------------------------------------------------------------
