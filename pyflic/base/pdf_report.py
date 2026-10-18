@@ -821,7 +821,7 @@ def _light_family_blocks(experiment: Experiment, family, rows: pd.DataFrame | No
             pending = []
     if pending:
         blocks.append(rl.PlotRow(pending, height=3.0))
-    if family.key == OPEN_LOOP:
+    if family.key == OPEN_LOOP and _has_module(experiment, "light_dark"):
         blocks.append(rl.Plot(lambda: rc.light_dark_plot(rows, facet_col=facet_col),
                               height=3.0, title="Feeding in light and dark",
                               caption="Each open-loop chamber's licks per minute in its own "
@@ -836,13 +836,24 @@ def _light_family_blocks(experiment: Experiment, family, rows: pd.DataFrame | No
     return blocks
 
 
+def _has_module(source: Any, module_id: str) -> bool:
+    """Whether *source*'s Experiment Type includes the Analysis Module
+    *module_id* (ADR-0019)."""
+    has = getattr(getattr(source, "experiment_type", None), "has_module", None)
+    return bool(has(module_id)) if callable(has) else False
+
+
 def _yoked_blocks(experiment: Experiment, options: ReportOptions) -> list[Any]:
     """*Paired and yoked* (decision 12): where a Linkage Group yokes
-    chambers to a Paired one, under any type but Progressive Ratio (which
-    keeps its own), the paired fly's feeding minus its yoked partners', by
-    treatment (:func:`analytics.yoked_comparison`, :mod:`yoked_report`)."""
+    chambers to a Paired one, under a type with the Paired and yoked module
+    (the Ratio module keeps its own), the paired fly's feeding minus its
+    yoked partners', by treatment (:func:`analytics.yoked_comparison`,
+    :mod:`yoked_report`)."""
     from . import analytics
     from . import yoked_report as yr
+
+    if not _has_module(experiment, "yoked"):
+        return []
 
     try:
         if not analytics.yoked_groups(experiment):

@@ -3006,13 +3006,16 @@ class Experiment:
             if self.analysis_dir is not None:
                 light_paths = light_summary.write(self, range_minutes=range_minutes)
                 ## Paired minus yoked, where a Linkage Group yokes chambers to a
-                ## Paired one (decision 12 of docs/paradigm-analyses-plan.md).
+                ## Paired one (decision 12 of docs/paradigm-analyses-plan.md),
+                ## under a type with the Paired and yoked module (ADR-0019).
                 from .analytics import write_yoked_comparison
 
-                yoked = write_yoked_comparison(self, range_minutes=range_minutes,
-                                               transform_licks=transform_licks)
-                if yoked is not None:
-                    light_paths["yoked_comparison"] = yoked
+                etype = self.experiment_type
+                if etype is None or etype.has_module("yoked"):
+                    yoked = write_yoked_comparison(self, range_minutes=range_minutes,
+                                                   transform_licks=transform_licks)
+                    if yoked is not None:
+                        light_paths["yoked_comparison"] = yoked
                 print(f"  Done → {', '.join(p.name for p in light_paths.values())}",
                       flush=True)
 

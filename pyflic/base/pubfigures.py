@@ -151,7 +151,7 @@ PLOT_TYPES: dict[str, dict] = {
         "x_label": "Time since training end (min)",
         "y_limits": None, "ref_line": 0.0,
         "display": "Paired − yoked cumulative licks since training",
-        "layout": "two_well", "experiment_type": "ProgressiveRatio",
+        "layout": "two_well", "module": "ratio",
         "source": "pr_diff", "common_range": True,
     },
     ## One point per Chamber Group: the paired fly's Breaking Point against
@@ -162,7 +162,7 @@ PLOT_TYPES: dict[str, dict] = {
         "x_label": "Time since training end (min)",
         "y_limits": None, "ref_line": None,
         "display": "Breaking point vs Test time",
-        "layout": "two_well", "experiment_type": "ProgressiveRatio",
+        "layout": "two_well", "module": "ratio",
         "source": "pr_breaking", "builder": "breaking_time",
     },
     ## One point per Chamber Group: Breaking Point by Treatment (no facets).
@@ -172,7 +172,7 @@ PLOT_TYPES: dict[str, dict] = {
         "x_label": "",
         "y_limits": None, "ref_line": None,
         "display": "Breaking point by treatment",
-        "layout": "two_well", "experiment_type": "ProgressiveRatio",
+        "layout": "two_well", "module": "ratio",
         "source": "pr_breaking", "builder": "breaking_treatment",
     },
 }
@@ -237,18 +237,28 @@ def family_of(plot_id: str) -> str:
     return PLOT_TYPES.get(plot_id, {}).get("family", FAMILY_FACETED)
 
 
-def plots_for_layout(chamber_layout: str,
-                     experiment_type: str | None = None, *,
+def _module_ids(modules) -> set[str]:
+    """The Analysis Module ids *modules* names: an Experiment Type (its
+    ``module_ids``), an iterable of ids, or ``None`` for none."""
+    if modules is None:
+        return set()
+    ids = getattr(modules, "module_ids", modules)
+    if isinstance(ids, str):
+        return {ids.lower()}
+    return {str(m).lower() for m in ids}
+
+
+def plots_for_layout(chamber_layout: str, modules=None, *,
                      light: bool = False) -> list[str]:
     """Plot ids valid for *chamber_layout* — a PI figure is meaningless on a
     single-well recording, so the Editor never offers one.  A plot that names
-    an ``experiment_type`` is offered only when *experiment_type* matches;
-    with *experiment_type* ``None`` such plots are left out.  The light
+    an Analysis Module (``module``) is offered only when *modules* (an
+    Experiment Type, or its module ids) includes it (ADR-0019).  The light
     figures are offered only with *light* (a Project with a light table,
     :func:`has_light_table`)."""
     out = []
     for plot_id, info in PLOT_TYPES.items():
-        if not plot_allowed(plot_id, chamber_layout, experiment_type):
+        if not plot_allowed(plot_id, chamber_layout, modules):
             continue
         if info.get("source") == SOURCE_LIGHT and not light:
             continue
@@ -256,17 +266,16 @@ def plots_for_layout(chamber_layout: str,
     return out
 
 
-def plot_allowed(plot_id: str, chamber_layout: str | None,
-                 experiment_type: str | None) -> bool:
-    """Whether *plot_id* applies to this layout and type."""
+def plot_allowed(plot_id: str, chamber_layout: str | None, modules=None) -> bool:
+    """Whether *plot_id* applies to this layout and the type's modules."""
     info = PLOT_TYPES.get(plot_id)
     if info is None:
         return False
     needed = info.get("layout")
     if needed is not None and chamber_layout is not None and needed != chamber_layout:
         return False
-    needed_type = info.get("experiment_type")
-    if needed_type is not None and str(needed_type).lower() != str(experiment_type or "").lower():
+    needed_module = info.get("module")
+    if needed_module is not None and needed_module not in _module_ids(modules):
         return False
     return True
 
@@ -1196,10 +1205,10 @@ def render_all(project, fmt: str = "svg", out_dir: str | None = None,
     well_a = str((project.design_global.get("well_names") or {}).get("A")
                  or "well A")
     written: list[str] = []
-    ## plots_for_layout has already applied the layout and Experiment Type
+    ## plots_for_layout has already applied the layout and Analysis Module
     ## gates, so anything it lists is a figure this Project is entitled to.
     for plot_id in plots_for_layout(project.chamber_layout,
-                                    project.experiment_type.name,
+                                    project.experiment_type,
                                     light=has_light_table(project)):
         if only and plot_id not in only:
             continue

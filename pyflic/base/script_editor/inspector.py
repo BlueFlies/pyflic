@@ -27,7 +27,8 @@ from PyQt6.QtWidgets import (
 )
 
 from ..ui import Category, category_color, icon
-from .actions import Action, Param, get_action, metric_choices, default_mode_for_metric
+from .actions import (Action, Param, default_mode_for_metric, get_action, metric_choices,
+                      unmet)
 
 
 class Inspector(QWidget):
@@ -297,7 +298,7 @@ class Inspector(QWidget):
 
         if p.type in ("metric", "well_metric"):
             w = QComboBox()
-            is_two_well = self._experiment_type in {"two_well", "hedonic", "progressive_ratio"}
+            is_two_well = "two_well" in (self._experiment_type or ())
             for label, key in metric_choices(p.type, is_two_well):
                 w.addItem(label, userData=key)
             if value is not None:
@@ -408,14 +409,11 @@ def _parse_list_float(text: str) -> list[float]:
     return out
 
 
-def _validate(step: dict[str, Any], act: Action, experiment_type: str | None) -> list[str]:
+def _validate(step: dict[str, Any], act: Action, experiment_type) -> list[str]:
     msgs: list[str] = []
-    if act.requires and act.requires != experiment_type:
-        msgs.append(
-            f"This action requires experiment_type={act.requires!r}; current is "
-            f"{experiment_type or 'unspecified'}. The step will be skipped at "
-            f"runtime."
-        )
+    problem = unmet(act.requires, experiment_type)
+    if problem:
+        msgs.append(f"{problem} The step will be skipped at runtime.")
     for p in act.params:
         if p.required and p.key not in step:
             msgs.append(f"Missing required parameter: {p.label} ({p.key}).")

@@ -229,16 +229,16 @@ class ScriptEditorWindow(QMainWindow):
         # A Member normally states no global: at all and inherits the
         # Project Design's (ADR-0005), so fall back to that.
         g = raw.get("global") or {}
-        et_raw = (g.get("experiment_type") or "") if isinstance(g, dict) else ""
-        if not et_raw:
+        g = dict(g) if isinstance(g, dict) else {}
+        if not g.get("experiment_type") and not g.get("chamber_layout"):
             try:
                 from ..project import design_for_member
                 design, _name = design_for_member(self._config_path.parent)
-                et_raw = ((design or {}).get("experiment_type") or "")
+                g = {**dict(design or {}), **g}
             except Exception:  # noqa: BLE001
-                et_raw = ""
-        from .actions import requires_key_for
-        self._experiment_type = requires_key_for(et_raw)
+                pass
+        from .actions import capabilities_for
+        self._experiment_type = capabilities_for(g, self._config_path.parent)
         self._palette.set_experiment_type(self._experiment_type)
         self._canvas.set_experiment_type(self._experiment_type)
         self._inspector.set_experiment_type(self._experiment_type)

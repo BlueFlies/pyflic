@@ -545,7 +545,8 @@ def test_a_fixed_ratio_counts_its_acclimation_and_its_ratio(tmp_path):
     events = e.opto.events_table()
     main = events[(events["Phase"] == "M")]
     assert set(main["RequirementMet"]) == {5} and set(main["FirmwareEvents"]) == {5}
-    assert any("runs a fixed ratio, but the experiment type is" in n
+    assert any("runs a fixed ratio, but the experiment type" in n
+               and "has no Progressive Ratio module" in n
                for n in e.opto.experiment_notes())
 
 

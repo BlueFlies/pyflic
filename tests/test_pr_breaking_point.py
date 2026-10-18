@@ -393,7 +393,7 @@ def test_the_script_actions_run(tmp_path):
     assert any("Breaking point at other gaps" in line for line in logged)
     assert [title for title, _fig in figures] == ["Still responding"]
     for action in ("breaking_point", "plot_pr_still_responding"):
-        assert get_action(action).requires == "progressive_ratio"
+        assert get_action(action).requires == "ratio"
 
 
 def test_the_report_tests_against_zero_and_uses_the_logrank(bp_dir, tmp_path):

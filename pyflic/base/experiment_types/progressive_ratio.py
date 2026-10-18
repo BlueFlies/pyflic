@@ -1,7 +1,10 @@
-"""The Progressive Ratio Experiment Type.
+"""The Chamber Groups of the Ratio analysis (ADR-0019's ``ratio`` module).
 
-A two-well operant assay.  A DFM's six chambers form **Chamber Groups** that
-share one light circuit and one Treatment.  In a paired design each group is
+The Progressive Ratio design, which the shipped ProgressiveRatio type and any
+type including the ``ratio`` Analysis Module
+(:mod:`pyflic.base.analysis_modules.ratio`) run: a two-well operant assay.
+A DFM's six chambers form **Chamber Groups** that share one light circuit
+and one Treatment.  In a paired design each group is
 two chambers: one **Paired** (light contingent on its own feeding at the
 sucrose well, well A) and the other **Yoked** (lit at the same moments,
 regardless of its own behaviour).  A **solo** group is one chamber, Paired,
@@ -10,8 +13,8 @@ answers to its own fly alone (decision 13 of
 ``docs/paradigm-analyses-plan.md``).  The recording opens with a closed-loop
 **Training** phase whose end the firmware marks per well in the data (a flag
 in the signal before firmware 4.0.0, the Sucrose Well's Phase from it), and
-differs for every group — which is why this type's Facets are data-derived
-(ADR-0013) rather than minute cutoffs.  The type covers both ratio
+differs for every group — which is why the module's Facets are data-derived
+(ADR-0013) rather than minute cutoffs.  The module covers both ratio
 Paradigms of firmware 4.0.0, ProgressiveRatio and FixedRatio (decision 6 of
 ``docs/v4-data-plan.md``).
 
@@ -43,9 +46,6 @@ from typing import Any, Mapping, Sequence
 
 from ..constant_fields import ConstantField
 from ..constant_fields import constant_problems as _constant_problems
-from ..pr_breaking_point import DEFAULT_CONSTANTS as BREAK_CONSTANTS
-from ..pr_light_qc import DEFAULT_CONSTANTS as LIGHT_QC_CONSTANTS
-from .base import ExperimentType
 
 #: The paired layout's Chamber Groups -> their two chambers (two-well layout,
 #: chambers 1..6): what ``paired_chambers`` and ``chamber_groups: paired``
@@ -60,7 +60,7 @@ PAIRED_KEY = "paired_chambers"
 GROUPS_KEY = "chamber_groups"
 GROUPS_PAIRED, GROUPS_SINGLE = "paired", "single"
 GROUP_LAYOUTS: tuple[str, ...] = (GROUPS_PAIRED, GROUPS_SINGLE)
-#: Where :meth:`ProgressiveRatioExperimentType.complete_dfm_node` leaves the
+#: Where the Ratio module's ``complete_dfm_node`` leaves the
 #: groups Program.txt gave, in the resolved DFM entry the loader keeps (never
 #: in a file): ``[[paired, yoked or None], ...]`` in group order.
 RESOLVED_GROUPS_KEY = "_chamber_groups"
@@ -539,209 +539,3 @@ def constant_problems(constants: Mapping[str, Any] | None) -> list[str]:
     type's defaults fill them in.  Never raises."""
     return _constant_problems(PR_CONSTANT_FIELDS, constants,
                               default="the type's default")
-
-
-class ProgressiveRatioExperimentType(ExperimentType):
-    name = "ProgressiveRatio"
-    display_name = "Progressive Ratio"
-
-    chamber_layout = "two_well"
-    required_wells = ("A", "B")
-    experiment_class = "pyflic.base.progressive_ratio_experiment:ProgressiveRatioExperiment"
-    ## Facets are Training and Test, split at each Chamber Group's own training
-    ## end (ADR-0013).  No cutoff list exists; ``facet_cutoffs`` is owned and
-    ## must not appear in the config.
-    facet_cutoffs = None
-    facets_fixed = True
-    data_derived_facets = True
-    phase_labels = ("Training", "Test")
-
-    default_constants = {
-        "min_untransformed_licks_cutoff": 20,
-        "max_med_duration_cutoff": 13.0,
-        "max_events_cutoff": 150000.0,
-        ## A Chamber Group whose paired fly never finished training has no
-        ## Test phase; by default both its chambers leave the analysis through
-        ## the ordinary auto-removal path so the rule is stated once.
-        "require_training_complete": True,
-        ## Light QC (did the paired fly earn its light?): a group whose light
-        ## followed the sensor rather than the fly leaves the same way, unless
-        ## exclude_failed_pr_groups is switched off.  See pr_light_qc.
-        **LIGHT_QC_CONSTANTS,
-        ## Breaking point and Sucrose Persistence (ADR-0014): the pause, in
-        ## minutes, that ends a fly's responding.  pr_test_window_min (a cap
-        ## on every group's Test window) has no default: unset means off.
-        **BREAK_CONSTANTS,
-    }
-
-    def validate(self, global_cfg: dict | None) -> list[str]:
-        """The base checks plus the Progressive Ratio constants' values
-        (:func:`constant_problems`), so the loader, ``pyflic lint``, the Config
-        Editor and the Project Design dialog refuse the same mistakes."""
-        problems = super().validate(global_cfg)
-        problems += constant_problems((global_cfg or {}).get("constants"))
-        return problems
-
-    def complete_dfm_node(self, dfm_id: int, node: dict, *, params=None,
-                          dfm_program=None) -> tuple[dict, list[str]]:
-        """The Chamber Groups the Opto Program gives when the entry leaves
-        them out (:func:`resolve_chamber_groups`): ``paired_chambers`` for the
-        paired layout, as before solo groups, and the groups themselves
-        (:data:`RESOLVED_GROUPS_KEY`) whenever the program decided them.
-        When the config states them and the program disagrees, say so and
-        keep the config's."""
-        if dfm_program is None:
-            return node, []
-        result = resolve_chamber_groups(
-            node, dfm_program, chamber_sets=getattr(params, "chamber_sets", None),
-            pi_direction=getattr(params, "pi_direction", "left"), dfm_id=dfm_id)
-        if result.source == "program" and result.groups is not None:
-            node = {**node, RESOLVED_GROUPS_KEY: [[g.paired, g.yoked] for g in result.groups]}
-            if sorted(g.chambers for g in result.groups) == sorted(CHAMBER_GROUPS.values()):
-                ## The paired layout: written as the config would state it.
-                node[PAIRED_KEY] = sorted(g.paired for g in result.groups)
-        return node, list(result.notes)
-
-    def validate_dfm(self, dfm_id: int, node: dict | None,
-                     chamber_assignments: dict | None) -> list[str]:
-        result = resolve_chamber_groups(node, dfm_id=dfm_id)
-        out = [f"DFM {dfm_id}: {p}" for p in result.problems]
-        assignments = {int(k): str(v) for k, v in (chamber_assignments or {}).items()}
-        ## Both chambers of a pair share a treatment; the paired layout's
-        ## pairs are checked even when paired_chambers is wrong or missing.
-        groups = (result.groups if result.groups is not None
-                  else paired_layout([a for a, _b in CHAMBER_GROUPS.values()])
-                  if parse_layout((node or {}).get(GROUPS_KEY))[0] != GROUPS_SINGLE else ())
-        for g in groups:
-            if g.solo:
-                continue
-            a, b = g.chambers
-            ta, tb = assignments.get(a), assignments.get(b)
-            if ta is not None and tb is not None and ta != tb:
-                out.append(
-                    f"DFM {dfm_id}: chambers {a} and {b} form one chamber group "
-                    f"and must share a treatment, got {ta!r} and {tb!r}")
-        return out
-
-    def report_facets(self) -> list[str] | None:
-        return ["Test"]
-
-    def report_intro(self) -> str:
-        ## Said of pairs and solo groups alike (decision 13): whether this
-        ## design has yoked controls, the results say once.
-        return ("A progressive-ratio assay: in each chamber group the paired fly "
-                "earns light-driven stimulation by feeding at the sucrose well "
-                "(well A); in a paired group its yoked partner is lit at the same "
-                "moments regardless of behaviour. Training is closed-loop and ends "
-                "at a time the data defines per group; the Test phase follows. The "
-                "headline results are the breaking point and, where groups have a "
-                "yoked control, the paired-minus-yoked difference within each group.")
-
-    def report_set(self, chamber_layout: str) -> list[str]:
-        return ["timecourse_pr_diff", "scatter_pr_breaking_point",
-                "dot_pr_breaking_point", "faceted_licks", "faceted_events",
-                "faceted_pi"]
-
-    def project_results_blocks(self, project) -> list:
-        """The pooled breaking point (ADR-0014) — the still-responding curve
-        first, then one point per Chamber Group with the mixed model and the
-        log-rank test beside the pooled test — and the pooled Paired-Yoked
-        Difference in the Test phase."""
-        from .. import report_content as rc
-        from .. import report_layout as rl
-        from ..analytics import as_bool, breaking_point_comparisons
-        from ..pr_breaking_point import BreakSettings
-
-        diff = project.combined_diff_frame()
-        bp = project.combined_breaking_point_frame()
-        if (diff is None or diff.empty) and bp is None:
-            return []
-        names = project.design_global.get("well_names") or {}
-        well_a = names.get("A") or "well A"
-        factors = list((project.design_global.get("experimental_design_factors") or {}))
-        settings = BreakSettings.from_constants(self.resolve_constants(project.design_global))
-        half = (rl.CONTENT_W - 0.25) / 2
-
-        def dot(frame, column, label, hline=None):
-            return lambda: rc.dot_plot(frame, column, y_label=label, factors=factors,
-                                       hline_at=hline)
-
-        blocks: list = [rl.Heading("Fixed ratio: activations earned" if all_fixed_ratio(bp)
-                                   else "Breaking point", level=2)]
-        if bp is None:
-            blocks.append(rl.Callout(
-                "No member has a breaking point table (pr_breaking_point.csv): their "
-                "analyses predate it.  Re-run the members' basic analysis.",
-                tone="warning"))
-        elif bp.empty:
-            blocks.append(rl.Callout("No chamber group in the pooled analysis has a Test "
-                                     "phase.", tone="warning"))
-        else:
-            censored = int(as_bool(bp["Censored"]).sum()) if "Censored" in bp.columns else 0
-            window = ("" if settings.test_window_min is None else
-                      f"  Every Test window was capped at {settings.test_window_min:g} "
-                      f"minutes (pr_test_window_min).")
-            blocks += [
-                rl.Paragraph(
-                    f"The number of lick-backed Test light events a paired fly completed "
-                    f"before its first pause longer than {settings.gap_min:g} minutes "
-                    f"(pr_break_gap_min), pooled across members: one observation per "
-                    f"chamber group.  {censored} of {len(bp)} groups were still responding "
-                    f"when their Test window ended, so their counts are lower bounds "
-                    f"(censored); the curve and the log-rank test treat them as such, the "
-                    f"t-tests and the mixed model enter them as observed.{window}"),
-                rl.Plot(lambda: rc.still_responding_plot(bp, base_font_size=9.5),
-                        height=3.4, title="Still responding"),
-                rl.PlotRow([rl.Plot(lambda: rc.censored_dot_plot(
-                    bp, "BreakingPoint", y_label="Light events earned", factors=factors),
-                    title="Breaking point by treatment", width=half)], height=3.0),
-                *rc.stats_table(breaking_point_comparisons(bp, mixed_p=project._mixed_p),
-                                caption="Treatment comparisons: breaking point",
-                                well_names=names, show_phase=False),
-            ]
-            requirement = break_requirement_view(bp)
-            if requirement is not None:
-                blocks.append(rl.Table(
-                    requirement, caption="Breaking point and the Requirement the last "
-                                         "counted light event met, as the firmware "
-                                         "recorded it (medians per treatment)",
-                    formats={"Breaking point": "{:g}", "Break requirement": "{:g}"}))
-
-        test = (diff[diff["Facet"].astype(str) == "Test"]
-                if diff is not None and not diff.empty else None)
-        if (test is None or test.empty) and not pooled_yoked_controls(project):
-            ## Decision 13: said once, where the difference would have been.
-            blocks += [rl.Heading("Paired − yoked difference", level=2),
-                       rl.Paragraph("The design has no yoked controls: every chamber "
-                                    "group is one chamber, lit by its own fly alone, so "
-                                    "there is no paired − yoked difference.")]
-        if test is not None and not test.empty:
-            blocks += [
-                rl.Heading("Paired − yoked difference, Test phase", level=2),
-                rl.Paragraph("One point per chamber group, pooled across members: the "
-                             "paired fly's value minus its yoked partner's over the Test "
-                             f"phase.  Zero is the null; the statistics below test it, "
-                             f"against zero within each treatment and between treatments.  "
-                             f"Sucrose persistence is the time from training end to a fly's "
-                             f"last {well_a} feeding event before a pause longer than "
-                             f"{settings.gap_min:g} minutes."),
-                rl.PlotRow([
-                    rl.Plot(dot(test, "dLicksA", rc.metric_label("dLicksA", names), 0.0),
-                            title=rc.metric_label("dLicksA", names)),
-                    rl.Plot(dot(test, "dPI", rc.metric_label("dPI", names), 0.0),
-                            title=rc.metric_label("dPI", names)),
-                ], height=3.0),
-            ]
-            if "dPersistA" in test.columns and test["dPersistA"].notna().any():
-                blocks.append(rl.PlotRow([
-                    rl.Plot(dot(test, "dPersistA", rc.metric_label("dPersistA", names), 0.0),
-                            title=rc.metric_label("dPersistA", names), width=half),
-                ], height=3.0))
-        return blocks
-
-    def output_manifest(self) -> list[str]:
-        return ["feeding_summary.csv", "feeding_summary_facet.csv",
-                "paired_yoked_diff.csv", "pr_cumulative_diff.csv",
-                "pr_cumulative_diff.png", "pr_light_qc.csv",
-                "pr_light_events.csv", "pr_breaking_point.csv",
-                "pr_still_responding.png", "summary.txt"]

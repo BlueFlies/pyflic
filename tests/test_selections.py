@@ -188,7 +188,7 @@ def test_the_three_sets_hold_the_plans_items_in_panel_order():
                                      "Hedonic"]
     for kind in sel.OMIT_KINDS:
         assert all(i.kind == kind and i.outputs and i.caption for i in sel.items(kind))
-        assert all(i.requires in (None, *sel.REQUIREMENTS) for i in sel.items(kind))
+        assert all(set(i.requirements) <= set(sel.REQUIREMENTS) for i in sel.items(kind))
     ## Every item has a run, and write_qc_reports writes the QC reports in
     ## the set's order.
     assert set(rs._RUNNERS) == {i.id for i in sel.all_items()}
@@ -264,8 +264,8 @@ def test_the_summary_states_what_was_left_out_and_what_did_not_apply(ran):
         in block
     assert ("Not applicable: Paired and yoked comparison (yoked_comparison) — No yoked "
             "group: no linkage group lights a Yoked chamber") in block
-    assert "Not applicable: Weighted duration summary (weighted_duration) — needs a " \
-           "Hedonic experiment" in block
+    assert "Not applicable: Weighted duration summary (weighted_duration) — needs an " \
+           "experiment type with the Hedonic module" in block
     assert "Included: Binned summary (binned_summary), Event statistics" in block
 
 
@@ -296,9 +296,9 @@ def test_items_that_do_not_apply_are_reported_and_not_run(ran):
         "opto_light_qc": sel._NOT_MET[sel.OPTOGENETIC],
         "opto_light_figures": sel._NOT_MET[sel.OPTOGENETIC],
         "program_timeline": sel._NOT_MET[sel.OPTOGENETIC],
-        "pr_light_qc": "needs a Progressive Ratio experiment",
-        "pr_light_event_figures": "needs a Progressive Ratio experiment",
-        "pr_resting_level_figures": "needs a Progressive Ratio experiment"}
+        "pr_light_qc": sel._NOT_MET[sel.RATIO],
+        "pr_light_event_figures": sel._NOT_MET[sel.RATIO],
+        "pr_resting_level_figures": sel._NOT_MET[sel.RATIO]}
     assert set(_not_applicable(r.analysis)) == {
         "light_tables", "yoked_comparison", "paired_yoked_diff", "cumulative_diff",
         "breaking_point", "weighted_duration"}
@@ -321,13 +321,14 @@ def test_an_item_the_data_cannot_answer_is_reported_with_its_reason(ran):
     assert sel.unavailable(sel.item(sel.QC, "program_timeline"), pr.exp).startswith(
         "No timeline")
     ## The yoked comparison: greyed without a yoked group, hidden under
-    ## Progressive Ratio, which keeps its own.
+    ## a type without the Paired and yoked module, such as Progressive Ratio,
+    ## whose Ratio module keeps its own (ADR-0019).
     yoked = sel.item(sel.ANALYSES, "yoked_comparison")
     assert sel.unavailable(yoked, ran["single_opto_g1"].exp) == \
         "No yoked group: no linkage group lights a Yoked chamber"
     assert sel.unavailable(yoked, ran["yoked_g3"].exp) is None
     assert not sel.applies(yoked, pr.exp) and sel.unavailable(yoked, pr.exp) is None
-    assert sel.not_applicable_reason(yoked, pr.exp).startswith("not under Progressive Ratio")
+    assert sel.not_applicable_reason(yoked, pr.exp) == sel._NOT_MET[sel.YOKED]
     ## Hedonic and Progressive Ratio items apply to their own type only.
     assert sel.applies(sel.item(sel.PLOTS, "hedonic_plot"), ran["hedonic_g2"].exp)
     assert not sel.applies(sel.item(sel.PLOTS, "hedonic_plot"), pr.exp)

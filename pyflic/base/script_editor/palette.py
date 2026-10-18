@@ -20,7 +20,7 @@ from PyQt6.QtWidgets import (
 )
 
 from ..ui import Category, category_color, icon
-from .actions import ACTIONS, Action, actions_by_category
+from .actions import ACTIONS, Action, actions_by_category, unmet
 
 
 # ---------------------------------------------------------------------------
@@ -154,16 +154,14 @@ class Palette(QWidget):
 
         self.setMinimumWidth(260)
 
-    def set_experiment_type(self, et: str | None) -> None:
-        """Re-tint tiles so ones that don't match *et* appear dimmed."""
+    def set_experiment_type(self, et) -> None:
+        """Re-tint tiles so ones the experiment's capabilities *et*
+        (:func:`~.actions.capabilities_for`) cannot run appear dimmed."""
         self._experiment_type = et
         for tile, act in self._tiles:
-            if act.requires and act.requires != et:
-                tile.set_dimmed(
-                    True,
-                    reason=f"Requires experiment_type={act.requires!r}; "
-                           f"current is {et or 'unspecified'}.",
-                )
+            problem = unmet(act.requires, et)
+            if problem:
+                tile.set_dimmed(True, reason=problem)
             else:
                 tile.setEnabled(True)
                 tile.setToolTip(act.blurb)

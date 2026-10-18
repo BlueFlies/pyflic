@@ -365,7 +365,7 @@ def _results_blocks(project, summary: pd.DataFrame, facet) -> list[Any]:
     pending_pair: list[rl.Plot] = []
     for plot_id in report_set:
         if not pubfigures.plot_allowed(plot_id, project.chamber_layout,
-                                       project.experiment_type.name):
+                                       project.experiment_type):
             continue
         info = pubfigures.PLOT_TYPES[plot_id]
         try:
@@ -530,7 +530,7 @@ def _light_family_blocks(project, specs, family, rows: pd.DataFrame,
             pending = []
     if pending:
         blocks.append(rl.PlotRow(pending, height=3.2))
-    if family.key == OPEN_LOOP:
+    if family.key == OPEN_LOOP and project.experiment_type.has_module("light_dark"):
         facet_col = "Facet" if "Facet" in source.columns else None
         blocks.append(rl.Plot(lambda: rc.light_dark_plot(source, facet_col=facet_col),
                               height=3.2, title="Feeding in light and dark",
@@ -596,9 +596,12 @@ def _yoked_blocks(project) -> list[Any]:
     """*Paired and yoked* (decision 12): the members' stacked yoked
     comparison (``<project>_YokedComparison.csv``), the paired fly's feeding
     minus its yoked partners' by treatment, with the mixed models beside the
-    pooled tests; nothing without a yoked group."""
+    pooled tests; nothing without a yoked group, or under a type without the
+    Paired and yoked module (ADR-0019)."""
     from . import yoked_report as yr
 
+    if not project.experiment_type.has_module("yoked"):
+        return []
     frame = project.combined_light_frames().get("YokedComparison")
     if frame is None or frame.empty:
         return []

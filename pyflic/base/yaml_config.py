@@ -293,8 +293,14 @@ def load_experiment_yaml(
 
     from . import experiment_types as _experiment_types
 
+    ## A lab type is read from its copy beside the data (ADR-0019).
     exp_type = _experiment_types.get_experiment_type(
-        global_cfg.get("experiment_type"))
+        global_cfg.get("experiment_type"), resolved_experiment_dir)
+    if getattr(exp_type, "resolved_from", None) == "library":
+        print(f"  NOTE: experiment_type '{exp_type.name}' was read from the lab library: "
+              f"the data carries no copy of it ({_experiment_types.COPY_NAME}), so "
+              f"another machine cannot analyse it the same way.  Save the design or "
+              f"the config again to copy it.", flush=True)
     type_problems = exp_type.validate(global_cfg)
     if type_problems and strict_type:
         raise ValueError(
@@ -372,6 +378,19 @@ def load_experiment_yaml(
                     print(f"  NOTE: {program_path.name}: {len(opto_program.warnings)} "
                           f"line(s) skipped or sections dropped (see summary.txt)",
                           flush=True)
+    ## The light the type expects (ADR-0019): a Program Interval running a
+    ## Paradigm type it does not take stops the load, like any other way
+    ## the config fails its type.
+    if opto_program is not None:
+        dfm_ids = [int(n.get("id", n.get("ID"))) for n in dfm_nodes
+                   if isinstance(n, Mapping) and n.get("id", n.get("ID")) is not None]
+        light_problems = exp_type.light_problems(opto_program, dfm_ids or None)
+        if light_problems and strict_type:
+            raise ValueError(
+                f"{path.name} does not satisfy experiment_type "
+                f"'{exp_type.name}':\n  - " + "\n  - ".join(light_problems))
+        for problem in light_problems:
+            print(f"  WARNING: {problem}", flush=True)
     program_notes: list[str] = []
     resolved_nodes: list[dict] = []
 

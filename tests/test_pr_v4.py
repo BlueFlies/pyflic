@@ -40,7 +40,7 @@ from pyflic.base.progressive_ratio_experiment import (
 )
 from pyflic.base.yaml_config import load_experiment_yaml
 
-from pr_fixtures import pr_config
+from pr_fixtures import TRAINED_PR, pr_config, write_trained_pr_type
 from v4_fixtures import (
     CHOICE_LINKAGE,
     CHOICE_PR_CASES,
@@ -64,10 +64,15 @@ TREATMENTS = {1: "Ctrl", 2: "Ctrl", 3: "Exp", 4: "Exp", 5: "Third", 6: "Third"}
 
 
 def write_config(root: Path, dfm_ids, *, constants: dict | None = None) -> None:
+    """A Progressive Ratio config under :data:`TRAINED_PR`, copied beside it:
+    the choice recording's program runs a ClosedLoop Training interval before
+    PR10, which the shipped type does not expect (ADR-0019)."""
     cfg = pr_config([{"id": int(d), "paired_chambers": PAIRED.get(int(d), [1, 3, 5]),
                       "chambers": dict(TREATMENTS)} for d in dfm_ids],
                     constants=constants)
+    cfg["global"]["experiment_type"] = TRAINED_PR
     (root / "flic_config.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False))
+    write_trained_pr_type(root)
 
 
 def pr_dir(root: Path, spec, results, *, writer=write_v4_recording, constants=None,
@@ -352,6 +357,8 @@ def test_the_project_pools_the_break_requirement(tmp_path):
         (member / "flic_config.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False))
     (root / "project.yaml").write_text(yaml.safe_dump(
         {"name": "proj", "design": {"global": design}}, sort_keys=False))
+    ## A Project's lab type is copied beside project.yaml, for every Member.
+    write_trained_pr_type(root)
     project = Project(root)
     for name in project.member_names:
         project.load_member(name, parallel=False,
@@ -607,7 +614,9 @@ def unpaired_dir(root: Path, spec, results, *, chamber_groups: str | None = None
         node.pop("paired_chambers")
         if chamber_groups is not None:
             node["chamber_groups"] = chamber_groups
+    cfg["global"]["experiment_type"] = TRAINED_PR
     (root / "flic_config.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False))
+    write_trained_pr_type(root)
     return root
 
 

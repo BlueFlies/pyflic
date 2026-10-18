@@ -1696,7 +1696,7 @@ class FLICConfigEditor(QMainWindow):
     def _sync_pr_widgets(self) -> None:
         """Show the paired-chamber pickers on every DFM tab for Progressive
         Ratio and hide them otherwise."""
-        enabled = self._current_type().name == "ProgressiveRatio"
+        enabled = self._current_type().has_module("ratio")
         for w in getattr(self, "_dfm_widgets", []):
             w.set_progressive_ratio(enabled)
 
@@ -2001,7 +2001,7 @@ class FLICConfigEditor(QMainWindow):
         factors = self._factors_widget.get_factors() if hasattr(self, "_factors_widget") else {}
         w = DFMWidget(dfm_id=dfm_id, chamber_size=chamber_size)
         w.update_factors(factors)
-        w.set_progressive_ratio(self._current_type().name == "ProgressiveRatio")
+        w.set_progressive_ratio(self._current_type().has_module("ratio"))
         for combo in (*w._paired_combos, w._groups_combo):
             combo.currentIndexChanged.connect(self._refresh_badges)
         w._id_spin.valueChanged.connect(lambda val, _w=w: self._on_dfm_id_changed(_w, val))
@@ -2187,13 +2187,14 @@ class FLICConfigEditor(QMainWindow):
 
         ## ADR-0007 / ADR-0011.  A typed config writes neither
         ## ``chamber_layout`` nor ``params.chamber_size`` — the type owns both
-        ## and they are derived.  A Custom Experiment states the layout,
-        ## because single-well versus two-well silently reinterprets the
-        ## whole plate and is not a thing to leave implicit.
-        if item.is_custom:
-            global_section["chamber_layout"] = self._chamber_layout()
-        else:
+        ## and they are derived.  A type that leaves the layout open (Custom,
+        ## or a lab type with chamber_layout: either) states it, because
+        ## single-well versus two-well silently reinterprets the whole plate
+        ## and is not a thing to leave implicit.
+        if not item.is_custom:
             global_section["experiment_type"] = item.name
+        if item.layout_free:
+            global_section["chamber_layout"] = self._chamber_layout()
 
         global_params = self._global_params.get_values()
         global_params.pop("chamber_size", None)

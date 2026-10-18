@@ -507,9 +507,9 @@ class PlotEditorWindow(QMainWindow):
         self._loading = True
         self.plot_combo.clear()
         layout = self.project.chamber_layout if self.project else "two_well"
-        type_name = (self.project.experiment_type.name if self.project else None)
+        modules = self.project.experiment_type if self.project else None
         light = pubfigures.has_light_table(self.project)
-        for plot_id in pubfigures.plots_for_layout(layout, type_name, light=light):
+        for plot_id in pubfigures.plots_for_layout(layout, modules, light=light):
             self.plot_combo.addItem(pubfigures.PLOT_TYPES[plot_id]["display"],
                                     plot_id)
         self.style_combo.clear()

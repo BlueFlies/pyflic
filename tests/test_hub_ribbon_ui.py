@@ -22,6 +22,7 @@ matplotlib.use("Agg")
 
 from PyQt6.QtWidgets import QApplication, QCheckBox, QLabel, QMessageBox  # noqa: E402
 
+from pyflic.base import experiment_types as et  # noqa: E402
 from pyflic.base import selections as sel  # noqa: E402
 from pyflic.base.hedonic_experiment import HedonicFeedingExperiment  # noqa: E402
 from pyflic.base.hub import (  # noqa: E402
@@ -190,11 +191,6 @@ def test_subtiles_are_compact_and_route_summaries_to_the_tooltip(hub):
 # layout and the type by class, as the script runner gates the actions.
 
 
-class _NamedType:
-    def __init__(self, name: str) -> None:
-        self.name = name
-
-
 class _MemberBase:
     """Just enough of a loaded member for the refresh paths, on the class a
     member of that layout and type is loaded as."""
@@ -250,7 +246,8 @@ def _member(hub, kind: str = "two_well", *, optogenetic: bool = False,
     """Load a fake member of *kind* (a layout, or a type on two wells)."""
     exp = _FAKES[kind]()
     exp.chamber_layout = "single_well" if kind == "single_well" else "two_well"
-    exp.experiment_type = _NamedType(_TYPE_NAMES[kind]) if kind in _TYPE_NAMES else None
+    ## The shipped type its modules come from (ADR-0019): Custom for a layout.
+    exp.experiment_type = et.get_experiment_type(_TYPE_NAMES.get(kind))
     exp.is_optogenetic = optogenetic
     exp.experiment_dir = str(directory)
     exp.yoked = yoked

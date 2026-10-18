@@ -62,7 +62,7 @@ def check_config(config_path: Path, *, in_project: bool = False
             f"under global: (this makes it a Custom Experiment, which is what "
             f"it always was)",
             rel))
-        exp_type = experiment_types.CustomExperimentType()
+        exp_type = experiment_types.get_experiment_type(None)
     else:
         try:
             exp_type = experiment_types.get_experiment_type(raw_type or None)
@@ -80,7 +80,7 @@ def check_config(config_path: Path, *, in_project: bool = False
 
     # ---- chamber_size on an untyped config -----------------------------
     params = global_cfg.get("params") or global_cfg.get("parameters") or {}
-    if exp_type.is_custom and params.get("chamber_size") is not None:
+    if exp_type.layout_free and params.get("chamber_size") is not None:
         layout = ("single_well" if int(params["chamber_size"]) == 1
                   else "two_well")
         issues.append(MigrationIssue(
@@ -132,7 +132,7 @@ def check_directory(directory: Path, *, in_project: bool = False
 
     configs = sorted(p for p in directory.glob("*.yaml")
                      if p.name not in ("project.yaml", "batch.yaml",
-                                       "plot_specs.yaml"))
+                                       "plot_specs.yaml", "experiment_type.yaml"))
     configs += sorted(directory.glob("*.yml"))
     canonical = directory / "flic_config.yaml"
 
