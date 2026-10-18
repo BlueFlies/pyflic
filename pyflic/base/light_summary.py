@@ -169,19 +169,15 @@ _POOLED = {"MedianActivationSec": "_ActivationSec", "MedianReturnSec": "_ReturnS
 
 def activation_tolerance_ms(exp) -> int:
     """``opto_activation_tolerance_ms`` (decision 7), the tolerance the
-    family columns judge an Activation's length with, from *exp*'s design
-    ``constants:``; :data:`DEFAULT_ACTIVATION_TOLERANCE_MS` when it is not
-    set or not a number.
+    family columns judge an Activation's length with: the light QC's own
+    setting, read from *exp*'s design ``constants:`` as the light QC reads
+    it, so the light table and the rule checks always judge alike.  A value
+    that is missing or not a number gives the default,
+    :data:`DEFAULT_ACTIVATION_TOLERANCE_MS`."""
+    from .opto_qc import OptoQCSettings
 
-    Stream S1 adds the constant to the light QC's ``OptoQCSettings``; once
-    it has, this reads it from there (``exp.opto.settings()``), one line."""
     constants = getattr(exp, "global_constants", None) or {}
-    try:
-        value = float(constants.get("opto_activation_tolerance_ms",
-                                    DEFAULT_ACTIVATION_TOLERANCE_MS))
-    except (TypeError, ValueError):
-        return DEFAULT_ACTIVATION_TOLERANCE_MS
-    return max(0, int(value)) if math.isfinite(value) else DEFAULT_ACTIVATION_TOLERANCE_MS
+    return int(OptoQCSettings.from_constants(constants).activation_tolerance_ms)
 
 
 # ---------------------------------------------------------------------------

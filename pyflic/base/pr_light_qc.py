@@ -419,23 +419,15 @@ def requirement_series_mismatches(ledger_rows: pd.DataFrame, paradigm: Any) -> i
     from ``Program.txt``.  The experiment passes them only on generation 3,
     for a ratio Test Paradigm the program defines.
 
-    ``None`` (not checked) until the check of the optogenetic light QC is
-    merged: it is stream S1's ``rule_checks.requirement_series_mismatches``,
-    and the Progressive Ratio light QC calls it rather than repeating it.
+    The check is the optogenetic light QC's own
+    (:func:`pyflic.base.rule_checks.requirement_series_mismatches`), called
+    rather than repeated: it already forgives a state run whose first Main
+    Activation the rows credit to the old Paradigm (every K of the run one
+    too many).
     """
-    # ------------------------------------------------------------------
-    # >>> REQUIREMENT SERIES WRONG: THE PLACE FOR S1's CALL <<<
-    # When pyflic/base/rule_checks.py is merged, replace the return below
-    # with:
-    #
-    #     from .rule_checks import requirement_series_mismatches as check
-    #     return len(check(ledger_rows, paradigm))
-    #
-    # Nothing else changes: the experiment already builds the ledger rows
-    # (ProgressiveRatioExperiment._test_ledger_rows), judge_group fails the
-    # group on any mismatch (SERIES_WRONG), and light_qc_lines words it.
-    # ------------------------------------------------------------------
-    return None
+    from .rule_checks import requirement_series_mismatches as check
+
+    return len(check(ledger_rows, paradigm))
 
 
 def estimate_increment(series: list[np.ndarray]) -> tuple[float, float, int] | None:

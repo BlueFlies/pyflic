@@ -974,23 +974,29 @@ def test_the_restart_is_named_where_the_breaking_point_is_read(restarted):
 # Requirement series wrong: the place for stream S1's check
 # ---------------------------------------------------------------------------
 
-def test_the_series_check_fails_a_group_and_waits_for_s1(gen3):
+def test_the_series_check_fails_a_group_and_is_the_light_qcs_own(gen3):
+    from dataclasses import replace
+
     e, _results = gen3
     assert lqc.SERIES_WRONG in lqc.FAILING_FLAGS
     failed = _judge(series_mismatches=2)
     assert lqc.SERIES_WRONG in failed.flags and failed.failed
     for quiet in (None, 0):
         assert lqc.SERIES_WRONG not in _judge(series_mismatches=quiet).flags
-    ## The rows S1's check will read: the Test window's Main Activations of
-    ## the Paired Sucrose Well, numbered from 1 and meeting PR10's series.
+    ## The rows the check reads: the Test window's Main Activations of the
+    ## Paired Sucrose Well, numbered from 1 and meeting PR10's series.
     for dfm_id, group in groups_of("healthy"):
         rows = e._test_ledger_rows(dfm_id, group)
         assert len(rows) >= 3 and (rows["Phase"] == "M").all()
         assert rows["K"].tolist() == list(range(1, len(rows) + 1))
         paradigm = e.test_paradigm(dfm_id, group)[1]
         assert rows["RequirementMet"].tolist() == [paradigm.requirement_for(k) for k in rows["K"]]
-        ## Until S1 is merged the check does not run.
-        assert lqc.requirement_series_mismatches(rows, paradigm) is None
+        ## The optogenetic light QC's check, called here: clean on the
+        ## program that ran, and every event but the first wrong against a
+        ## program whose Step differs (the first Requirement is the same).
+        assert lqc.requirement_series_mismatches(rows, paradigm) == 0
+        other = replace(paradigm, step=paradigm.step + 5)
+        assert lqc.requirement_series_mismatches(rows, other) == len(rows) - 1
     assert not e.light_qc_table()["Flags"].str.contains(lqc.SERIES_WRONG).any()
     ## Off generation 3 there are no rows to read.
     assert e._test_ledger_rows(1, 3).empty                  # never-training: no Test
