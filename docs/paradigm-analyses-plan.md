@@ -957,6 +957,40 @@ Where the build departed from the plan, stream by stream.
   (`BRANCH_FIGURE`, `rule_figure`). `rule_sentence` leaves out frequency and
   pulse width.
 
+**S2** (92db0de):
+- **Tolerance.** `activation_tolerance_ms(exp)` read
+  `opto_activation_tolerance_ms` from the design's constants until S1's
+  setting was merged.
+- **Record timing.** Where `Timing` is `record`, `tol` is one record wider,
+  for CutOffs and for "ended by `MaxOnMs`" in Suppressions. This is S1's
+  rule.
+- **Locked-out contact.** "Own Activation not lit", in
+  LockedOutContactSec, means `ActivationMs` from the onset, because the
+  ledger's own periods run on through a partner's light.
+- **Open loop** means the chamber's Role is Open, or its window runs open
+  loop with no fly-driven rule. The rates use the whole window, as
+  `light_phase_summary` does.
+- **A program is required.** Every new column needs generation 3 and a
+  program, as the older type columns do.
+- **Light and dark** counting is shared by `light_phase_summary` and the
+  light table, through `analytics.chamber_light_phases`.
+- **Decision 10 on the `non_feeding` spec**: Suppressions fell from 419 to
+  312, because `MaxOnMs` ends no longer count.
+
+**S4** (9bb928f):
+- **Group resolution.** What the config states wins: `paired_chambers`,
+  then `chamber_groups: single`, then the Linkage. A Linkage of
+  non-adjacent pairs is now read as those pairs, where the old fixed
+  reading paired neighbours.
+- **`chamber_groups` is a per-DFM key only.**
+- **Restart censoring** applies the first-gap rule to the window that
+  ends before the restart. The note goes in `pr_light_qc.csv`'s `Notes`,
+  `summary.txt` and the report. `pr_breaking_point.csv` gains no column.
+- **The type's report introduction** is worded for both pairs and solo
+  groups.
+- **The config editor's Progressive Ratio card** gains a Groups choice:
+  Pairs, Single chambers, or From Program.txt.
+
 **Coordination:**
 - **The checks live in a module of their own**, `rule_checks.py`, so that
   S4 can import the series check.
