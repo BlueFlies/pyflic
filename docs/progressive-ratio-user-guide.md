@@ -6,12 +6,14 @@ to choose them, how to read each figure, and what the statistics do and do
 not let you conclude.
 
 You do not need to read code to use it. For installing and starting pyflic,
-see [Getting Started](GETTING_STARTED.md). For the quality-control checks
-every experiment gets, including the optogenetic light QC, see
-[Checking your data](qc-user-guide.md). The in-app help topic
-*Progressive Ratio experiments* (`pyflic help`) covers the same ground as a
-concise reference. The developer's view is in
-[progressive-ratio-implementation.md](progressive-ratio-implementation.md).
+see [Getting Started](GETTING_STARTED.md); if you installed it that way, type
+the `pyflic …` commands below as `uv run pyflic …`, from the pyflic folder.
+For the quality-control checks every experiment gets, including the
+optogenetic light QC, see [Checking your data](qc-user-guide.md). The in-app
+help topic *Progressive Ratio experiments* (`pyflic help`) covers the same
+ground as a concise reference. Developers will find the retired design
+plan for the assay listed in the documentation index, under
+[Removed plans](README.md#removed-plans).
 
 ---
 
@@ -27,9 +29,9 @@ one light circuit and one treatment.
   or as the program links them. The **yoked** fly, the paired fly's
   partner, is lit at exactly the same moments, whatever it does itself. It
   receives the same light but cannot earn it.
-- In a **design without yoked controls** each group is a single chamber: a
-  paired fly alone, whose light answers to its own feeding only. This is
-  PyMCU's reference design.
+- In a **design without yoked controls** each group is a single chamber, a
+  **solo group**: a paired fly alone, whose light answers to its own feeding
+  only. This is PyMCU's reference design.
 
 The recording has two phases:
 
@@ -96,10 +98,67 @@ pyflic reads the shape of each DFM's file and calls it its **generation**:
   told from a progressive one, and pyflic warns loudly (*firmware 4.0.0
   recording without Program.txt*).
 
-A firmware 4.0.0 program usually runs a ClosedLoop Paradigm first, then the
-ratio Paradigm, or a ratio Paradigm whose `Acclimation` setting gives each
-fly a set number of closed-loop light events first. Either way that opening
-is Training.
+A firmware 4.0.0 program opens with Training in one of two ways: a ratio
+Paradigm whose `Acclimation` setting gives each fly a set number of
+closed-loop light events first, or a ClosedLoop Paradigm run before the
+ratio Paradigm. Either way that opening is Training. The second needs an
+Experiment Type of your own, because the shipped one does not take a
+ClosedLoop interval (below).
+
+### The Experiment Type
+
+Everything this guide describes is the work of pyflic's **Progressive
+Ratio** Analysis Module: the chamber groups, Training and Test, the light QC
+of section 5.2, the paired − yoked difference, the breaking point and
+sucrose persistence. Any Experiment Type that includes the module analyses a
+recording this way. pyflic ships one, `ProgressiveRatio`, listed as
+*Progressive Ratio* in the Experiment Type menus of the Project design
+dialog and the Config Editor. It states:
+
+- **the chamber layout**: two-well, so a config of the type never states
+  `chamber_layout`;
+- **the light it expects**: the two ratio Paradigms, ProgressiveRatio and
+  FixedRatio, with open-loop light (an OpenLoop interval, or wells set `On`)
+  and dark intervals beside them;
+- **the wells**: both must be named, well A the sucrose well;
+- **its Analysis Modules**: Progressive Ratio, and Light and dark, which adds
+  *Feeding in light and dark* to the report's open-loop light (section 6);
+- **its default cutoffs**: those of section 4;
+- **no control comparisons**: its reports lead with the breaking point and,
+  in a paired design, the paired − yoked difference.
+
+**The program is checked against the type.** A `Program.txt` that runs any
+other kind of light, such as a ClosedLoop interval for Training, stops the
+load. The message names the Paradigm type, the DFM and the Program Interval:
+*the Opto Program runs ClosedLoop (DFM 1 interval 1), and experiment_type
+'ProgressiveRatio' expects ProgressiveRatio, FixedRatio, with OpenLoop and
+dark intervals beside them; choose or build a type that expects it*.
+
+**A type of your own.** Build it once in the Experiment Type Editor
+(`pyflic-types`, **Experiment type editor** on the Hub's Tools panel, or
+**New type…** beside the Experiment Type menu). Select *Progressive Ratio*,
+click **New from…**, give the copy a name of your own, change what your
+assay needs, and **Save to library**. For a program that trains under
+ClosedLoop, add ClosedLoop to its light; its Training then includes the
+ClosedLoop interval (section 5.1). A lab type may also name a **control
+comparison** for its reports to lead with:
+
+- a **Treatment control**: one of its factors, such as Genotype. The Design
+  names the control level with `control_level:`, and the reports compare
+  every other level with it;
+- a **Role comparison** of Paired against Yoked, which moves the paired −
+  yoked difference to the front of the reports.
+
+The module needs a two-well layout and ProgressiveRatio or FixedRatio among
+the light the type expects, and a type with it cannot also include the
+Hedonic module, or the Paired and yoked module of other optogenetic types:
+it keeps its own paired − yoked difference. The editor's **Problems** list
+names anything of this kind, and **Save to library** stays off until it is
+empty. Saving a Project design whose type is a
+lab type writes a copy, `experiment_type.yaml`, beside `project.yaml`, so
+the Project analyses the same on a machine without your library. The help
+topics *Experiment types and chamber layouts* and *Experiment Type Editor*
+cover the editor in full.
 
 ### Setting up the experiment
 
@@ -124,7 +183,7 @@ dfms:
   refuses to load a config where they differ.
 
 **Single chambers, with `chamber_groups: single`.** Every chamber is its
-own group, with no yoked control:
+own group, a solo group with no yoked control:
 
 ```yaml
 dfms:
@@ -142,8 +201,8 @@ in `data/`, pyflic reads the groups from the program's linkage:
 
 - a linkage group that lights two chambers is a pair, and the chamber
   holding its trigger well is the paired one;
-- a linkage group that lights one chamber is a group of its own, with no
-  yoked control;
+- a linkage group that lights one chamber is a solo group, with no yoked
+  control;
 - pairs that are not neighbours, such as 1+4 and 2+3, are read as the
   program pairs them.
 
@@ -162,10 +221,14 @@ Whichever you use:
   only, never from `global:`, so DFMs of one recording can differ.
 - **Paired and yoked are roles, not treatments.** Don't create a "paired"
   treatment or design factor; pyflic adds a `Role` column itself.
-- **In the Config Editor**, each DFM tab has a **Groups** choice: *Pairs*,
-  with three pickers for the paired chambers; *Single chambers*; or *From
-  Program.txt*, which writes neither key. A DFM entry that already names
-  neither opens on *From Program.txt*.
+- **In the Config Editor**, under any type with the Progressive Ratio
+  module, each DFM tab has a *Paired chamber per chamber group* card with a
+  **Groups** choice: *Pairs*, with three pickers for the paired chambers;
+  *Single chambers*; or *From Program.txt*, which writes neither key. A DFM
+  entry that already names neither opens on *From Program.txt*.
+- **`chamber_groups: paired`** may be written too. It means the pairs 1+2,
+  3+4 and 5+6, with their paired chambers from `paired_chambers` or, without
+  it, from the program's trigger wells.
 - **Groups are numbered in chamber order**, so on a DFM of single chambers
   group 3 is chamber 3.
 
@@ -188,8 +251,11 @@ design:
       Genotype: [Ctrl, Exp]
 ```
 
-Edit it in the Hub with **Project panel → Project design…**. Its sections
-hold every setting in section 4. **Set the analysis constants here, once.**
+Edit it in the Hub with **Project panel → Project design…**. Its
+**Experiment type** menu chooses *Progressive Ratio* or your own type, with
+**New type…** beside it, and its sections hold every setting in section 4.
+A lab type with a Treatment control adds a **Control level** field there.
+**Set the analysis constants here, once.**
 Every member is then analysed under the same rules, which pooling
 requires.
 
@@ -197,25 +263,61 @@ requires.
 
 ## 3. Running the analysis
 
-For each member (experiment):
+For each member (experiment), load it in the Hub by double-clicking its row
+in the Project panel, then use the **QC**, **Analyze** and **Plots** tiles.
+Each panel lists what its one button writes as checkboxes, in groups, with
+every box ticked to begin with. A **Progressive Ratio** group appears on
+each panel for a member whose type includes the Progressive Ratio module.
 
-1. **Hub → QC → Run QC.** This writes the per-DFM QC bundle and the
-   Progressive Ratio light QC (section 5.2).
-2. **Hub → Analyze → Run analysis.** This writes the summaries and the
-   Progressive Ratio tables below into the member's `analysis/` folder, and
-   the experiment report last (or `pyflic report <member folder>`).
-3. **Hub → Plots → Generate plots.** This draws the figures (section 6) and
-   saves them into `analysis/`.
+1. **Hub → QC → Run QC.** This writes the ticked items of the per-DFM QC
+   bundle into `qc/` (the *QC reports* group and, for an optogenetic
+   recording, the *Optogenetics* group), and those of the Progressive Ratio
+   group into `analysis/`:
+   - *Light QC table*: `pr_light_qc.csv` and `pr_light_events.csv`, the
+     light QC of section 5.2, with every flagged group in the log;
+   - *Licks per light event*: `pr_light_events_dfm<n>.png`;
+   - *Sucrose Well resting level*: `pr_resting_level_dfm<n>.png`.
+2. **Hub → Analyze → Run analysis.** This always writes the core first: the
+   auto-removal (section 5.3), `removed_chambers.csv`, `summary.txt`, and
+   the feeding summaries for the whole recording and per phase
+   (`feeding_summary.csv`, `feeding_summary_facet.csv`). Then, into
+   `analysis/`, each ticked item:
+   - *Binned summary* and *Event statistics*, as for any member, and *Light
+     tables* for an optogenetic recording;
+   - *Paired-Yoked Difference*: `paired_yoked_diff.csv` (section 5.4). The
+     box is greyed when every chamber group is a solo group;
+   - *Cumulative difference table*: `pr_cumulative_diff.csv` (section 5.5);
+   - *Breaking point*: `pr_breaking_point.csv` (section 5.6), with every
+     group's breaking point and its sensitivity to the gap in the log;
+   - *Experiment report (PDF)*: `experiment_report.pdf`, last (or
+     `pyflic report <member folder>`).
 
-Each panel lists its outputs as checkboxes, every one ticked to begin with;
-untick what you do not need, and the choice is saved in the Project's design
-for every member. The Project panel's **Analyze all** runs every member's
-QC, Basic analysis and report in one go, whatever the ticks.
+   The *Paired and yoked comparison* that other optogenetic types offer is
+   not offered here: a type with the Progressive Ratio module keeps its own
+   paired − yoked difference.
+3. **Hub → Plots → Generate plots.** This saves each ticked figure into
+   `analysis/` and opens it in a tab (section 6):
+   - *Feeding summary* and *Well A vs B*, and, for the metric chosen in the
+     *Chosen metric* group, a *Binned time course* and a *Dot plot*, whose
+     points are chamber groups;
+   - *Cumulative difference curve*, *Training-aligned traces*,
+     *Still-responding curve* and *Breaking-point plots*.
+
+Untick what you do not need. The choice is saved at once in the Project's
+design (`project.yaml`, under `design.global.omit`), so it holds for every
+member; a standalone experiment keeps it in its own `flic_config.yaml`. A
+script's `run_qc`, `run_analysis` and `run_plots` steps leave
+out the same. A run states in its log (and Run analysis in `summary.txt`)
+what it left out, and it removes no file: an item you untick keeps whatever
+an earlier run wrote.
+
+The Project panel's **Analyze all** runs every member's QC, Basic analysis
+and report in one go, **whatever the ticks** (below).
 
 For the Project:
 
-4. **Project panel → Build combined analysis.** This stacks every member's
-   tables and runs the pooled statistics (`<project>_Stats.txt`).
+4. **Project panel → Combine.** This stacks every member's tables and runs
+   the pooled statistics (`<project>_Stats.txt`).
 5. **Project panel → Create report**, or `pyflic report <project folder>`.
    This writes the Project Report.
 
@@ -226,13 +328,19 @@ numbers until you do.
 
 **Check each member's data before its results.** Run analysis does not
 write the per-DFM QC bundle (integrity, data breaks, crosstalk and the
-signal plots). **Hub → QC → Run QC** writes it, and **Open QC Viewer**
-shows it. [Checking your data](qc-user-guide.md) explains every check.
+signal plots). **Hub → QC → Run QC** writes it, and **Open QC Viewer**, on
+the QC panel's View card, shows it. [Checking your data](qc-user-guide.md)
+explains every check.
 
 ### What basic analysis does, in order
 
-Basic analysis is what **Analyze all** and a script's `basic_analysis` run;
-the Hub's three buttons write the same outputs between them.
+Basic analysis is what **Analyze all** and a script's `basic_analysis` run.
+It does not read the panels' ticks. Its figures are the cumulative
+difference curve, the still-responding curve and, per DFM, the
+training-aligned traces, licks per light event and Sucrose Well resting
+level. With every box ticked, the Hub's three buttons write everything it
+writes, and more: the binned summary, the event statistics, the
+breaking-point plots and the *Chosen metric* figures.
 
 1. **Training.** It finds each group's training end (section 5.1).
 2. **Quality control and exclusions.** It checks training and light for
@@ -252,10 +360,13 @@ the Hub's three buttons write the same outputs between them.
 
 ## 4. Settings you control
 
-All of these are in the Project's design (**Project design…**), except
-the figure bin size, which is set per plot action. The defaults are chosen
-to be sensible for a typical overnight recording. Change one only for a
-reason you can state.
+All of these are in the Project's design (**Project design…**; for a
+standalone experiment, the Config Editor), except the figure bin size, which
+is set per plot action. The defaults below are the shipped
+`ProgressiveRatio` type's; a type of your own may state others, and both
+editors show the type's default in grey in an empty field. The defaults are
+chosen to be sensible for a typical overnight recording. Change one only for
+a reason you can state.
 
 ### Study design
 
@@ -341,8 +452,8 @@ started late* and *DFM restarted*, which apply to every program.
 [Checking your data](qc-user-guide.md), sections 6 and 7, describes the
 checks these settings drive.
 
-This type owns its phases, so its design never states `facet_cutoffs` or
-`facet_source`.
+A type with the Progressive Ratio module owns its phases, Training and Test,
+so its design never states `facet_cutoffs` or `facet_source`.
 
 ### Breaking point
 
@@ -353,8 +464,9 @@ This type owns its phases, so its design never states `facet_cutoffs` or
 
 **Choosing `pr_break_gap_min`.** The breaking point moves with this value,
 so pyflic always shows every group's breaking point at 60, 120 and 240
-minutes beside your setting (in `summary.txt` and the log of the Analyze
-panel's *Breaking point*). Look at that table **before** you settle on a gap:
+minutes beside your setting (in `summary.txt`, and in the log when Run
+analysis writes the *Breaking point* item). Look at that table **before** you
+settle on a gap:
 
 - If the ranking of treatments is the same at every gap, the result is
   robust.
@@ -381,8 +493,10 @@ will be censored.
 The cumulative-curve actions (*Cumulative difference curve*,
 *Training-aligned traces*) take a **bin size**, default 1 minute. It changes
 only the smoothness of the curve, not any statistic. The Hub always draws
-them, and writes the cumulative difference table, at 1 minute, whatever its
-Bin size box says.
+them, and writes the cumulative difference table, at 1 minute, whatever the
+Analyze panel's **Bin size** box says; that box sets only the binned
+summary, the report's time courses and the Plots panel's *Binned time
+course*.
 
 ---
 
@@ -405,7 +519,8 @@ paired sucrose well.
 well is in **Acclimation**, its opening run of closed-loop light events, and
 `M` (Main) after. The training end is the paired sucrose well's first row in
 `M` under the ratio Paradigm. Everything before it is Training, including a
-ClosedLoop interval that ran before the ratio Paradigm. The group's other
+ClosedLoop interval that ran before the ratio Paradigm (which needs a type
+of your own that expects ClosedLoop, section 2). The group's other
 wells are `Off`, read `M` throughout and say nothing, so there are no
 per-well notes. The notes say instead:
 
@@ -761,13 +876,19 @@ the points are the activations each fly earned before its first long pause.
 **Light behaviour** (reports). One point per paired chamber, by treatment,
 with the treatment comparisons; a yoked fly's light is its partner's, so it
 is left out. On a firmware 4.0.0 recording with `Program.txt` there is one
-subsection per kind of light the program ran, each with its own measures:
+subsection per kind of light the program ran, in this order, each with its
+own measures:
 
+- *open loop*, when the program lit wells whatever their fly did (an
+  OpenLoop interval, or wells set `On`): lit time and the light feeding
+  index, with the *Feeding in light and dark* figure that the Light and dark
+  module adds;
+- *closed loop*, when a ClosedLoop interval ran (under a type of your own
+  that expects it): light events, lit time and the median light event's
+  length;
 - *fixed length, ratio*: light events (Activations), the last Requirement
   met and the firmware's feeding bouts (Firmware Events);
-- *Acclimation (closed loop)*: the minute each fly's Acclimation ended;
-- *closed loop*, when a ClosedLoop interval ran: light events, lit time and
-  the median light event's length.
+- *Acclimation (closed loop)*: the minute each fly's Acclimation ended.
 
 Otherwise one section shows the four measures of before: light events, lit
 time, the firmware's feeding bouts and the end of Acclimation. On an older
@@ -981,6 +1102,10 @@ the same device, or in the same recording, as independent.
 | "no training flag on any well of group *g*" | same as above, or the run never entered training | as above |
 | "no training information: recorded with DFM firmware older than 4.0.0" | PyMCU 4.0.0 recorded a DFM whose firmware was not updated: there is no record of Training | nothing is removed; each group is one `Recording` phase with no breaking point. Update the DFM's firmware for the next recording |
 | "firmware 4.0.0 recording without Program.txt" | the program was not copied into `data/` | copy the `Program.txt` PyMCU exported for this recording and run again; without it a fixed ratio is taken as progressive |
+| Loading fails: "the Opto Program runs ClosedLoop …, and experiment_type 'ProgressiveRatio' expects ProgressiveRatio, FixedRatio" | the program trains under a ClosedLoop interval, which the shipped type does not take (section 2) | build a type of your own from *Progressive Ratio* in the Experiment Type Editor, with ClosedLoop added to its light, and choose it in the Project design |
+| The *Paired-Yoked Difference* box on the Analyze panel is greyed | every chamber group is a solo group, so there is no difference to take | nothing, if the rig had no yoked partners; otherwise state `paired_chambers` or check the program's linkage |
+| The Analyze panel has no *Paired and yoked comparison* | a type with the Progressive Ratio module keeps its own paired − yoked difference instead | use *Paired-Yoked Difference* |
+| The Progressive Ratio groups are missing from the Hub's panels | the member's Experiment Type does not include the Progressive Ratio module | choose *Progressive Ratio*, or a type of your own with the module, in the Project design |
 | "paired Sucrose Well W*n* never reached Phase M under a ratio Paradigm" | the fly never finished Acclimation, or the ratio Paradigm never ran | check the Program timeline; the group is removed like any group that never finished training |
 | "Training was empty" | the ratio Paradigm had no Acclimation and nothing ran before it | nothing: Training ended at the start, and every light event is Test |
 | "Paradigm restarted at Program Interval *k*" | a later interval named a different Paradigm, so the firmware started the well afresh | check the program was the one you meant; only the first ratio run is the Test |
