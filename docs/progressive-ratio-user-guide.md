@@ -17,14 +17,19 @@ concise reference. The developer's view is in
 
 ## 1. The assay in one page
 
-Each DFM's six chambers form three **chamber groups**: chambers 1+2, 3+4 and
-5+6. The two chambers of a group share one light circuit and one treatment.
+A DFM's six chambers form **chamber groups**. The chambers of a group share
+one light circuit and one treatment.
 
 - The **paired** fly controls the light. When it feeds at the **sucrose
   well** (always well A), the light comes on, typically driving
   optogenetic stimulation.
-- The **yoked** fly, its partner, is lit at exactly the same moments,
-  whatever it does itself. It receives the same light but cannot earn it.
+- In a **paired design** each group is a pair: chambers 1+2, 3+4 and 5+6,
+  or as the program links them. The **yoked** fly, the paired fly's
+  partner, is lit at exactly the same moments, whatever it does itself. It
+  receives the same light but cannot earn it.
+- In a **design without yoked controls** each group is a single chamber: a
+  paired fly alone, whose light answers to its own feeding only. This is
+  PyMCU's reference design.
 
 The recording has two phases:
 
@@ -39,17 +44,19 @@ The recording has two phases:
 
 The analysis asks three questions:
 
-| Question | Main measure |
-|---|---|
-| Does the paired fly feed differently from a fly that got the same light for free? | the **paired − yoked difference**, within each group |
-| How far did the paired fly keep working as the requirement rose? | the **breaking point** |
-| How long did each fly keep feeding at the sucrose well? | **sucrose persistence**, for both flies |
+- **How far did the paired fly keep working as the requirement rose?** The
+  **breaking point**.
+- **How long did each fly keep feeding at the sucrose well?** **Sucrose
+  persistence**, for every fly.
+- **Does the paired fly feed differently from a fly that got the same
+  light for free?** The **paired − yoked difference**, within each pair.
+  Only a paired design can ask this one.
 
 Two rules run through everything:
 
-- **Differences are always taken within a chamber group, never between
-  group means.** The yoked fly is the paired fly's own control: same
-  device, same light, same moments.
+- **Differences are always taken within a pair, never between group
+  means.** The yoked fly is the paired fly's own control: same device,
+  same light, same moments.
 - **Time runs from each group's training end**, not from the start of the
   recording.
 
@@ -82,9 +89,9 @@ pyflic reads the shape of each DFM's file and calls it its **generation**:
   files. pyflic reads both the PyMCU 4.0.0 export and the older one. It
   tells pyflic each well's threshold, the linkage and the light's rule — its
   **Paradigm**: ProgressiveRatio or FixedRatio, with its settings — which
-  the light QC needs to judge the light properly, and it can name the paired
-  chambers for you. Without it the analysis still runs, with a more limited
-  light QC. **On generation 3 it is all but required:** the data name each
+  the light QC needs to judge the light properly, and its linkage can give
+  the chamber groups for you. Without it the analysis still runs, with a
+  more limited light QC. **On generation 3 it is all but required:** the data name each
   Paradigm but not its type, so without the file a fixed ratio cannot be
   told from a progressive one, and pyflic warns loudly (*firmware 4.0.0
   recording without Program.txt*).
@@ -96,29 +103,71 @@ is Training.
 
 ### Setting up the experiment
 
-For each DFM, the config states which chamber of each group is paired, and
-which side of the chamber well A (sucrose) is on:
+For each DFM, the config states which side of the chamber well A (sucrose)
+is on, and how the chambers form groups. There are three ways to say the
+second.
+
+**Pairs, with `paired_chambers`.** Name the paired chamber of each pair
+1+2, 3+4 and 5+6:
 
 ```yaml
 dfms:
   1:
     params: {pi_direction: left}      # which side well A (sucrose) is on
-    paired_chambers: [1, 4, 5]        # exactly one chamber from each group
+    paired_chambers: [1, 4, 5]        # exactly one chamber from each pair
     chambers: {1: Ctrl, 2: Ctrl, 3: Exp, 4: Exp, 5: Exp, 6: Exp}
 ```
 
 - **`paired_chambers`** must name exactly one chamber from each of 1–2,
   3–4 and 5–6. The yoked chamber is the other one and is never written.
-- **Both chambers of a group must carry the same treatment.** pyflic
+- **Both chambers of a pair must carry the same treatment.** pyflic
   refuses to load a config where they differ.
+
+**Single chambers, with `chamber_groups: single`.** Every chamber is its
+own group, with no yoked control:
+
+```yaml
+dfms:
+  1:
+    params: {pi_direction: left}
+    chamber_groups: single            # six groups of one chamber each
+    chambers: {1: Ctrl, 2: Exp, 3: Ctrl, 4: Exp, 5: Ctrl, 6: Exp}
+```
+
+Each chamber can have its own treatment. `chamber_groups: single` and
+`paired_chambers` cannot both be stated.
+
+**From `Program.txt`, by stating neither.** With the MCU's `Program.txt`
+in `data/`, pyflic reads the groups from the program's linkage:
+
+- a linkage group that lights two chambers is a pair, and the chamber
+  holding its trigger well is the paired one;
+- a linkage group that lights one chamber is a group of its own, with no
+  yoked control;
+- pairs that are not neighbours, such as 1+4 and 2+3, are read as the
+  program pairs them.
+
+If the linkage makes no sensible groups (one light circuit over three
+chambers, say), pyflic tries the pairs 1+2, 3+4 and 5+6 with the program's
+trigger wells. Without `Program.txt`, or when that fails too, the DFM does
+not load and asks for `paired_chambers` (or `chamber_groups: single`).
+
+Whichever you use:
+
+- **What the config states wins.** If you give `paired_chambers` or
+  `chamber_groups` and the program disagrees, `summary.txt` says so. A
+  trigger well that is well B is flagged too, because the sucrose well is
+  always well A.
+- **`chamber_groups` belongs to a DFM.** It is read from a DFM's entry
+  only, never from `global:`, so DFMs of one recording can differ.
 - **Paired and yoked are roles, not treatments.** Don't create a "paired"
   treatment or design factor; pyflic adds a `Role` column itself.
-- In the **Config Editor**, the paired chambers are three pickers on each
-  DFM tab.
-- **With `Program.txt` in `data/`, `paired_chambers` may be left out.** In
-  each group the chamber holding the program's trigger well is the paired
-  one. If you give both and they disagree, your config wins and
-  `summary.txt` says so; a trigger well that is well B is flagged too.
+- **In the Config Editor**, each DFM tab has a **Groups** choice: *Pairs*,
+  with three pickers for the paired chambers; *Single chambers*; or *From
+  Program.txt*, which writes neither key. A DFM entry that already names
+  neither opens on *From Program.txt*.
+- **Groups are numbered in chamber order**, so on a DFM of single chambers
+  group 3 is chamber 3.
 
 ### Setting up the Project
 
@@ -182,9 +231,9 @@ shows it. [Checking your data](qc-user-guide.md) explains every check.
 3. **Feeding summaries.** It computes the standard two-well metrics (licks,
    events, durations, preference index) per chamber, for the whole
    recording and separately for the Training and Test phases.
-4. **Paired − yoked difference.** One row per chamber group per phase
-   (section 5.4).
-5. **Cumulative difference curve** (section 5.5).
+4. **Paired − yoked difference.** One row per pair per phase (section 5.4).
+   A design without yoked controls has none.
+5. **Cumulative difference curve** (section 5.5), over the pairs.
 6. **Breaking point** and **sucrose persistence** (sections 5.6 and 5.7).
 7. **Figures** and the text summary (`summary.txt`).
 
@@ -201,9 +250,10 @@ reason you can state.
 
 | Setting | What it does | Choosing it |
 |---|---|---|
-| `paired_chambers` (per DFM) | which chamber of each group controls the light | from your rig setup; must match what the firmware did |
+| `paired_chambers` (per DFM) | which chamber of each pair controls the light | from your rig setup; must match what the firmware did. Leave it out for single chambers or when `Program.txt` gives the groups |
+| `chamber_groups` (per DFM) | `single`: every chamber its own group, with no yoked control; `paired` (the default): pairs | from your rig setup; leave it out when `Program.txt` gives the groups |
 | `pi_direction` (per DFM) | which side well A, the sucrose well, is on | from your rig setup; may differ between DFMs |
-| treatments (`chambers:`) | what each group received | the same for both chambers of a group |
+| treatments (`chambers:`) | what each group received | the same for both chambers of a pair |
 | `experimental_design_factors` | factors such as genotype and drug, crossed | the first factor is the x axis of the dot plots |
 | `well_names` | labels for wells A and B in plots and reports | well A must be the sucrose well |
 | `transform_licks` | transforms lick counts in the summary tables | the cumulative curves always use raw counts regardless |
@@ -224,8 +274,8 @@ them for the whole Project, never for one member.
 | `min_untransformed_licks_cutoff` | 20 | removes a chamber whose sucrose or yeast well has fewer licks than this over the whole recording, counted before any transform |
 | `max_med_duration_cutoff` | 13.0 | removes a chamber whose median feeding-event duration at either well is above this (a sign of a stuck or bleeding signal) |
 | `max_events_cutoff` | 150000 | removes a chamber with an implausible number of events at either well |
-| `require_training_complete` | true | removes **both** chambers of a group whose paired fly never finished training; a generation-2 group, which has no training information, is kept |
-| `exclude_failed_pr_groups` | true | removes **both** chambers of a group that fails the light QC |
+| `require_training_complete` | true | removes **every** chamber of a group (both of a pair, the one of a single chamber) whose paired fly never finished training; a generation-2 group, which has no training information, is kept |
+| `exclude_failed_pr_groups` | true | removes **every** chamber of a group that fails the light QC |
 
 The optogenetic light QC has its own switch, `exclude_failed_opto_chambers`,
 in the optogenetic table below. It is off by default.
@@ -261,10 +311,24 @@ section 5.2. Its settings, with their defaults:
 | `opto_lost_records_warn` | 25 | firmware 4.0.0: more records lost than this is a warning for the DFM |
 | `opto_unknown_rows_warn_fraction` | 0.01 | firmware 4.0.0: more than this share of rows under an instruction outside the program is a warning for the DFM |
 | `opto_late_records_warn` | 10 | firmware 4.0.0: more late records than this is a warning for the DFM |
+| `opto_activation_tolerance_ms` | 25 | firmware 4.0.0: how far an Activation's light may differ from its Paradigm's setting and still keep the rule |
+| `opto_activation_length_fail_fraction` | 0.05 | firmware 4.0.0: more than this share of a group's judged Activations lasting the wrong time (*wrong activation length*, *short activations*) fails it |
+| `opto_lockout_fail_fraction` | 0.02 | firmware 4.0.0, FixedInterval: more than this share of Activations started inside the lockout fails the group |
+| `opto_missed_contact_warn_fraction` | 0.25 | firmware 4.0.0, FixedInterval: contact that should have lit the light and did not, above this share, is a warning |
+| `opto_non_feeding_lit_warn_fraction` | 0.10 | firmware 4.0.0, NonFeeding: lit through more than this share of the feeding is a warning |
+| `opto_non_feeding_min_sec` | 30 | firmware 4.0.0, NonFeeding: seconds of that light needed before it is judged |
+| `opto_non_feeding_dark_warn_fraction` | 0.10 | firmware 4.0.0, NonFeeding: dark for more than this share of the time the rule says lit is a warning |
+| `opto_interval_lag_warn_sec` | 5 | firmware 4.0.0: a Program Interval starting more than this many seconds late is a warning for the DFM |
 
-The last five apply only to firmware 4.0.0 recordings, and their defaults
-have no real recording behind them yet. [Checking your data](qc-user-guide.md),
-section 6, describes the checks these settings drive.
+The last thirteen apply only to firmware 4.0.0 recordings. Their defaults
+were set on simulated recordings and will be revisited once there are
+bench recordings of each Paradigm type. Of the checks of each Paradigm's
+own rule, those that apply to a ratio program are *wrong activation length*
+and *requirement series wrong* for the ratio Paradigm, *short activations*
+for its Acclimation or a ClosedLoop interval before it, and *interval
+started late* and *DFM restarted*, which apply to every program.
+[Checking your data](qc-user-guide.md), sections 6 and 7, describes the
+checks these settings drive.
 
 This type owns its phases, so its design never states `facet_cutoffs` or
 `facet_source`.
@@ -292,7 +356,8 @@ pause ends a count like any other.
 
 **Choosing `pr_test_window_min`.** Each group is watched from its own
 training end to the end of the recording — on firmware 4.0.0, to the end of
-the ratio Paradigm's run — so a group that trained late gets less Test time
+the ratio Paradigm's run, or to a DFM restart inside it (section 5.6) — so
+a group that trained late gets less Test time
 and is more likely to be censored (section 5.6). The
 `TestMinutes` column of `pr_breaking_point.csv` shows each group's window.
 If those windows differ a lot, set `pr_test_window_min` to a value no longer
@@ -316,8 +381,9 @@ Where a group's **training end** comes from depends on the recording's
 generation (section 2).
 
 **Generation 1.** The training end is the last minute its paired fly's
-sucrose well carries the firmware's training flag. The other three wells of
-the group normally clear at the same moment. If they don't, the difference
+sucrose well carries the firmware's training flag. The group's other wells
+(three in a pair, one in a single chamber) normally clear at the same
+moment. If they don't, the difference
 appears as a *training-flag note* in `summary.txt` and the report. These
 notes are QC information, not errors: the analysis always follows the
 paired sucrose well.
@@ -326,7 +392,7 @@ paired sucrose well.
 well is in **Acclimation**, its opening run of closed-loop light events, and
 `M` (Main) after. The training end is the paired sucrose well's first row in
 `M` under the ratio Paradigm. Everything before it is Training, including a
-ClosedLoop interval that ran before the ratio Paradigm. The other three
+ClosedLoop interval that ran before the ratio Paradigm. The group's other
 wells are `Off`, read `M` throughout and say nothing, so there are no
 per-well notes. The notes say instead:
 
@@ -338,7 +404,8 @@ per-well notes. The notes say instead:
   reached `M` under one;
 - *Paradigm restarted at Program Interval k*, when the well went back into
   Acclimation later. The firmware starts a well afresh whenever the Paradigm
-  changes name.
+  changes name, and after the DFM itself restarts; the note then adds
+  *after the DFM restarted at minute m* (section 5.6).
 
 **Generation 2** records no Training at all. Nothing is removed for it:
 each group becomes one phase, `Recording`, with no Test, so no breaking
@@ -349,8 +416,8 @@ text all say *no training information: recorded with DFM firmware older than
 4.0.0*.
 
 A group whose paired fly **never finished training** has no Test phase. It
-appears as `TrainingComplete = false`, and by default both its chambers are
-removed.
+appears as `TrainingComplete = false`, and by default every chamber of the
+group is removed.
 
 **Where to look:** the report's *Progressive ratio: training* table (one row
 per group, with its training end) and the training notes beneath it. On a
@@ -378,7 +445,8 @@ exact to the record.
 |---|---|---|
 | **Self-triggered light** | 5 (`pr_lick_free_run`) or more Test light events in a row with no sucrose lick since the previous one | **fails** the group |
 | **Implausible training** | training "completed", with light events, but without a single sucrose lick | **fails** the group |
-| **No increasing trend** | licks per light event don't rise across the Test phase, as a working progressive ratio should | warning |
+| **Requirement series wrong** (firmware 4.0.0) | a Test light event met a Requirement that the Test Paradigm's series in `Program.txt` does not give | **fails** the group |
+| **No increasing trend** | licks per light event don't rise across the Test phase, as a working progressive ratio should; not judged under a fixed ratio | warning |
 | **Resting level rise** | the sucrose well's resting signal rose during the recording | warning |
 | **Resting level elevated** | the sucrose well rests well above the DFM's other sucrose wells | warning |
 
@@ -427,6 +495,21 @@ licks did not follow: check detection*. The fly worked to the schedule, and
 pyflic's detection missed some of it. Under a fixed ratio the requirement
 never rises, so no trend is judged at all.
 
+**The requirement series, on firmware 4.0.0.** The firmware records the
+Requirement each light event met, and it keeps its program's series
+exactly: under a progressive ratio each Requirement is the next one the
+series gives, under a fixed ratio each is the `Ratio`. pyflic checks every
+Test light event of the paired sucrose well against the Test Paradigm's
+series in `Program.txt`, with the same check the general light QC uses. One
+that differs fails the group as *requirement series wrong*. It cannot
+happen on a working system with the right program, so the likely cause is
+that `Program.txt` is not the program that ran: check that it is the one
+exported with this recording. One case the data cannot settle is forgiven:
+a light event counted in the very record the ratio Paradigm began may
+belong to the Paradigm before it, so a run whose Requirements match the
+series from the next event on is not a mismatch. The check needs
+`Program.txt`, because the series is written only there.
+
 **The general optogenetic light QC runs beside this one.** It asks a
 simpler question of every linkage group — here, every chamber group — from
 lit *time* rather than light events: how much of the light had no lick or
@@ -437,17 +520,24 @@ disagree. On the first real dataset, a group lit for four hours during
 training passes this check, because one long light event is not a run of
 lick-free events, and fails the general one, because 93% of those four
 hours had no lick. On a firmware 4.0.0 recording the general check also
-confirms the yoking: the yoked chamber's wells must count no light events of
-their own and get exactly the paired well's light, or the group fails for
-*broken yoking*. A group the general check fails is flagged, not removed,
+confirms the yoking, in a pair: the yoked chamber's wells must count no
+light events of their own and get exactly the paired well's light, or the
+group fails for *broken yoking*. It checks each Paradigm against its own
+rule as well, one light event at a time: each light event under the ratio
+Paradigm after Acclimation must last its `ActivationMs` (*wrong activation
+length*) and meet
+the series (*requirement series wrong*), and each Acclimation light event
+must stay lit for at least its Hold (*short activations*). These fail a
+group, because the firmware keeps its rules exactly. A group the general
+check fails is flagged, not removed,
 unless you switch on `exclude_failed_opto_chambers`. Its results are in
 `qc/opto/`, an *Optogenetic light QC* section of `summary.txt` and of the
 report, and the **Light explained by licks (QC)** figure. The QC Viewer's
 **Opto Light QC** tab shows the same verdicts group by group, says why each
 group got its own, recomputes them when you change a detection parameter,
 and can tick a failed group's chambers for exclusion. Every check it makes,
-and how to read its figure, is in [Checking your data](qc-user-guide.md),
-section 6.
+and how to read its figures, is in [Checking your data](qc-user-guide.md),
+sections 6 and 7.
 
 ### 5.3 Exclusions
 
@@ -457,25 +547,27 @@ Chambers leave the analysis for three kinds of reason:
 - **A chamber-level cutoff:** too few licks, an implausible duration or an
   implausible event count. Only that chamber is removed.
 - **A group-level failure:** training never completed, or the light QC
-  failed. Both chambers are removed.
+  failed. Every chamber of the group is removed: both of a pair, the one
+  of a single chamber.
 
 A linkage group that fails the optogenetic light QC is flagged, not
 removed, unless you switch on `exclude_failed_opto_chambers`. Here a
-linkage group is a chamber group, so its failure would remove both
-chambers too.
+linkage group is a chamber group, so its failure would remove every
+chamber of the group too.
 
 Every automatic removal and its reason is written to `removed_chambers.csv`
 and listed in `summary.txt`. The Project gathers them all into
 `<project>_Excluded.csv`.
 
-A group needs **both** of its chambers for anything that compares paired
+A pair needs **both** of its chambers for anything that compares paired
 with yoked. If one chamber is removed, its partner still appears in the
-per-chamber tables, but the whole group drops out of the difference table,
-the difference curve and the breaking point.
+per-chamber tables, but the whole pair drops out of the difference table,
+the difference curve and the breaking point. A single-chamber group drops
+out when its one chamber is removed.
 
 ### 5.4 The paired − yoked difference
 
-For each group and each phase (Training, Test), pyflic subtracts the yoked
+For each pair and each phase (Training, Test), pyflic subtracts the yoked
 fly's value from the paired fly's, for each metric:
 
 | Column | Paired − yoked … |
@@ -488,16 +580,27 @@ fly's value from the paired fly's, for each metric:
 
 Positive means the paired fly did more. **Zero is the null hypothesis:** the
 contingency made no difference beyond the light itself. The file is
-`paired_yoked_diff.csv`, one row per group per phase. The reports use the
+`paired_yoked_diff.csv`, one row per pair per phase. The reports use the
 **Test** phase, where the requirement is rising.
+
+**Without yoked controls there is no difference to take.** A
+single-chamber group has no row, so a design made only of them writes
+`paired_yoked_diff.csv` with its header and nothing else. The report says
+once, where the difference would have been, that *the design has no yoked
+controls*, and goes on to the breaking point; the Project Report says the
+same, and the Project's Stats text reads *Paired − yoked difference: none;
+the design has no yoked controls*. When a recording mixes pairs and single
+chambers, the comparison uses the pairs, and the report names the
+single-chamber groups it left out.
 
 ### 5.5 The cumulative difference curve
 
-This is the difference as it builds up over time: for each group, paired
+This is the difference as it builds up over time: for each pair, paired
 minus yoked cumulative sucrose licks, minute by minute from training end.
-Per treatment, pyflic draws the mean ± SEM across groups, over the span of
-time that **every** group covers, so the curve never jumps when one group's
-recording ends. The individual groups are drawn faintly behind it.
+Per treatment, pyflic draws the mean ± SEM across pairs, over the span of
+time that **every** pair covers, so the curve never jumps when one pair's
+recording ends. The individual pairs are drawn faintly behind it. A design
+without yoked controls has no curve.
 
 ### 5.6 The breaking point
 
@@ -524,7 +627,8 @@ before that pause: the last ratio it met. Some details:
   plot draws it as an open symbol, and the still-responding curve marks it
   with a tick.
 - **The yoked fly has no breaking point.** Its light is its partner's, so
-  there is nothing for it to have worked for.
+  there is nothing for it to have worked for. A single chamber's paired
+  fly has one, like any paired fly.
 - **The unit is light events, not licks.** Before firmware 4.0.0 the
   firmware's schedule isn't recorded in the data, and `LargestRequirement`,
   the most licks credited to one counted event, is given as a description
@@ -551,13 +655,39 @@ same number of feeding bouts. The same rule runs, and what it counts is the
 activations the fly earned before its first long pause. `BreakRequirement` is
 the constant ratio, no trend is judged, and the reports title the section
 **Fixed ratio: activations earned** (the Project Report when every pooled
-group ran a fixed ratio).
+group ran a fixed ratio). What only a rising requirement explains is left
+out for a fixed-ratio group: the estimated requirement increment in
+`summary.txt`, the grey estimated-requirement line on *Licks per light
+event* and that figure's line "a working progressive ratio climbs". A
+recording that runs both shows them for its progressive groups only.
 
 **The end of the Test window.** On a firmware 4.0.0 recording the Test ends
 where the ratio Paradigm's run ends, not at the end of the recording. A
 ClosedLoop interval after it is not Test. Only the first ratio run is the
 Test: a later one is noted in `summary.txt`. `pr_test_window_min` caps the
 window after that, and `TestMinutes` is each group's.
+
+**A DFM that restarts ends the Test window.** A DFM can restart on its own
+in the middle of a recording, from a brief loss of power for example: a
+few seconds of records are lost, a few rows run under no instruction, and
+then the firmware starts every well's Paradigm afresh, the ratio from its
+first Requirement. What follows is no longer the same Test. So when a DFM
+restarts inside a group's Test window:
+
+- the window ends at the last row before the restart, and the breaking
+  point is judged up to there;
+- a fly still responding at the restart is **censored** (`n+`), because it
+  might have gone on;
+- `TestMinutes` is the shortened window, and sucrose persistence is
+  judged over it too;
+- the group's light QC `Notes`, `summary.txt` beside the breaking point and
+  the report under the breaking point all say *the DFM restarted at minute
+  m, d min after training end: the Test window ends at the restart,
+  because the ratio starts again after it, so a breaking point still
+  running there is censored*.
+
+`pr_breaking_point.csv` gains no column for it. The integrity report and
+the general light QC (*DFM restarted*) name every restart too.
 
 The file is `pr_breaking_point.csv`, one row per group, with `BreakingPoint`,
 `BreakMin`, `Censored`, `TestMinutes`, `LargestRequirement`,
@@ -570,13 +700,13 @@ up the breaking point; on firmware 4.0.0 each event also carries the
 
 ### 5.7 Sucrose persistence
 
-The same rule applied to feeding, for **both** flies: the minutes from
-training end to the fly's last sucrose feeding event before a pause longer
-than `pr_break_gap_min`. It is censored the same way when the fly was still
-feeding at the end of the window.
+The same rule applied to feeding, for **every** fly, paired or yoked: the
+minutes from training end to the fly's last sucrose feeding event before a
+pause longer than `pr_break_gap_min`. It is censored the same way when the
+fly was still feeding at the end of the window.
 
-Because the yoked fly has it too, it has a paired − yoked difference,
-`dPersistA`. `dPersistCensored` marks differences where either fly was
+Because the yoked fly of a pair has it too, it has a paired − yoked
+difference, `dPersistA`. `dPersistCensored` marks differences where either fly was
 censored. Those differences are kept and flagged, not dropped, because in a
 recording that ends during a feeding peak, dropping them would remove most
 groups.
@@ -591,22 +721,23 @@ table.
 
 ### Results figures
 
-**Cumulative difference curve** (`pr_cumulative_diff.png`). The line is each
-treatment's mean paired − yoked cumulative sucrose licks since training
-end, with the shaded band its SEM, over the time every group covers. The
-faint lines are individual groups, and the dashed line is zero.
+**Cumulative difference curve** (`pr_cumulative_diff.png`; paired designs
+only). The line is each treatment's mean paired − yoked cumulative sucrose
+licks since training end, with the shaded band its SEM, over the time every
+pair covers. The faint lines are individual pairs, and the dashed line is
+zero. Without yoked controls the figure is empty and its title says why.
 
 - A line climbing above zero means the paired flies worked for the light
   more than their yoked partners fed.
 - A line that flattens shows when the difference stopped growing.
 - A flat line near zero means no operant effect.
-- Check the faint lines: one extreme group can carry a mean.
+- Check the faint lines: one extreme pair can carry a mean.
 
-**Paired − yoked dot plots** (reports). One point per chamber group, for
-Test-phase `dLicksA`, `dPI` and, when present, `dPersistA`, with the
-treatment mean ± SEM and a line at zero. Points mostly above zero support a
-paired > yoked effect. Compare how far the treatments sit from zero, not
-only from each other.
+**Paired − yoked dot plots** (reports; paired designs only). One point per
+pair, for Test-phase `dLicksA`, `dPI` and, when present, `dPersistA`, with
+the treatment mean ± SEM and a line at zero. Points mostly above zero
+support a paired > yoked effect. Compare how far the treatments sit from
+zero, not only from each other.
 
 **Breaking point by treatment** (reports). One point per group, with mean ±
 SEM. **Open symbols are censored**: the true value is at least that high.
@@ -614,11 +745,20 @@ If one treatment has many open symbols, its mean understates it. Under a
 fixed ratio the section is titled *Fixed ratio: activations earned*, and
 the points are the activations each fly earned before its first long pause.
 
-**Light behaviour** (reports). One point per paired chamber for each of the
-light table's headline measures — light events (Activations), lit time,
-the firmware's feeding bouts and the end of Acclimation — by treatment,
-with the treatment comparisons. On an older recording only lit time is
-there.
+**Light behaviour** (reports). One point per paired chamber, by treatment,
+with the treatment comparisons; a yoked fly's light is its partner's, so it
+is left out. On a firmware 4.0.0 recording with `Program.txt` there is one
+subsection per kind of light the program ran, each with its own measures:
+
+- *fixed length, ratio*: light events (Activations), the last Requirement
+  met and the firmware's feeding bouts (Firmware Events);
+- *Acclimation (closed loop)*: the minute each fly's Acclimation ended;
+- *closed loop*, when a ClosedLoop interval ran: light events, lit time and
+  the median light event's length.
+
+Otherwise one section shows the four measures of before: light events, lit
+time, the firmware's feeding bouts and the end of Acclimation. On an older
+recording only lit time is there.
 
 **Still-responding curve** (`pr_still_responding.png`). For each treatment,
 the fraction of paired flies that reached each ratio: 1.0 at ratio 0,
@@ -632,8 +772,8 @@ responding when their window ended. The legend gives each treatment's *n*.
 
 **Breaking-point plots** (`breaking_point_dfm<id>.png`, from the Hub's
 **Breaking-point plots** button and in the experiment report). One panel per
-chamber, both roles, showing the licks between successive light onsets over
-time since training end.
+chamber, both roles of a pair, showing the licks between successive light
+onsets over time since training end.
 
 - Blue points are the events the breaking point counts.
 - Grey points came after the break, or after the Test window.
@@ -645,6 +785,9 @@ time since training end.
 
 ### Quality-control figures
 
+The per-DFM QC figures below have one panel per group, three to a row, so
+a DFM of six single chambers takes two rows.
+
 **Licks per light event** (`pr_light_events_dfm<id>.png`). For each group,
 the sucrose licks credited to each Test light event, in order.
 
@@ -653,6 +796,8 @@ the sucrose licks credited to each Test light event, in order.
   self-triggered light.
 - The dashed line is the group's own trend. The grey line is the
   requirement pyflic estimates across the experiment, for reference.
+- Under a fixed ratio the requirement does not climb, so there is no grey
+  line, and the caption does not ask for a climb.
 
 **Sucrose Well resting level** (`pr_resting_level_dfm<id>.png`). For each
 group, the paired sucrose well's resting signal over the whole recording,
@@ -665,10 +810,11 @@ bottom shows light onsets, and the dashed line is training end.
   failure.
 
 **Training-aligned traces** (`pr_cumulative_licks_dfm<id>.png`). Paired and
-yoked cumulative sucrose licks since each group's training end. Points mark
-minutes with the light on; black rings mark lick-free light events on the
-paired trace. Use it to see whether the light kept firing while the paired
-trace went flat. That pattern is self-triggering.
+yoked cumulative sucrose licks since each group's training end; a single
+chamber has the paired trace only. Points mark minutes with the light on;
+black rings mark lick-free light events on the paired trace. Use it to see
+whether the light kept firing while the paired trace went flat. That
+pattern is self-triggering.
 
 Every QC figure's panel title gives the group's treatment and its light QC
 result: *light QC ok*, *warning: …*, or *EXCLUDED: …*.
@@ -695,14 +841,16 @@ switched on with no lick or touch at their onset.
 program it ran — a band of intervals coloured by Paradigm, such as the
 ClosedLoop opening and then `PR10` — above one lane per well. Each paired
 sucrose well's lane shows its Acclimation shaded, its light events as ticks
-and its light as a blue strip; its yoked partner's lane should show the same
-strip and no ticks.
+and its light as a blue strip; in a pair, its yoked partner's lane should
+show the same strip and no ticks.
 
 - The shading should end in the first interval: that is the training end.
   A well shaded to the end never finished training.
 - Ticks thin out as the requirement rises. A dense comb of ticks while the
   paired fly's licks are flat is self-triggered light.
 - A yoked lane with ticks, or a different strip, is broken yoking.
+- On a firmware 4.0.0 recording a red band labelled *restart* marks a DFM
+  restart. A Test window that holds one ends there (section 5.6).
 - [Checking your data](qc-user-guide.md), section 6.8, covers the rest.
 
 ---
@@ -714,14 +862,15 @@ strip and no ticks.
 **One observation per chamber group.** Paired and yoked flies are never
 entered as separate observations in the main tests. The yoked fly is the
 paired fly's control, and pooling them would average an effect with its own
-control.
+control. In a design without yoked controls each group is one fly, and the
+breaking point is the main result.
 
 ### The tests
 
 | Question | Test | Where |
 |---|---|---|
-| **Is the paired fly different from its yoked partner?** | Each treatment's Test-phase differences against zero: the paired t-test (a one-sample t-test on the differences), with the Wilcoxon signed-rank test beside it; in a Project, also a mixed model's intercept | both reports; `<project>_Stats.txt` |
-| **Do treatments differ in the paired − yoked difference?** | Welch's t-test for two treatments, Tukey HSD for three or more; in a Project, also a mixed model | both reports; `<project>_Stats.txt` |
+| **Is the paired fly different from its yoked partner?** (pairs only) | Each treatment's Test-phase differences against zero: the paired t-test (a one-sample t-test on the differences), with the Wilcoxon signed-rank test beside it; in a Project, also a mixed model's intercept | both reports; `<project>_Stats.txt` |
+| **Do treatments differ in the paired − yoked difference?** (pairs only) | Welch's t-test for two treatments, Tukey HSD for three or more; in a Project, also a mixed model | both reports; `<project>_Stats.txt` |
 | **Do treatments differ in breaking point?** | The same tests on `BreakingPoint`, plus a pairwise **log-rank test** on the ratio reached | both reports; `<project>_Stats.txt` |
 | **What fraction of flies reached each ratio?** | Kaplan-Meier estimate (the still-responding curve) | both reports; `pr_still_responding.png` |
 
@@ -740,8 +889,10 @@ the same device, or in the same recording, as independent.
   in the Test phase) supports the light acting as a reinforcer. The paired
   fly fed more when feeding produced the light than a fly given the same
   light regardless. The yoked design controls for the light's direct
-  effects on feeding, but only when both flies of a group were treated
-  identically in every other way.
+  effects on feeding, but only when both flies of a pair were treated
+  identically in every other way. A design without yoked controls cannot
+  separate the two: it measures how hard the flies worked, not whether the
+  contingency itself mattered.
 - **A higher breaking point** means the paired flies kept working to
   higher requirements, a measure of how much effort the light was worth.
   There is no yoked comparison for it. Compare treatments with each other,
@@ -762,11 +913,12 @@ the same device, or in the same recording, as independent.
 2. **The gap setting.** Check the sensitivity table (60 / 120 / 240
    minutes). A conclusion that holds at only one gap is weak and should be
    reported as such.
-3. **Unequal Test windows.** Groups that trained late had less Test time.
-   If `TestMinutes` varies widely, set `pr_test_window_min` so every group
-   is judged over the same span.
+3. **Unequal Test windows.** Groups that trained late had less Test time,
+   and a DFM restart cuts a group's window short. If `TestMinutes` varies
+   widely, set `pr_test_window_min` so every group is judged over the same
+   span.
 4. **Independence in a single experiment.** In one experiment's report, the
-   three groups on a DFM are treated as independent although they share a
+   groups on a DFM are treated as independent although they share a
    device. The mixed model that accounts for this runs only across two or
    more members, so replicate across recordings and pool them in a
    Project.
@@ -799,8 +951,10 @@ the same device, or in the same recording, as independent.
 - The number of censored groups per treatment.
 - For the breaking point: the still-responding curve and the log-rank test,
   with the mean comparison as secondary.
-- For the paired − yoked difference: the test against zero within each
-  treatment, and the between-treatment comparison.
+- For the paired − yoked difference, in a paired design: the test against
+  zero within each treatment, and the between-treatment comparison.
+- Whether the design had yoked controls, and any DFM restart that ended a
+  Test window.
 - Whether the conclusion survives the breaking-point sensitivity table.
 - For pooled data: the mixed-model p-values.
 
@@ -821,11 +975,17 @@ the same device, or in the same recording, as independent.
 | "the firmware counted rising Events per light event; pyflic's licks did not follow" | the fly worked to the schedule, and pyflic's detection missed some of its feeding | look at the paired sucrose well's baselined trace and the detection parameters |
 | A group failed for **self-triggered light** | the sucrose well's resting level drifted, so the light fired on its own | look at *Sucrose Well resting level*; the group is correctly excluded |
 | A group failed for **implausible training** | training was completed by the sensor, not the fly | check the well and the fly; the group is correctly excluded |
-| Almost every breaking point is censored (`n+`) | the Test window is short compared with `pr_break_gap_min` | record longer, or reconsider the gap; don't shorten the gap to get a result |
-| A group is missing from the difference table | one of its two chambers was removed | see `removed_chambers.csv` |
+| A group failed for **requirement series wrong** | a Test light event met a Requirement the Test Paradigm's series does not give; the firmware keeps its series exactly | check that `Program.txt` is the one exported with this recording; the Requirement each light event met is in `pr_light_events.csv` |
+| "the DFM restarted at minute *m* … the Test window ends at the restart" | the DFM restarted during the group's Test, and the ratio started again after it | nothing to fix: the breaking point is judged up to the restart, censored if the fly was still responding. Check the DFM's power and connection before the next recording |
+| Almost every breaking point is censored (`n+`) | the Test window is short compared with `pr_break_gap_min`, or a DFM restart cut it short | record longer, or reconsider the gap; don't shorten the gap to get a result |
+| "the design has no yoked controls" | every chamber group is a single chamber | nothing: there is no paired − yoked difference to take; the breaking point is the result. If the rig had yoked partners, state `paired_chambers` or check the program's linkage |
+| A group is missing from the difference table | one of its two chambers was removed, or it is a single chamber | see `removed_chambers.csv` |
 | The Project Report says a member has no breaking point table | that member was analysed with an older pyflic | re-run its basic analysis |
-| Loading fails on `paired_chambers` | missing, two chambers from one group, or a group left out | name exactly one chamber from each of 1–2, 3–4, 5–6 |
-| Loading fails on treatments | the two chambers of a group have different treatments | give both chambers the same treatment |
+| Loading fails on `paired_chambers` | missing, two chambers from one pair, or a pair left out | name exactly one chamber from each of 1–2, 3–4, 5–6; or, for a design without yoked controls, write `chamber_groups: single`; or copy `Program.txt` into `data/` so its linkage gives the groups |
+| "'paired_chambers' cannot be stated with 'chamber_groups: single'" | both keys on one DFM | keep the one that describes the rig |
+| "chamber groups taken from Program.txt's linkage" in `summary.txt` | neither key was stated, and the program's linkage gave the groups | check that the groups it lists are the rig's |
+| "chamber_groups single disagrees with Program.txt" | the config says single chambers, the program links chambers into pairs | the config's are used; fix whichever is wrong |
+| Loading fails on treatments | the two chambers of a pair have different treatments | give both chambers the same treatment |
 | A linkage group failed for **unexplained light** | most of its lit time had no lick or touch behind it | open *Light explained by licks*: orange beside the red is a drifting well, no orange is a light the firmware had no reason to switch on |
 | "holds more than one Program.txt" | two program files in `data/` | keep only the one the MCU exported for this recording |
 | `summary.txt` says `paired_chambers` disagrees with `Program.txt` | the config names a different paired chamber than the program's trigger well | check which chamber the program lit for; fix the config or the program |

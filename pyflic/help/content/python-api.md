@@ -138,9 +138,9 @@ the `optogenetics:` setting names, and `exp.is_optogenetic` says whether there a
 ```python
 exp.is_optogenetic                # any DFM covered?
 exp.opto.dfm_ids()                # which
-exp.opto.qc_table()               # the verdict per linkage group
+exp.opto.qc_table()               # the verdict per linkage group, with the rule checks
 exp.opto.interval_table()         # per group per scheduled interval
-exp.opto.events_table()           # every light event: UnexplainedSec, OverrunSec
+exp.opto.events_table()           # every light event: UnexplainedSec, OverrunSec, the ledger
 exp.opto.program_table()          # the program as read
 exp.opto.lines()                  # the flagged groups, in words
 exp.opto.write()                  # qc/opto/*.csv
@@ -184,7 +184,27 @@ circuits and trigger wells, from the program or the data, and
 **The light table** (`pyflic.base.light_summary`): `light_summary(exp)` and
 `light_wells(exp)` return the per-chamber and per-well tables, `light_summary_facet(exp)`
 and `light_wells_facet(exp)` the same per Facet, and `write(exp)` writes all four into
-`analysis/`. `HEADLINE_METRICS` names the four tested by default.
+`analysis/`. `experiment_headline_metrics(exp)` names the metrics tested between
+treatments, those of the Paradigm Families the member's program runs;
+`HEADLINE_METRICS` is the four of before, which a member without a firmware 4.0.0
+recording keeps. `behaviour_rows(frame)` gives the rows those tests use: a chamber whose
+Role does not earn light keeps its lit time and loses its Activation measures.
+
+**Paradigm Families** (`pyflic.base.paradigm_families`): `FAMILIES`, `family_of(mode,
+acclimation=False)`, `families_in(program, dfm_ids=None)`,
+`headline_metrics(families, max_on=False, acclimation=False)` and `rule_sentence(paradigm)`,
+the rule in words with its settings.
+
+**The Activation ledger** (`pyflic.base.activation_ledger`): `ledger(state)` returns one row
+per Activation of a generation-3 DFM's Paradigm state, timed to the millisecond
+(`OnsetMs`, `EndMs`, `LitMs`, `Overlap`, `Boundary`, `K`, …), the rows
+`opto_light_events.csv` carries. The rule checks over it are in `pyflic.base.rule_checks`,
+one function per check, each returning a `CheckResult`.
+
+**The yoked comparison** (`pyflic.base.analytics`): `yoked_groups(exp)` lists the linkage
+groups that yoke chambers to a paired one, and `yoked_comparison(exp, metrics=None)` returns
+the paired − yoked table basic analysis writes as `analysis/yoked_comparison.csv`; test its
+`d<metric>` columns against zero with `zero_tests`.
 
 **Program Facets** (`pyflic.base.program_facets`): `exp.facet_source` is `cutoffs`,
 `program` or `program_cycles`; `exp.facet_windows_for(dfm_id)` gives a DFM's Facets, each a
@@ -196,11 +216,19 @@ and `errors(frame)` filter it.
 
 **The Program timeline** (`pyflic.base.program_timeline`): `plot_dfm(exp, dfm_id,
 binsize_min=10)` returns the figure, `well_table(exp, dfm_id)` the state of each well at the
-end of the loaded range, and `write(exp)` saves every DFM's figure to `qc/program/`.
+end of the loaded range, `activations_table(exp, dfm_id)` the DFM's Activations from the
+light events, and `write(exp)` saves every DFM's figure to `qc/program/`.
+
+**Restarts**: `dfm.restarts()` lists a generation-3 DFM's restarts, from the rows and from
+`Messages.csv` (`None` before generation 3), and `dfm.paradigm.restarts()` the spans the rows
+show.
 
 A `ProgressiveRatioExperiment` adds `exp.training_information()` (the *no training
-information* text, or `None`) and `exp.test_paradigm(dfm_id, group)` (the name and the
-Paradigm of a group's Test). See [Generations](concepts-optogenetics.md#generations).
+information* text, or `None`), `exp.test_paradigm(dfm_id, group)` (the name and the
+Paradigm of a group's Test), `exp.chamber_groups(dfm_id)` (its Chamber Groups, pairs or solo
+groups), `exp.has_yoked_controls()` and `exp.test_restart(dfm_id, group)` (a DFM restart
+that ends the group's Test window, or `None`). See
+[Generations](concepts-optogenetics.md#generations).
 
 ## DFM objects
 

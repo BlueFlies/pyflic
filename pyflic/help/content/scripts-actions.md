@@ -20,7 +20,7 @@ several devices. `group` defaults to the **script's name** — see
 
 | Action | Parameters | What it does |
 |---|---|---|
-| `basic_analysis` | — | The standard pipeline: auto-removal (the `constants:` cutoffs, once), summary, feeding summary, summary plot, and for an optogenetic experiment the light QC, the light table and each firmware 4.0.0 DFM's Program timeline (QC is `run_qc`'s job) |
+| `basic_analysis` | — | The standard pipeline: auto-removal (the `constants:` cutoffs, once), summary, feeding summary, summary plot, and for an optogenetic experiment the light QC, the light table, the yoked comparison (`yoked_comparison.csv`, a design with a yoked group only) and each firmware 4.0.0 DFM's Program timeline (QC is `run_qc`'s job) |
 | `run_qc` | — | Per-DFM QC reports into `qc/`: integrity, data breaks, bleeding, raw / baselined / cumulative-licks plots, and, in an optogenetic experiment, the Program timeline of each DFM with a `Program.txt` section or firmware 4.0.0 data |
 | `feeding_csv` | — | Per-chamber feeding summary to CSV |
 | `facet_csv` | — | Per-chamber summary per Facet to `feeding_summary_facet.csv` (the Hub's **Faceted summary CSV**); skipped when the experiment has no Facets |
@@ -122,8 +122,9 @@ listed. For a Progressive Ratio Project it also stacks each member's
 and `<project>_Stats.txt` adds the tests against zero and the breaking point's log-rank
 test ([Statistics](concepts-progressive-ratio.md#statistics)). For a Project with
 optogenetic members it stacks their light tables into `<project>_LightSummary.csv` and
-`<project>_LightWells.csv` (and their `_Facet` variants), and `<project>_Stats.txt` adds the
-light behaviour comparisons.
+`<project>_LightWells.csv` (and their `_Facet` variants), and their yoked comparisons into
+`<project>_YokedComparison.csv`, and `<project>_Stats.txt` adds the light behaviour
+comparisons of the headline metrics of the Paradigm Families the members' programs run.
 
 ## `metric` and `mode`
 

@@ -54,7 +54,9 @@ Three things are doing the work:
   the part only you know.
 
 A typed experiment adds what its type requires: `Hedonic` and `ProgressiveRatio` need
-`well_names` for wells A and B, and `ProgressiveRatio` needs `paired_chambers` on every DFM
+`well_names` for wells A and B, and `ProgressiveRatio` needs each DFM's chamber groups:
+`paired_chambers` for paired and yoked pairs, `chamber_groups: single` for single chambers,
+or the linkage of the `Program.txt` in `data/`
 ([Progressive Ratio experiments](concepts-progressive-ratio.md)).
 
 Everything else has a default. See [Parameter reference](reference-parameters.md) for what

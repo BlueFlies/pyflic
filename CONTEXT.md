@@ -353,13 +353,19 @@ per-Member file it writes into).
 ### Progressive Ratio
 
 **Chamber Group**:
-In a Progressive Ratio experiment, a fixed pair of adjacent two-well
-Chambers on one DFM — 1+2, 3+4, 5+6 — that share one light circuit and one
-Treatment. The unit of pairing and of paired-vs-yoked comparison: a difference
-is always taken *within* a Chamber Group, never between group means. Three per
-DFM, derived from the Chamber Layout; never stated in the config.
-_Avoid_: pair (ambiguous with the paired fly), block, quad, well group (the
-group is four wells, but it is counted in chambers).
+In a Progressive Ratio experiment, the two-well Chambers of one DFM that share
+one light circuit, one Treatment and one training end. Either two Chambers, a
+Paired and a Yoked one — the unit of pairing and of paired-vs-yoked
+comparison: a difference is always taken *within* a Chamber Group, never
+between group means — or a **solo** group of one Paired Chamber with no Yoked
+control, PyMCU's reference design. The groups come from the config per DFM —
+`paired_chambers` for the pairs 1+2, 3+4 and 5+6, or `chamber_groups: single`
+for six solo groups — or, when it states neither, from the Opto Program's
+Linkage (a Linkage Group lighting two Chambers is a pair, one lighting one is
+solo, and pairs need not be neighbours). Numbered in Chamber order. Say
+*pair* only of a two-Chamber group, never of the paired fly.
+_Avoid_: block, quad, well group (a pair is four wells, but it is counted in
+chambers).
 
 **Paired Chamber** / **Yoked Chamber**:
 Two **Roles** with the same meaning in any optogenetic design: the **Paired**
@@ -367,14 +373,17 @@ chamber holds the only Trigger Well of a Linkage Group that also lights other
 chambers, so its fly's own behaviour switches the light; a **Yoked** chamber
 shares that group without a Trigger Well of it, so its fly is lit at the same
 moments as its partner, independent of its own behaviour. In a Progressive
-Ratio experiment they are the two chambers of a Chamber Group: the Paired fly
-receives light-driven neuronal stimulation contingent on its own feeding at
-the sucrose well, and is the only chamber that undergoes and completes
-**Training**. There the role is stated, not read: the config names the Paired
-chamber per DFM (`paired_chambers: [1, 4, 5]`, exactly one from each Chamber
-Group), Yoked is always the other member, never written, and the program is
-checked against it. Both chambers of a Chamber Group must carry the same
-Treatment.
+Ratio experiment they are the two chambers of a paired Chamber Group, and a
+solo group has a Paired chamber only: the Paired fly receives light-driven
+neuronal stimulation contingent on its own feeding at the sucrose well, and is
+the only chamber that undergoes and completes **Training**. There the role is
+the type's own, from its Chamber Groups: the config may name the Paired
+chamber per DFM (`paired_chambers: [1, 4, 5]`, exactly one from each pair),
+Yoked is always the other member, never written, and the program is checked
+against it; otherwise the Linkage gives them. Both chambers of a pair must
+carry the same Treatment. A solo group's chamber, whose light lights no other
+chamber, would be **Self** among the optogenetic Roles; the type calls it
+Paired.
 _Avoid_: test fly / control fly, stimulated / unstimulated (the yoked fly is
 stimulated too), master / slave, active / passive.
 
@@ -394,10 +403,11 @@ feeding at the Sucrose Well always turns the light on (pure closed loop). How
 the recording says so depends on its **Generation**. Generation 1 marks it
 **per well** inside the signal: a raw sample above 40000 means that well is
 still in training, and its true value is the raw value minus 65536; a well's
-**training end** is the last minute its own column is flagged, the four wells
-of a Chamber Group are expected to clear together, and a well that clears at
-a different minute or never clears is a per-well QC warning, never a load
-error. Generation 3 reports it through the Paired Sucrose Well's **Phase**:
+**training end** is the last minute its own column is flagged, the wells of
+a Chamber Group (four in a pair, two in a solo group) are expected to clear
+together, and a well that clears at a different minute or never clears is a
+per-well QC warning, never a load error. Generation 3 reports it through the
+Paired Sucrose Well's **Phase**:
 Training ends at its first row in `M` (Main) under a ratio Paradigm, so its
 `A` (the firmware's **Acclimation**) and any Program Interval before the
 ratio Paradigm are Training, and a ratio Paradigm with neither leaves Training
@@ -418,7 +428,9 @@ the protocol's word).
 The within-Chamber-Group contrast — Paired minus Yoked — for a metric within
 one Facet, written to `paired_yoked_diff.csv` with one row per Chamber Group
 per Facet. Never a difference of group means: a group missing either chamber
-(excluded, or unassigned) contributes no row. Pooled by the Combined Analysis
+(excluded, or unassigned) contributes no row, and a solo group has none to
+contribute, so a design without yoked controls has no difference at all, and
+says so once. Pooled by the Combined Analysis
 like any other summary, so statistics can be run on the difference directly.
 Two questions are asked of it: whether it is non-zero within a treatment
 (are paired and yoked flies different?) and whether treatments differ in it.
@@ -471,8 +483,8 @@ consecutive Test-phase Light Events are lick-free: the light was following the
 sensor, not the fly — typically a Sucrose Well whose Resting Level crept up
 until the firmware read it as continuous contact. It fails the Chamber Group,
 as does **implausible training** (Training completed with light events and no
-Sucrose Well licks at all); by default (`exclude_failed_pr_groups`) both
-chambers of a failed group leave the analysis through auto-removal. *No
+Sucrose Well licks at all); by default (`exclude_failed_pr_groups`) every
+chamber of a failed group leaves the analysis through auto-removal. *No
 increasing trend* in licks per Light Event and a rising or elevated Resting
 Level are warnings only.
 _Avoid_: clock-driven run, stuck light, runaway light.
@@ -515,18 +527,20 @@ cause), incomplete, missing.
 The span a Chamber Group's Breaking Point and Sucrose Persistence are judged
 over: from the group's training end to the end of the recording — on a
 Generation-3 recording, to the end of the ratio Paradigm's run that holds
-the training end, so only the first ratio run is the Test — capped at
-`pr_test_window_min` when that design constant is set (it is off by
-default). It differs between groups because training end does, which is what
-the cap is for.
+the training end, so only the first ratio run is the Test, or to the last row
+before a DFM restart inside that run, after which the ratio starts again —
+capped at `pr_test_window_min` when that design constant is set (it is off
+by default). It differs between groups because training end does, which is
+what the cap is for. A Breaking Point still running where a restart ends the
+window is **Censored**.
 _Avoid_: Test phase (the Facet, which is never capped), session.
 
 **Sucrose Persistence**:
-For either fly of a Chamber Group, the minutes since training end of its last
+For each fly of a Chamber Group, the minutes since training end of its last
 Sucrose Well feeding event before its first pause longer than Δt — the
 Breaking Point's rule applied to feeding events (the ones `EventsA` counts)
-over the same Test window, and so the one persistence measure the Yoked fly
-has too. `PersistA` on every per-chamber summary row (none on a Training
+over the same Test window, and so, in a pair, the one persistence measure the
+Yoked fly has too. `PersistA` on every per-chamber summary row (none on a Training
 row); `dPersistA`, Paired minus Yoked, in the Paired-Yoked Difference, with
 `dPersistCensored` when either fly is censored.
 _Avoid_: persistence (alone), latency, time to stop.
@@ -551,8 +565,8 @@ The wells of one DFM that share a linkage number in the Opto Program, lit
 together whenever any member is triggered — one light circuit, and so the
 unit the optogenetic light QC judges, its verdict passed to every chamber it
 touches. Without a program, the wells whose light is identical over the whole
-recording. In a Progressive Ratio experiment a Linkage Group is a Chamber
-Group's four wells.
+recording. In a Progressive Ratio experiment each lit Linkage Group is a
+Chamber Group: a pair's four wells, or a solo group's two.
 _Avoid_: light group, circuit (informal), chamber group (a PR structure,
 which a Linkage Group need not match).
 
@@ -562,8 +576,8 @@ Program, so its own signal can switch its Linkage Group's light on. A
 threshold of `On` (0 in a pre-4.0.0 export) keeps the well lit regardless
 (open loop); `Off` (-1) never triggers, and such a well runs no Paradigm of
 its own. In a Progressive Ratio experiment the Trigger Well is the Paired
-chamber's Sucrose Well, which is how `paired_chambers` can be read from the
-program.
+chamber's Sucrose Well, which is how the Chamber Groups and their Paired
+chambers can be read from the program.
 _Avoid_: active well, stimulated well (the whole group is lit).
 
 **Role**:
@@ -575,7 +589,8 @@ data (Trigger Wells are the wells that counted Activations, and wells whose
 light matches to the millisecond are linked); a Generation-1 or 2 recording
 without a program has none. A column beside the Treatment, never a Treatment
 level and never written in the config; the Progressive Ratio type alone
-states its Paired chambers and checks the program against them.
+keeps its own paired and yoked, from its Chamber Groups, which the config may
+state and the program is checked against.
 _Avoid_: condition, group, arm.
 
 **Mutual** / **Self** / **Open** / **Unlit**:
@@ -791,21 +806,26 @@ _Avoid_: manual, documentation, the docs, USAGE.
 - **Experiment Scripts** and **Project Scripts** have separate action
   registries and cannot mix; `run_in_experiments` is the only bridge. A
   **Batch Run** runs a Project Script — there is no Batch script level.
-- In a **Progressive Ratio** experiment a **DFM** holds three **Chamber
-  Groups**, each holding one **Paired Chamber** and one **Yoked Chamber** that
-  share one **Treatment**, one light circuit and one **Training** end. The
-  config names the Paired chamber per DFM; Yoked is derived. The **Sucrose
-  Well** is always well A, and `pi_direction` places it, exactly as in any
-  two-well experiment.
+- In a **Progressive Ratio** experiment a **DFM** holds **Chamber Groups**,
+  each holding one **Paired Chamber** and, in a pair, one **Yoked Chamber**,
+  that share one **Treatment**, one light circuit and one **Training** end:
+  three pairs, six solo groups, or what the **Opto Program**'s Linkage makes.
+  The config names the Paired chamber per pair, or says `chamber_groups:
+  single`, or leaves the groups to the program; Yoked is derived. The
+  **Sucrose Well** is always well A, and `pi_direction` places it, exactly as
+  in any two-well experiment.
 - The two Progressive Ratio **Facets**, Training and Test, are split at each
   Chamber Group's own training end (ADR-0013). The **Paired-Yoked Difference**
-  table has one row per Chamber Group per Facet and is the primary input to the
-  **Combined Analysis** statistics for this type; the per-chamber summaries,
-  carrying Group and Role columns, are secondary.
+  table has one row per paired Chamber Group per Facet and is the primary
+  input to the **Combined Analysis** statistics for this type; the
+  per-chamber summaries, carrying Group and Role columns, are secondary. A
+  design of solo groups has no such table to test, and the **Breaking Point**
+  is its result.
 - Every Progressive Ratio **Chamber Group** gets a light QC verdict from its
   **Light Events** and its Sucrose Well's **Resting Level**, over the whole
   recording whatever window a table uses. A failed group (**Self-triggered
-  light**, implausible training) leaves through auto-removal like one that
+  light**, implausible training, or on Generation 3 a Requirement off the
+  Test Paradigm's series) leaves through auto-removal like one that
   never finished Training, so every result table and the **Combined Analysis**
   stand on groups whose light followed the fly; the QC figures and
   `pr_light_qc.csv` keep it in view.
@@ -915,6 +935,15 @@ _Avoid_: manual, documentation, the docs, USAGE.
   all three groups of a DFM. Resolved: `paired_chambers:` names the Paired
   chamber per group and `pi_direction` names the side; the configuration
   integer is retired.
+- A **Chamber Group** was a fixed pair of adjacent chambers, derived from the
+  layout and never stated, so every Progressive Ratio design had to be paired
+  and yoked. PyMCU's own reference design is not: each chamber's light answers
+  to its own fly, with no yoked control, and a Linkage may pair chambers that
+  are not neighbours. Resolved (decision 13 of
+  `docs/paradigm-analyses-plan.md`): the groups are the Linkage's light
+  circuits, a pair or a solo group, stated by `paired_chambers` or
+  `chamber_groups: single` when the config wants to; the paired-minus-yoked
+  parts skip a solo group and say so once.
 - "the light was on" was read as "the fly earned it". The first real dataset
   says otherwise: on DFM 1 of `test_data/progressive_ratio` one group's
   Sucrose Well drifted from 11 to 38 counts over the day and another's rested

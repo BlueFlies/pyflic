@@ -61,11 +61,13 @@ which is the normal way to present a two-factor design.
 
 ## Progressive Ratio: roles are not factors
 
-In a Progressive Ratio experiment, paired and yoked are **roles** named by
-`paired_chambers:`, not treatment levels — both chambers of a chamber group carry the same
-treatment, and the analysis compares them within the group. Declaring a `paired` factor
-would give the two chambers different treatments, which the type refuses. Use factors for
-what varies *between* chamber groups, such as genotype or dose. See
+In a Progressive Ratio experiment, paired and yoked are **roles**, named by
+`paired_chambers:` or read from `Program.txt`'s linkage, not treatment levels — both
+chambers of a pair carry the same treatment, and the analysis compares them within the
+group. Declaring a `paired` factor would give the two chambers different treatments, which
+the type refuses. Use factors for what varies *between* chamber groups, such as genotype
+or dose. A design of single chambers, with no yoked controls, has only paired chambers:
+there is nothing to declare either. See
 [Progressive Ratio experiments](concepts-progressive-ratio.md#chamber-groups-paired-and-yoked).
 
 ## Without factors

@@ -70,11 +70,19 @@ canonical name. The same goes for configurations written before pyflic split
 Experiment Type from Chamber Layout: `experiment_type: two_well` still opens — as
 a Custom Experiment with that layout — and saving migrates it.
 
-**Progressive Ratio adds a paired-chamber picker.** With *Progressive Ratio* chosen, each
-DFM tab shows **Paired chamber per chamber group**: one picker per group (1+2, 3+4, 5+6)
-naming its paired chamber, written as `paired_chambers:`. The other chamber is yoked and
-never written. Give both chambers of a group the same treatment, and set **PI Direction**
-on the DFM to the side the sucrose well (well A) is on. See
+**Progressive Ratio adds the chamber groups.** With *Progressive Ratio* chosen, each DFM
+tab shows **Paired chamber per chamber group**, with a **Groups** choice:
+
+- **Pairs**: one picker per pair (1+2, 3+4, 5+6) naming its paired chamber, written as
+  `paired_chambers:`. The other chamber is yoked and never written. Give both chambers of
+  a pair the same treatment.
+- **Single chambers**: every chamber its own group, with no yoked control, written as
+  `chamber_groups: single`. The pickers are greyed out.
+- **From Program.txt**: neither key is written, and the loader takes the groups from the
+  linkage of the `Program.txt` in `data/`. Without one, the DFM does not load.
+
+A DFM entry that already names neither key opens on *From Program.txt*. Set **PI
+Direction** on the DFM to the side the sucrose well (well A) is on. See
 [Progressive Ratio experiments](concepts-progressive-ratio.md#chamber-groups-paired-and-yoked).
 
 **Progressive Ratio has its own settings.** Below the auto-filter thresholds, a
@@ -94,8 +102,8 @@ load a config that states one. What each setting does is in
 Once the experiment is known to be optogenetic — the setting is `yes`, `data/` holds a
 `Program.txt`, or a run has already written its light QC — an *Optogenetic light QC*
 section shows the thresholds, shared by every type, under the same rule as the rest: grey
-defaults, and only what you type is written. Five of them apply to firmware 4.0.0
-recordings only. See [Optogenetic experiments](concepts-optogenetics.md#thresholds).
+defaults, and only what you type is written. Thirteen of them apply to firmware 4.0.0
+recordings only, eight of those to the checks of each Paradigm's own rule. See [Optogenetic experiments](concepts-optogenetics.md#thresholds).
 
 **Facet source** on the Experiment tab says where the Facets come from: minute cutoffs (the
 default), or the Program Intervals of `Program.txt`, with or without their Cycles pooled.

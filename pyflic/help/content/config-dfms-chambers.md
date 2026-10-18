@@ -30,27 +30,38 @@ This is how counterbalancing works — see
 **`chambers`** maps chamber number to treatment name, or to comma-separated factor levels
 when [factors](config-factors.md) are defined.
 
-## Progressive Ratio: `paired_chambers`
+## Progressive Ratio: `paired_chambers` and `chamber_groups`
 
-A Progressive Ratio DFM also names the **paired** chamber of each chamber group —
-chambers 1+2, 3+4 and 5+6 — and the other chamber of the group is yoked:
+A Progressive Ratio DFM's chambers form **chamber groups**, each lit by one light circuit:
+a pair of a **paired** and a **yoked** chamber, or a **solo** group of one paired chamber
+with no yoked control. Three ways to say which, per DFM entry:
 
-```yaml
-- id: 1
-  params: {pi_direction: left}   # side of well A, the sucrose well
-  paired_chambers: [1, 4, 5]     # one from each group
-  chambers: {1: Ctrl, 2: Ctrl, 3: Exp, 4: Exp, 5: Exp, 6: Exp}
-```
+- **`paired_chambers`**: pairs 1+2, 3+4 and 5+6, naming the paired chamber of each; the
+  other chamber of the group is yoked.
 
-Exactly one chamber per group, and both chambers of a group carry the same treatment;
-the loader and `pyflic lint` refuse anything else. Well A is always the sucrose well, so
-there is no separate side key: `pi_direction` places it, as in any two-well experiment.
-The Config Editor shows the three pickers on each DFM tab. See
+  ```yaml
+  - id: 1
+    params: {pi_direction: left}   # side of well A, the sucrose well
+    paired_chambers: [1, 4, 5]     # one from each pair
+    chambers: {1: Ctrl, 2: Ctrl, 3: Exp, 4: Exp, 5: Exp, 6: Exp}
+  ```
+
+  Exactly one chamber per pair, and both chambers of a pair carry the same treatment; the
+  loader and `pyflic lint` refuse anything else.
+- **`chamber_groups: single`**: every chamber its own solo group, with no yoked control.
+  It cannot be stated with `paired_chambers`.
+- **Neither**, with the MCU's `Program.txt` in `data/`: the groups its linkage makes. A
+  linkage group lighting two chambers is a pair, its paired chamber the one holding the
+  trigger well; one lighting a single chamber is a solo group. Pairs that are not
+  neighbours (1+4, say) are read as the program pairs them.
+
+What the config states wins: a `Program.txt` that disagrees is reported in `summary.txt`.
+Without `Program.txt`, and with `chamber_groups: paired` (the default), `paired_chambers`
+is required. `chamber_groups` is read from a DFM entry only, never from `global:`. Well A is
+always the sucrose well, so there is no separate side key: `pi_direction` places it, as in
+any two-well experiment. The Config Editor's DFM tab has a **Groups** choice and the
+pickers for pairs. See
 [Progressive Ratio experiments](concepts-progressive-ratio.md#chamber-groups-paired-and-yoked).
-
-With the MCU's `Program.txt` in `data/`, `paired_chambers` may be left out: the chamber
-holding each group's trigger well is the paired one. Given both, the config wins and a
-disagreement is reported.
 
 ## Optogenetics per DFM
 
@@ -65,8 +76,8 @@ On an optogenetic DFM every chamber gets a **Role** — Paired, Yoked, Mutual, S
 Unlit — that says what it was to the light. pyflic reads it from `Program.txt`'s linkage and
 thresholds, or on a firmware 4.0.0 recording from the data. You never write it, and it is
 not a treatment: do not declare it as a design factor. It appears as a `Role` column beside
-`Treatment`. A Progressive Ratio DFM is the one case you state, with `paired_chambers`, and
-the program is checked against it. See
+`Treatment`. A Progressive Ratio DFM is the one case you may state, with `paired_chambers`
+or `chamber_groups`, and the program is checked against it. See
 [Optogenetic experiments](concepts-optogenetics.md#roles).
 
 ## DFM 99 is the Environmental Monitor

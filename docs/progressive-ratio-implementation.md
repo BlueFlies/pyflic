@@ -16,10 +16,24 @@
 > log-rank test and the tests against zero (ADR-0014; *Breaking point* at the
 > end of this file). Tests: `tests/test_pr_breaking_point.py`.
 >
-> **As implemented (2026-09-24):** the last part of this file, *As
-> implemented*, describes the code as it now stands: the module map, the
-> pipeline order, the QC protocols, the exclusion criteria, the breaking point
-> and Sucrose Persistence, and the figures and statistics built on them.
+> **As implemented (2026-09-24):** the part *As implemented* describes the
+> code as it then stood: the module map, the pipeline order, the QC
+> protocols, the exclusion criteria, the breaking point and Sucrose
+> Persistence, and the figures and statistics built on them.
+>
+> **Firmware 4.0.0 (2026-10-16):** what the type reads from a generation-3
+> recording (Training from the Phase, Light Events from the Activations, the
+> Requirement met, Firmware Events, FixedRatio) is in
+> [firmware-4-data-in-pyflic.md](firmware-4-data-in-pyflic.md) and the
+> addendum to ADR-0014; it is not repeated here.
+>
+> **Solo groups, Fixed Ratio wording, restarts and the series check
+> (2026-10-17):** stream S4 of
+> [paradigm-analyses-plan.md](paradigm-analyses-plan.md) (decisions 6, 13, 14
+> and 15). The last part of this file, *As implemented (2026-10-17)*,
+> describes it. *As implemented (2026-09-24)* is corrected where it made it
+> wrong (Chamber Groups are no longer always pairs); the survey and the
+> decided direction are left as the history they are.
 
 A survey of the Progressive Ratio experiment type as it stood at commit
 `8000615`, kept as the "before" to the decisions at the end.
@@ -301,7 +315,7 @@ this date and will drift.
 
 | Module | Holds |
 |---|---|
-| [`experiment_types/progressive_ratio.py`](../pyflic/base/experiment_types/progressive_ratio.py) | The type object: Chamber Groups, `paired_chambers` parsing and validation, `default_constants` (merging in the light QC and breaking point defaults), the report set, the Project Report's pooled results (`project_results_blocks`), the `output_manifest` |
+| [`experiment_types/progressive_ratio.py`](../pyflic/base/experiment_types/progressive_ratio.py) | The type object: Chamber Groups (`ChamberGroup`, `resolve_chamber_groups`, from `paired_chambers`, `chamber_groups` or the Opto Program's Linkage; 2026-10-17 below), `paired_chambers` parsing and validation, `default_constants` (merging in the light QC and breaking point defaults), the report set, the Project Report's pooled results (`project_results_blocks`), the `output_manifest` |
 | [`pr_light_qc.py`](../pyflic/base/pr_light_qc.py) | Light QC arithmetic on plain arrays: Light Events, lick crediting, runs, the lick trend, Resting Levels, the per-group verdict (`judge_group`), the requirement estimate |
 | [`pr_breaking_point.py`](../pyflic/base/pr_breaking_point.py) | The first-gap rule on plain arrays: `BreakSettings`, `first_gap_break`, `breaking_point`, `persistence`, `format_count` |
 | [`progressive_ratio_experiment.py`](../pyflic/base/progressive_ratio_experiment.py) | `ProgressiveRatioExperiment`: roles, training end, light QC per group, auto-removal, summaries and the difference table, the breaking point per group, every figure, `summary.txt` sections, the experiment-report hooks, the pipeline |
@@ -492,14 +506,15 @@ The automatic criteria, in the order they run:
 | 2 | `LicksA` or `LicksB` < cutoff | `min_untransformed_licks_cutoff` (20) | the chamber | same, untransformed licks |
 | 3 | `MedDurationA` or `MedDurationB` > cutoff | `max_med_duration_cutoff` (13.0) | the chamber | PR override |
 | 4 | `EventsA` or `EventsB` > cutoff | `max_events_cutoff` (150000) | the chamber | PR override |
-| 5 | `TrainingComplete` is false | `require_training_complete` (true) | **both chambers** of the group | PR override |
-| 6 | the group's light QC failed (`self-triggered light`, `implausible training`) | `exclude_failed_pr_groups` (true) | **both chambers** of the group | PR override |
+| 5 | `TrainingComplete` is false | `require_training_complete` (true) | **every chamber** of the group | PR override |
+| 6 | the group's light QC failed (`self-triggered light`, `implausible training`, and on generation 3 `requirement series wrong`) | `exclude_failed_pr_groups` (true) | **every chamber** of the group | PR override |
 
 Criteria 3–6 are checked only for chambers that criteria 1–2 kept. All the
 reasons that fire for a chamber are joined into one `Reason`, for example
 `light QC failed in chamber group 2: self-triggered light
 (exclude_failed_pr_groups)`. Criteria 5 and 6 are facts about the group, so
-they fire on both of its rows.
+they fire on every one of its rows: two for a pair, one for a solo group
+(`_group_chambers_phrase` words the summary's rule lines for either).
 
 **Where the record goes.** `removed_chambers.csv` (written by
 `write_removed_chambers`) holds every removed chamber with its reason. The
@@ -510,9 +525,10 @@ experiment's `filter_criteria_summary` gains a *Progressive Ratio filter
 
 **What a removal does downstream.** Criteria 1–4 remove a single chamber;
 its partner stays in the per-chamber tables. Every within-group output
-needs both chambers, though, so the group drops out of
+needs both chambers of a pair, though, so the pair drops out of
 `paired_yoked_diff.csv`, `paired_yoked_delta`, the cumulative difference
-curve and `pr_breaking_point.csv`. A group with incomplete training is
+curve and `pr_breaking_point.csv`. A solo group drops out of
+`pr_breaking_point.csv` when its one chamber goes. A group with incomplete training is
 absent from all Test outputs whether or not criterion 5 is on. With
 `require_training_complete: false` its rows stay, with `TrainingComplete =
 false`. With `exclude_failed_pr_groups: false` a failed group stays in
@@ -568,8 +584,10 @@ reads two constants:
 On [`ProgressiveRatioExperiment`](../pyflic/base/progressive_ratio_experiment.py#L1704):
 
 - **`_test_window(dfm, group)`**: `settings.test_end(recording end −
-  training end)`, where recording end is the DFM's last raw `Minutes`.
-  `None` when training never completed.
+  training end)`, where recording end is the DFM's last raw `Minutes`; on
+  generation 3 the end of the ratio run that holds the training end, or the
+  last row before a DFM restart inside it (2026-10-17 below). `None` when
+  training never completed.
 - **[`group_break`](../pyflic/base/progressive_ratio_experiment.py#L1725)**:
   `breaking_point` on the group's Test Light Events. The inputs are
   `Minutes` from `light_events_table` and lick-backed = `not LickFree`,
@@ -589,8 +607,8 @@ On [`ProgressiveRatioExperiment`](../pyflic/base/progressive_ratio_experiment.py
   For the yoked chamber they are the same onsets with its own well-A licks.
   An event lit across training end belongs to training.
 - **[`breaking_point_summary`](../pyflic/base/progressive_ratio_experiment.py#L1963)**:
-  one row per group with **both chambers in the design and training
-  complete**. Columns: `Treatment` (the paired chamber's), the factors,
+  one row per group with **every chamber in the design** (both of a pair,
+  the one of a solo group) **and training complete**. Columns: `Treatment` (the paired chamber's), the factors,
   `DFM, Chamber, Group, PairedChamber, BreakingPoint, BreakMin, Censored,
   TestMinutes, LargestRequirement` (the most licks credited to one counted
   event, descriptive only), `LickFreeLightEvents, LightQC`. This is
@@ -739,3 +757,161 @@ Shared fixtures are in `tests/pr_fixtures.py`.
   module is the one description the Config Editor, the Project Design dialog
   and `ProgressiveRatioExperimentType.validate()` read, so a bad value is
   refused everywhere, including at load.
+
+---
+
+# As implemented (2026-10-17): solo groups, Fixed Ratio wording, restarts and the series check
+
+Stream S4 of [paradigm-analyses-plan.md](paradigm-analyses-plan.md), where
+the plan's "As built" lists what departed from it. Terms are `CONTEXT.md`'s
+(*Chamber Group*, solo group, *Test window*). Tests:
+`tests/test_pr_v4.py` (39), and `tests/test_pymcu_simulator.py`, which loads
+PyMCU's own simulated recording as Progressive Ratio without
+`paired_chambers`, as twelve solo groups.
+
+## Chamber Groups
+
+In [`experiment_types/progressive_ratio.py`](../pyflic/base/experiment_types/progressive_ratio.py):
+
+- **`ChamberGroup(number, paired, yoked=None)`**, frozen: `.chambers` (in
+  order) and `.solo` (`yoked is None`). `paired_layout(paired)` gives the
+  pairs of `CHAMBER_GROUPS` (1+2, 3+4, 5+6) with those Paired chambers;
+  `single_layout()` six solo groups numbered as the chambers;
+  `describe_groups(groups)` the words the notes use (`1 (paired 1, yoked 4),
+  2 (chamber 2)`).
+- **`groups_from_program(dfm_program, chamber_sets, pi_direction)`** →
+  `(groups, problems, notes)`. From `opto_roles.linkage_view` of the section:
+  each Linkage Group with a Trigger Well lights the chambers its wells sit
+  in, a Trigger Well no Linkage Group lists lighting only itself. Two
+  chambers are a pair, the one holding the Trigger Well Paired; one chamber
+  is a solo group. Problems, any of which makes no groups: a Linkage Group
+  over more than two chambers, Trigger Wells in both linked chambers, a
+  chamber no Trigger Well lights, a chamber in two lit groups. Groups are
+  numbered by their lowest chamber, so non-adjacent pairs (1+4, 2+3, 5+6)
+  are groups 1, 2 and 3. The notes flag a Trigger Well that is well B
+  (`_well_b_notes`, shared with `paired_from_program`).
+- **`parse_layout(raw)`**: the DFM entry's `chamber_groups` (`GROUPS_KEY`),
+  `paired` or `single` (`GROUP_LAYOUTS`), or `None`; anything else is a
+  problem. It is a DFM key only: `yaml_lint._KNOWN_DFM_KEYS` gains it, and
+  nothing reads it from `global:`.
+- **`resolve_chamber_groups(node, dfm_program=None, *, chamber_sets,
+  pi_direction, dfm_id) -> GroupResolution(groups, source, problems,
+  notes)`**, never raising. What the config states wins:
+  1. `paired_chambers`: `paired_layout` of it. With `chamber_groups:
+     single` too, a problem. A section whose trigger wells make other Paired
+     chambers is a note ("… disagrees with Program.txt … the config's are
+     used").
+  2. `chamber_groups: single`: `single_layout()`; a section whose Linkage
+     makes pairs is a note.
+  3. Neither, with a section: `groups_from_program` (skipped under
+     `chamber_groups: paired`) and `paired_from_program`. The paired layout
+     from the trigger wells when that agrees with the Linkage or the Linkage
+     makes no groups, in the old words ("paired_chambers [..] taken from
+     Program.txt"); else the Linkage's groups ("chamber groups taken from
+     Program.txt's linkage: …").
+  4. Otherwise `paired_chambers` is required, the problem adding "or
+     chamber_groups: single, for a design without yoked controls".
+
+  `source` is `"config"` or `"program"`.
+- **`complete_dfm_node`**, the loader's hook, stores groups the program
+  decided in the resolved node as `RESOLVED_GROUPS_KEY` (`_chamber_groups`,
+  `[[paired, yoked or None], …]`, never written to a file), and writes
+  `paired_chambers` too when they are the paired layout, so a node the
+  loader completed resolves the same without the program. `validate_dfm`
+  resolves the node and checks the shared treatment for pairs only.
+  `pyflic lint` runs both hooks as the loader does, so it accepts a solo
+  design without `paired_chambers`.
+- **The Config Editor** (`config_editor.DFMWidget`): a *Groups* combo,
+  `PR_GROUPS_PAIRED` (*Pairs*, the default for a new DFM: writes
+  `paired_chambers` from the three pickers), `PR_GROUPS_SINGLE` (*Single
+  chambers*: writes `chamber_groups: single`, pickers disabled) and
+  `PR_GROUPS_PROGRAM` (*From Program.txt*: writes neither). `load_dict` maps
+  an entry back the same way, neither key to *From Program.txt*.
+  `chamber_problems` checks the pairs' treatments in *Pairs* mode only.
+
+In [`progressive_ratio_experiment.py`](../pyflic/base/progressive_ratio_experiment.py):
+
+- **`chamber_groups_by_dfm()`** (cached as `_pr_groups`), `chamber_groups(dfm)`,
+  `chamber_group(dfm, group)` and `_group_pairs()`, the `(dfm, group)` rows
+  every per-group table iterates in place of `CHAMBER_GROUPS`.
+  `paired_chambers_by_dfm()` is derived from them. `solo_groups()` and
+  `has_yoked_controls()` say what the design is.
+- **`role_of`**: `partner` is `None` for a solo group's chamber;
+  `roles_table()`'s `Partner`, and `YokedChamber` in `training_table()` and
+  `light_qc_table()`, are nullable integers (`_chamber_column`), `NA` there.
+- **`paired_yoked_diff`** needs one paired and one yoked row per group and
+  Facet, so a solo group gives none and a solo design writes a header-only
+  `paired_yoked_diff.csv`. `breaking_point_summary` needs every chamber of
+  the group in the design.
+- **Wording.** `_group_chambers_phrase` says *both chambers of*, *the
+  chamber of* or *every chamber of* in the exclusion lines. With no pair,
+  `report_results_blocks` gives one paragraph (`NO_YOKED_CONTROLS`, "the
+  design has no yoked controls …") in place of the cumulative difference
+  curve and the difference; with some, `_paired_yoked_blocks` names the solo
+  groups left out. The training table drops its *Yoked chamber* column when
+  no group has one. The cumulative-difference figure's empty title gives
+  `NO_YOKED_CONTROLS` as the reason. `report_intro` reads for pairs and solo
+  groups alike.
+- **Figures.** `_panel_figsize(n)`: three panels to a row, so six solo groups
+  take two rows; the report's heights scale with the rows. Captions drop the
+  yoked trace and "both roles" for a DFM without pairs.
+- **The Project.** `pooled_yoked_controls(project)` reads the PR rows of
+  `<project>_LightQC.csv`: any non-NA `YokedChamber`, or `True` when it
+  cannot tell. With no pooled difference and no yoked controls,
+  `project_results_blocks` gives a *Paired − yoked difference* heading with
+  one paragraph, `Project.stats_text` the line "Paired − yoked difference:
+  none; the design has no yoked controls (every chamber group is one chamber,
+  lit by its own fly alone)", and `project_report` treats an empty
+  difference table as none.
+
+## Fixed Ratio wording (decision 14)
+
+`_fixed_ratio(dfm, group)` is true for a FixedRatio Test Paradigm (no
+program: progressive). `progressive_groups(dfm_id=None)` lists the others.
+Only they feed `estimated_increment`, the grey estimated-requirement line of
+`plot_light_events_dfm` and the summary's increment line, and the caption "A
+working progressive ratio climbs …" is used for a DFM with a progressive
+group; a fixed-ratio DFM's caption says "under a fixed ratio". The report's
+light QC paragraph words the warnings without the trend when no group is
+progressive. The breaking point's heading and sentence were already per
+Test Paradigm.
+
+## Requirement series wrong (decision 6)
+
+- `pr_light_qc.SERIES_WRONG` (`"requirement series wrong"`) is in
+  `FAILING_FLAGS`. `judge_group(..., series_mismatches=n)` adds it for any
+  `n > 0` in a group with a Test phase; `None` means not checked.
+- `pr_light_qc.requirement_series_mismatches(ledger_rows, paradigm)` is
+  `len(rule_checks.requirement_series_mismatches(...))`: the optogenetic
+  light QC's own check, called rather than repeated, which forgives a state
+  run whose first Main Activation the rows credit to the old Paradigm.
+- `_test_ledger_rows(dfm, group)`: the Activation ledger, computed once per
+  DFM (`_light_cache`) over every group's Sucrose Well with the program's
+  Linkage (the data's without one), filtered to the group's Paired Sucrose
+  Well, Phase `M`, from training end to the end of the Test ratio run or the
+  restart that ends it.
+- `_light_qc_row` runs the check only on generation 3 with a ratio Test
+  Paradigm the program defines; `light_qc_lines` words its reason
+  ("Program.txt is probably not the program that ran").
+
+## Restart censoring (decision 15)
+
+- **`test_restart(dfm, group)`**: the first `ParadigmState.restarts()` span
+  with `training_end < span.row <= run_end` of the Paired Sucrose Well's
+  Test ratio run (a restart's unknown-instruction rows end that run); `None`
+  off generation 3 or with training incomplete.
+- **`_test_window`** ends at `minutes[restart.row - 1]`, so `group_break` and
+  `chamber_persistence` judge the window up to the restart, and a count still
+  running there is `Censored`. `TestMinutes` is the shortened window;
+  `pr_breaking_point.csv` gains no column.
+- **`restart_note(span, training_end)`**: "the DFM restarted at minute m, d
+  min after training end: the Test window ends at the restart, because the
+  ratio starts again after it, so a breaking point still running there is
+  censored". It goes into the group's `pr_light_qc.csv` `Notes`, the
+  breaking point lines of `summary.txt`, and a bullet list under the report's
+  breaking point.
+- **Training notes**: `_phase_training_notes` adds "after the DFM restarted
+  at minute m" to a *Paradigm restarted* or *ratio Paradigm ran again* note
+  whose run begins at a restart's resume row, and "(after the Test window,
+  which ends at the restart)".
+- `training_end` is unchanged: a restart does not move Training.

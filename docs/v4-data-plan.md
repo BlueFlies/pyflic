@@ -223,9 +223,9 @@ rather than deciding otherwise.
     for every type.
 20. Fail: unexplained light (as today), broken yoking, a row Paradigm name
     absent from `Program.txt`. Warn: Acclimation count mismatch, lost
-    records, late records, unknown-instruction rows beyond the `Idle`
-    lead-in, Firmware Events disagreeing with pyflic's events, `Program.txt`
-    missing on generation 3.
+    records, late records, unknown-instruction rows beyond the lead-in
+    (`Interval` 0, `Paradigm` `NA`), Firmware Events disagreeing with
+    pyflic's events, `Program.txt` missing on generation 3.
 21. New design constants, each with a field in the Project Design dialog and
     the Config Editor:
 
@@ -234,7 +234,7 @@ rather than deciding otherwise.
     | `opto_event_disagreement_warn_fraction` | 0.25 | per trigger well, \|FirmwareEvents − pyflic feeding events\| / FirmwareEvents above this warns |
     | `opto_yoking_fail_fraction` | 0.01 | share of lit records in which linked wells' `OnMs` differ by more than 1 ms; above this the group fails |
     | `opto_lost_records_warn` | 25 | records missing from `Index` (5 s) above which the DFM warns |
-    | `opto_unknown_rows_warn_fraction` | 0.01 | share of rows with an unknown instruction, after the `Idle` lead-in, above which the DFM warns |
+    | `opto_unknown_rows_warn_fraction` | 0.01 | share of rows with an unknown instruction, after the lead-in, above which the DFM warns |
     | `opto_late_records_warn` | 10 | rows with `OnMs` > 200 above which the DFM warns |
 
     None has data behind it; the bench checkpoint revisits all five.
@@ -270,9 +270,9 @@ rather than deciding otherwise.
     failures (the suite has 6 pre-existing failures). Stream 7 runs last.
 29. The disk cache's key gains a version bump and the mtimes of `Program.txt`
     and `Messages.csv`.
-30. Baseline rows (`Interval` 0) and the `Idle` lead-in stay inside
-    whole-recording feeding metrics and outside every Program Facet and every
-    light judgement.
+30. The baseline lead-in (`Interval` 0, `Paradigm` `NA`, as PyMCU writes
+    it) stays inside whole-recording feeding metrics and outside every Program
+    Facet and every light judgement.
 31. On generation 3 the feeding summary's `OptoOn_sec*` and the PR
     `LightOn_sec` come from `OnMs` (exact), and the summary says which source
     was used.
@@ -421,7 +421,7 @@ Engine rules, per well, per millisecond, from `LEDControl.c`:
   but not `Sample`; `Dark`, `OptoFreq`, `OptoPW` from the Interval's Paradigm,
   0 on the lead-in; `Temp`, `Humid`, `LUX` 0.00; `VoltsIn` 5.01; `Error`
   from `error_bits`. The lead-in rows have `Interval` 0, `Cycle` `NA`,
-  `Paradigm` `Idle`, every Phase `M`, Activations 0, Requirement and Progress
+  `Paradigm` `NA` (as PyMCU writes it), every Phase `M`, Activations 0, Requirement and Progress
   `NA`, `OnMs` 0. A 12-hour split starts a new file with its own header. Every
   missing value is `NA`, or blank with `blank_missing=True`.
 - `Program.txt`: the header lines, the `Paradigms:` block (every setting, in
@@ -475,7 +475,7 @@ Activations, Requirement, Progress and Phase per millisecond for
 ```python
 GENERATION_FLAG, GENERATION_EMPTY, GENERATION_PARADIGM = 1, 2, 3
 PARADIGM_COLUMNS: tuple[str, ...]      # Interval, Cycle, Paradigm, Phase1..12, Activations1..12, Requirement1..12, Progress1..12, OnMs1..12
-IDLE = "Idle"
+IDLE = "Idle"                          # PyMCU's instruction after the Program ends; the lead-in's Paradigm is NA
 
 def detect_generation(df: pd.DataFrame) -> int
 def split_paradigm_columns(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame | None]
@@ -503,7 +503,7 @@ class ParadigmState:
     on_ms: np.ndarray                        # (n, 12) int
 
     def interval_runs(self) -> list[IntervalRun]        # contiguous runs by (program_interval, cycle)
-    def lead_in_rows(self) -> int                        # Idle / Interval 0 rows at the start
+    def lead_in_rows(self) -> int                        # Interval 0 rows at the start (Paradigm NA)
     def unknown_rows(self) -> np.ndarray                 # (n,) bool, after the lead-in
     def late_rows(self) -> np.ndarray                    # (n,) bool: any OnMs > 200
     def index_gaps(self) -> list[tuple[int, int, float]] # (last index before, records missing, minute)
@@ -1098,8 +1098,8 @@ called done, one agent diffs it against the fixtures and the loader:
 
 - Header is the 90 `PARADIGM_COLUMNS`; every row has 90 fields; missing
   values are `NA`.
-- The lead-in: how many `Interval` 0 rows, their `Paradigm` (`Idle` or `NA`),
-  their `Dark`/`OptoFreq`/`OptoPW` (0).
+- The lead-in: how many `Interval` 0 rows, their `Paradigm` (`NA`, confirmed
+  on the first bench recording), their `Dark`/`OptoFreq`/`OptoPW` (0).
 - `Interval` changes on the first row the DFM ran the new instruction; the
   lag against `Program.txt`'s stamps.
 - `Activations` rises in the record where the light starts; `OnMs` of a linked
