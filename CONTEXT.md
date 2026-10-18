@@ -1017,7 +1017,9 @@ _Avoid_: manual, documentation, the docs, USAGE.
   and yoked. PyMCU's own reference design is not: each chamber's light answers
   to its own fly, with no yoked control, and a Linkage may pair chambers that
   are not neighbours. Resolved (decision 13 of
-  `docs/paradigm-analyses-plan.md`): the groups are the Linkage's light
+  `docs/paradigm-analyses-plan.md`, a plan removed once built; its text is at
+  commit 82aace9, see [Removed plans](docs/README.md#removed-plans)): the
+  groups are the Linkage's light
   circuits, a pair or a solo group, stated by `paired_chambers` or
   `chamber_groups: single` when the config wants to; the paired-minus-yoked
   parts skip a solo group and say so once.

@@ -13,15 +13,17 @@ PyMCU's win:
 | Every data-file column, its missing-value rule, when it is meaningful | [`PyMCU/docs/DataFileColumns.md`](../../PyMCU/docs/DataFileColumns.md) |
 | The Program file, the six Paradigm types, their settings and defaults, the `Program.txt` export | [`PyMCU/docs/ProgramFormat.md`](../../PyMCU/docs/ProgramFormat.md) |
 | The decision and its reasons | [ADR-0016](adr/0016-the-data-file-is-the-authority-on-what-the-light-did.md), and the addenda to [ADR-0014](adr/0014-progressive-ratio-breaking-point-is-the-first-gap-rule.md) and [ADR-0015](adr/0015-the-opto-program-and-a-light-qc-for-every-type.md) |
-| The plan, its decisions and where the build departed from it | [v4-data-plan.md](v4-data-plan.md) |
-| The per-Paradigm light QC, summaries and reports built on it | [paradigm-analyses-plan.md](paradigm-analyses-plan.md) (its "As built" section), [ADR-0017](adr/0017-paradigm-families-not-experiment-types.md) and ADR-0015's last addendum |
+| The per-Paradigm light QC, summaries and reports built on it | [ADR-0017](adr/0017-paradigm-families-not-experiment-types.md) and ADR-0015's last addendum |
+| The light each Experiment Type expects | [ADR-0019](adr/0019-experiment-types-are-definitions-a-lab-builds.md) |
+| The two plans, whose numbered decisions code comments and tests cite, and where the build departed from them | `v4-data-plan.md` and `paradigm-analyses-plan.md`, removed once built; their text is at commit 82aace9 ([Removed plans](README.md#removed-plans)) |
 | The vocabulary (Generation, Paradigm, Paradigm Family, Program Interval, Activation, Requirement, Progress, Firmware Event, Phase, Acclimation, Hold, Role) | [../CONTEXT.md](../CONTEXT.md) |
 
 The PyMCU links assume its checkout sits beside pyflic's, on branch `v4_Dev`.
 For a short overview of the new columns and where they show up, see
 [The firmware 4.0.0 data columns](v4-data-columns.md).
 For the researcher's view of the same features see the help topic
-*Optogenetic experiments* and [Checking your data](qc-user-guide.md).
+*Optogenetic experiments and the light QC* and
+[Checking your data](qc-user-guide.md).
 
 - [Generations](#generations)
 - [The recording folder](#the-recording-folder)
@@ -32,10 +34,13 @@ For the researcher's view of the same features see the help topic
 - [Messages.csv](#messagescsv)
 - [DFM restarts](#dfm-restarts)
 - [What pyflic derives](#what-pyflic-derives)
+- [The light QC's own checks](#the-light-qcs-own-checks)
 - [The Activation ledger and the rule checks](#the-activation-ledger-and-the-rule-checks)
 - [Outputs by file](#outputs-by-file)
+- [Where the outputs are made](#where-the-outputs-are-made)
 - [To confirm on the first real recording](#to-confirm-on-the-first-real-recording)
 - [Not read](#not-read)
+- [Not built](#not-built)
 
 ## Generations
 
@@ -54,6 +59,19 @@ the one Paradigm column the firmware fills on every row:
 written to `summary.txt` (*DFM details*), the integrity report, the report
 cover's **Generation** line, the `Generation` column of the light table and of
 `opto_light_qc.csv`, and the Project Report's member table.
+
+A generation-2 DFM has no Training, and the note saying so is worded three
+ways, each starting "no training information", which is what `light_summary`
+looks for:
+
+- `progressive_ratio_experiment.NO_TRAINING_INFORMATION`, *no training
+  information: recorded with DFM firmware older than 4.0.0*, in a Progressive
+  Ratio member's `summary.txt` and report;
+- the Progressive Ratio light QC's note (`pr_light_qc`), *no training
+  information (DFM firmware older than 4.0.0)*;
+- `light_summary.NO_TRAINING_INFORMATION`, *no training information (firmware
+  older than 4.0.0)*, on the Hub's Loaded line, in the Project Report's member
+  table and in the Stats text.
 
 ## The recording folder
 
@@ -126,6 +144,21 @@ Every one is `NA` on generation 2; pyflic reads them only on generation 3.
 | `Progress1`–`12` | `ParadigmState.progress` | Firmware Events: rises in Progress plus the Requirements met (`firmware_events_between`) | the ledger's and the breaking point's `FirmwareEvents`; `TrendRhoFirmware`; the light QC's `FirmwareEvents`, *firmware events disagree* and `FirmwareEventsWithoutActivity`; the light table's `FirmwareEvents`, `ProgressAtEnd`, `EventsPerActivation` |
 | `OnMs1`–`12` | `ParadigmState.on_ms`; a missing value is 0 | the light, exact: `lit()`, `lit_seconds()`; each Activation's onset, end and lit time from the edges of its light period (the ledger); linkage without a program (identical columns); late records (above 200) | `OptoOn_sec*`, `LightOn_sec`, the light table's `LitSec` (`LitSource` = `OnMs`) and `LightOnsets`; the light QC's lit time, *broken yoking* and every length rule check; the ledger's `OnsetMs`, `EndMs`, `LitMs`; the light-phase summary; the timeline's light strip; the integrity report's late records |
 
+pyflic relies on these facts from the PyMCU and firmware source, which
+PyMCU's documents do not all state (the differences were reported to the
+PyMCU and DFMV3_V2 repositories):
+
+- **`OnMs` is a byte**: the milliseconds the LED was driven since the previous
+  record, saturating at 255. It is nominally 200 at most but not clamped
+  there, so a late record shows more.
+- **`Progress` returns to 0, and `Requirement` moves to its next value, in the
+  millisecond the Activation starts.** So the Requirement an Activation met
+  is on the row before the row where `Activations` rises.
+- **`Interval` `NA` after the program ends cannot reach the file**, because
+  PyMCU sends the idle instruction only after closing it. `NA` rows come from
+  a DFM restart, from outputs toggled during a recording, or from an
+  instruction number older than PyMCU's 256-entry history.
+
 ## Program.txt
 
 `opto_program.parse_program` reads three shapes behind one API, told apart by
@@ -166,6 +199,39 @@ Generated, Dark, FrequencyHz, PulseWidthMs, HoldMs, MaxOnMs, ActivationMs,
 LockoutMs, OnDelayMs, EventGapMs, Acclimation, Series, FirstRequirement, Step,
 Scale, Rate, Cap, Ratio, Linkage, TriggerWells, OpenLoopWells, LegacyF,
 LegacyP`.
+
+### The light the Experiment Type expects
+
+An Experiment Type's definition states the light it expects (ADR-0019):
+`light:` is `none`, `any`, or a list of Paradigm types in PyMCU's spelling.
+`ExperimentType.light_problems(program, dfm_ids)` judges `Program.txt`, not
+the rows:
+
+- each printed interval runs its Paradigm's type on its level wells and
+  OpenLoop on its `On` wells; an interval whose wells are all `Off` runs
+  nothing, whatever its Paradigm (PyMCU's `Idle` among them);
+- OpenLoop is always allowed beside a list, as a control, and the `simple`
+  grammar runs nothing;
+- without `Program.txt`, or under `optogenetics: no`, nothing is checked.
+
+A program running a type the Experiment Type does not expect stops
+`load_experiment_yaml`, naming each DFM and interval, and `pyflic lint`
+reports it as an error, adding for Hedonic that a hedonic type expecting that
+light can be built in the Experiment Type Editor. The shipped types expect:
+Custom `any`; Hedonic `none`; ProgressiveRatio `[ProgressiveRatio,
+FixedRatio]`. A program that runs a ClosedLoop Training interval before its
+ratio Paradigm therefore needs a lab type that expects ClosedLoop too, under
+which Training includes that interval as before. The test fixtures that do
+this (`choice_pr_spec`, and DFM 1 of `tests/fixtures/Program_v4.txt`) load
+under the lab type `TrainedProgressiveRatio` in `tests/pr_fixtures.py`, which
+expects ClosedLoop, ProgressiveRatio and FixedRatio.
+
+How the light is judged does not depend on the Experiment Type: the light QC,
+the light table's columns and the report's rule subsections follow the
+Paradigm types the program runs (ADR-0017). The type's Analysis Modules
+decide only which of the type-specific analyses run: the `ratio` module's
+Progressive Ratio analysis, the `yoked` module's yoked comparison and the
+`light_dark` module's *Feeding in light and dark*.
 
 ## Messages.csv
 
@@ -246,10 +312,12 @@ state to restart):
   restart's among them; the *No Ack* note is not given when anything was
   lost, so a recording with a restart never gets it.
 - **The light QC** warns *DFM restarted* on every group of the DFM
-  (`Restarts` in `opto_light_qc.csv`, with or without `Program.txt`), and its
-  *lost records* check counts only the gaps outside restarts
-  (`rule_checks.gaps_outside_restarts`). The restart's `NA` rows still count
-  toward *unknown-instruction rows*.
+  (`Restarts` in `opto_light_qc.csv`, with or without `Program.txt`). A
+  restart raises that one warning: its *lost records* check counts only the
+  gaps outside restarts (`rule_checks.gaps_outside_restarts`), and its
+  *unknown-instruction rows* leave out the restart's rows under no
+  instruction, before PyMCU resent it. *DFM restarted* reports both, and the
+  notes give their counts.
 - **The Activation ledger** starts a new state run there: `K`,
   `SinceLastOnsetMs`, the Acclimation runs and the series check start over,
   as the firmware's do. A light period cut by the gap has `Boundary` `gap`,
@@ -275,16 +343,46 @@ state to restart):
 | **Linkage without a program** | wells lit identically in `OptoCol1` | same | wells whose `OnMs` columns are identical |
 | **Trigger wells without a program** | every lit well | same | wells with Activations |
 | **Role without a program** | blank | blank | from the data |
-| **Program Facets** | the program's clock schedule, approximate | same | the rows' `Interval` and `Cycle` |
+| **Program Facets** | the program's clock schedule, approximate | same | the rows' `Interval` and `Cycle`; `Experiment.facet_windows_for(dfm_id)` gives each Facet as a list of windows, several when a `program` Facet pools a Repeating program's Cycles |
 | **The light QC's contact evidence** | the emulated trigger | same | Activations and Firmware Events with no pyflic activity; nothing emulated |
 | **An Activation's onset, end and lit time** | — | — | to the millisecond from the edges of its `OnMs` (the ledger), or to the record |
 | **Each Paradigm's rule checks** | not run | not run | per Linkage Group and Paradigm, over the ledger |
 | **A DFM restart** | — | — | an `Index` gap into `NA`-Interval rows, confirmed by `Messages.csv` |
 
+## The light QC's own checks
+
+On generation 3 the optogenetic light QC (`opto_qc`) windows each DFM by its
+rows and judges each window under the Paradigm its rows name. Besides
+Explained Light and the rule checks (next section), it reads the file's own
+bookkeeping. Flags are `opto_qc` constants; `FAILING_FLAGS` fail a Linkage
+Group and `WARNING_FLAGS` warn.
+
+| Check (flag) | Verdict | Constant (default) |
+|---|---|---|
+| *broken yoking* | fails: within a Linkage Group, the share of lit records whose wells' `OnMs` differ by more than 1 ms is above the constant, or a linked `Off` well counts Activations | `opto_yoking_fail_fraction` (0.01) |
+| *paradigm not in program* | fails: a row's Paradigm is not in `Program.txt`'s `Paradigms:` block, so the file is not the program that ran | — |
+| *program mismatch* | warns: a window's `Dark`, `OptoFreq` or `OptoPW` disagree with its Paradigm, or its rows name a defined Paradigm other than the printed line's; the rows win, and are judged by their own Paradigm | — |
+| *acclimation count mismatch* | warns: a well's Activations in its `A` run are not its Paradigm's `Acclimation` | — |
+| *firmware events disagree* | warns, per Trigger Well: \|`FirmwareEvents` − pyflic feeding events\| / `FirmwareEvents` above the constant, judged from 5 events in either count (`MIN_FEEDING_EVENTS`). pyflic's count leaves out events that start inside the well's own Activation after its onset row, as the firmware does | `opto_event_disagreement_warn_fraction` (0.25) |
+| *lost records* | warns, per DFM: more records missing from `Index`, outside restarts, than the constant | `opto_lost_records_warn` (25) |
+| *unknown-instruction rows* | warns, per DFM: the share of rows after the lead-in under no instruction, outside restarts, above the constant | `opto_unknown_rows_warn_fraction` (0.01) |
+| *late records* | warns, per DFM: more rows with `OnMs` above 200 than the constant | `opto_late_records_warn` (10) |
+| *no Program.txt for firmware 4.0.0* (`PROGRAM_MISSING`) | warns: a generation-3 DFM with no `Program.txt` or no section in it. `NO_PROGRAM_SECTION` stays for generations 1 and 2 | — |
+| *non-feeding light during feeding* | warns: a NonFeeding light that stayed on through feeding | `opto_non_feeding_lit_warn_fraction` (0.10), `opto_non_feeding_min_sec` (30) |
+
+None of the five constants of the bookkeeping checks has bench data behind
+it yet ([To confirm](#to-confirm-on-the-first-real-recording)).
+
+The Progressive Ratio light QC (`pr_light_qc`) measures `TrendRhoFirmware`,
+the trend of Firmware Events per Light Event, as a witness, not a second
+judge: the *no increasing trend* warning stays on pyflic's licks, and a
+firmware trend that rises while the licks do not is a note pointing at the
+lick detection.
+
 ## The Activation ledger and the rule checks
 
-Built by the Paradigm analyses (`docs/paradigm-analyses-plan.md`, whose "As
-built" section says where the build departed from the plan).
+Built by the Paradigm analyses (ADR-0017; the plan, `paradigm-analyses-plan.md`,
+is at commit 82aace9: see [Removed plans](README.md#removed-plans)).
 
 **The ledger** (`activation_ledger.ledger(state, wells=None, linked=None)`) has
 one row per Activation of each well, read from the Paradigm state alone:
@@ -323,7 +421,7 @@ wider where `Timing` is `record`.
 | *wrong activation length* | FixedInterval, PR and FR in Main | fails above `opto_activation_length_fail_fraction` |
 | *lockout broken* | FixedInterval Main | fails above `opto_lockout_fail_fraction` |
 | *contact without activation* | FixedInterval Main | warns above `opto_missed_contact_warn_fraction`, from 5 free runs |
-| *requirement series wrong* | PR and FR Main | fails on any one |
+| *requirement series wrong* | PR and FR Main | fails on any one; a state run that matches the series with `K` one less passes, with a note (the rows credit its first Main Activation to the old Paradigm) |
 | *non-feeding dark* | NonFeeding | warns above `opto_non_feeding_dark_warn_fraction`, from 10 s expected lit |
 | `RelightDelayMs` | NonFeeding | reported |
 | *open loop not lit* | the lowest open-loop window | warns below `opto_open_loop_min_lit_fraction` |
@@ -343,15 +441,20 @@ Paradigm with the same functions, so a group's sections sum to its
 `LicksPerMinDark` and `LightFeedingIndex`, each `NA` outside its family and
 without a program. The open-loop rates use only rows under a Program Interval
 (`Interval` > 0), and a phase shorter than `MIN_LIGHT_PHASE_MIN` (1 minute) has
-no rate. The headline metrics follow the families run
+no rate. The light table carries them under every Experiment Type; the
+reports' *Feeding in light and dark* figure shows only under a type with the
+Light and dark module (`light_dark`, which Custom and ProgressiveRatio
+include). The headline metrics follow the families run
 (`experiment_headline_metrics`; `HEADLINE_METRICS` is the four of before, for a
 member with no generation-3 DFM). `behaviour_rows` gives the Activation
 columns to the chambers whose Role earns light (Paired, Self, Mutual) only.
 
 **The yoked comparison** (`analytics.yoked_groups`, `yoked_comparison`) takes,
-for every Linkage Group of one Paired and one or more Yoked chambers under any
-type but Progressive Ratio, the paired chamber's feeding-summary metrics minus
-the mean of its yoked chambers'.
+for every Linkage Group of one Paired and one or more Yoked chambers, the
+paired chamber's feeding-summary metrics minus the mean of its yoked
+chambers'. It runs under a type with the Paired and yoked module (`yoked`,
+which Custom includes). The `ratio` module excludes it, because Progressive
+Ratio keeps its own Paired-Yoked Difference.
 
 ## Outputs by file
 
@@ -362,7 +465,7 @@ before generation 3.
 |---|---|
 | `analysis/feeding_summary*.csv` | optogenetic members: `Role`, `LitSec`, `Activations`; `OptoOn_sec*` from `OnMs` on generation 3 |
 | `analysis/light_summary.csv`, `light_wells.csv`, their `_facet` variants | new: `light_summary.LIGHT_CHAMBER_COLUMNS` and `LIGHT_WELL_COLUMNS`, with the Paradigm Families' columns (previous section) |
-| `analysis/yoked_comparison.csv` | new, a design with a yoked group under any type but Progressive Ratio: `analytics.YOKED_COLUMNS`, the design's factors, then `Paired<m>`, `Yoked<m>`, `d<m>` per metric |
+| `analysis/yoked_comparison.csv` | new, a design with a yoked group under a type with the `yoked` module: `analytics.YOKED_COLUMNS`, the design's factors, then `Paired<m>`, `Yoked<m>`, `d<m>` per metric |
 | `analysis/light_phase_summary.csv` | the phase is each chamber's own light, on every generation (decision 24) |
 | `analysis/pr_breaking_point.csv` | `BreakRequirement`, `FirmwareEvents`, `ParadigmType`; `LargestRequirement` equals `BreakRequirement` on generation 3; no row for a generation-2 group; a restart inside the Test window shortens `TestMinutes` and can set `Censored` |
 | `analysis/pr_light_events.csv` | `Requirement`, `FirmwareEvents`, `Phase` |
@@ -376,17 +479,58 @@ before generation 3.
 | `qc/data_breaks/DFM<n>_data_breaks.csv` | led by `BreakIndex` and `GapSeconds` (were `Index` and `Interval`, which crashed on any version-3 file with a break) |
 | `qc/simultaneous_feeding/DFM<n>_simultaneous_feeding_matrix.csv` | `Both_pre`, `MaxMinSignalAtBoth_pre`, `HigherInCol1AtBoth_pre`, before the dual-feeding correction |
 | `qc/program/program_timeline_dfm<n>.png` | new; on generation 3 with the `On` and `Off` shading and the restart bands |
-| the experiment report | on generation 3 with `Program.txt`, a *Rule check* subsection per Paradigm with its rule figure; *Light behaviour* by Paradigm Family, with *Feeding in light and dark*; *Paired and yoked* |
+| the experiment report | on generation 3 with `Program.txt`, a *Rule check* subsection per Paradigm with its rule figure; *Light behaviour* by Paradigm Family, with *Feeding in light and dark* under the `light_dark` module; *Paired and yoked* under the `yoked` module; a type's Control Comparisons first in the Results |
 | `<project>_LightSummary.csv`, `<project>_LightWells.csv` and `_Facet` variants | new: the members' light tables stacked, `Experiment` first |
 | `<project>_YokedComparison.csv` | new: the members' yoked comparisons stacked |
+
+## Where the outputs are made
+
+**Basic analysis** (`Experiment.execute_basic_analysis`) writes every member
+output above for an optogenetic member: the QC reports (`write_qc_reports`)
+into `qc/`, the light QC into `qc/opto/`, each generation-3 DFM's Program
+timeline into `qc/program/`, and the light tables and, under the `yoked`
+module, the yoked comparison into `analysis/`. The Project's *Analyze all*
+and a Batch Run's `run_all_analyses` step run it for every member, whatever
+the Hub's ticks. The `basic_analysis` script step passes `skip_qc=True`,
+which leaves out `write_qc_reports` (the integrity report, data breaks, the
+two-well tables and the signal plots) but not the light QC or the Program
+timeline.
+
+**The Hub** (ADR-0018) runs a selection. Its QC, Analyze and Plots panels
+are checkboxes over one button each, and each item is an id that
+`global.omit:` can leave out (`pyflic/base/selections.py`). The items behind
+this document's outputs sit in each panel's *Optogenetics* group, shown for
+an optogenetic member, and in the *Progressive Ratio* group, shown under a
+type with the `ratio` module:
+
+- **Run QC**: `opto_light_qc` (the four tables in `qc/opto/`),
+  `opto_light_figures` (*Light explained by licks*, `opto_light_dfm<id>.png`)
+  and `program_timeline` (`qc/program/`, greyed with no firmware 4.0.0 data
+  and no `Program.txt`); and `pr_light_qc`, `pr_light_event_figures` and
+  `pr_resting_level_figures`.
+- **Run analysis**: `light_tables` (`light_summary.csv`, `light_wells.csv`
+  and, with Facets, their `_facet` variants) and `yoked_comparison` (under the
+  `yoked` module, greyed when no Linkage Group yokes a chamber to a Paired
+  one); and `paired_yoked_diff`, `cumulative_diff` and `breaking_point`.
+- **Generate plots**: the `ratio` module's four figures.
+
+The light figures and the Program timeline are drawn at 10-minute bins, and
+the Progressive Ratio cumulative table and curves at 1 minute, whatever the
+Analyze panel's *Bin size*. The buttons these items replaced (*Opto light QC
+table*, *Light explained by licks (QC)*, *Program timeline*, *Light summary
+CSV* and the rest) are gone, and their script actions remain:
+`opto_light_qc`, `plot_opto_light`, `plot_program_timeline` and
+`light_summary`. The script actions `run_qc`, `run_analysis` and `run_plots`
+run a panel's set minus `global.omit:`, as its button does.
 
 ## To confirm on the first real recording
 
 No recording from a 4.0.0 board existed when this was built. Everything above
 comes from the PyMCU and firmware source and a simulator pinned to the
 firmware's own `LEDControl.c` (`tests/v4_fixtures.py`, cross-checked by
-`tests/test_ledcontrol_crosscheck.py`). When the first bench recording exists,
-diff it against the fixtures and the loader:
+`tests/test_ledcontrol_crosscheck.py`). The first bench recording, a quiet
+one, has confirmed part of it (below). Diff each new bench recording against
+the fixtures and the loader:
 
 - The header is the 90 columns; every row has 90 fields; missing values are
   `NA`.
@@ -411,6 +555,13 @@ diff it against the fixtures and the loader:
 
 Then re-run the real Progressive Ratio dataset (generation 1) and confirm its
 outputs are unchanged apart from the deliberate changes in `CHANGELOG.md`.
+It was not on the machine the work was built on, so the check that
+generation-1 outputs are unchanged rests on the fixtures alone, and
+`tests/test_opto_real_dataset.py` skips without it. Check also whether its
+`Program.txt` fits the shipped ProgressiveRatio type, which expects
+ProgressiveRatio and FixedRatio, or needs a lab type that expects its
+closed-loop Training too (see
+[The light the Experiment Type expects](#the-light-the-experiment-type-expects)).
 
 **Confirmed since** (10/17/2026):
 
@@ -441,7 +592,8 @@ sent the instruction again, and the Paradigm state starts over).
 ### Bench checkpoint for the Paradigm analyses
 
 The rule checks, the family columns and their constants were calibrated on
-pyflic's simulator and on PyMCU's simulator only (the plan's "As built", S1).
+pyflic's simulator and on PyMCU's simulator only (stream S1 in the "As built"
+list of the Paradigm analyses plan, at 82aace9).
 On real recordings of each Paradigm type, confirm:
 
 - **One recording of each type**, ClosedLoop with and without `MaxOnMs`,
@@ -498,4 +650,20 @@ every Interval of the day would close it.
 - Fine mode (firmware 4.1.0, per-scan data). `ParadigmState.index` is the key a
   fine table would join on.
 - The firmware version: no file records it, which is why the generation is
-  inferred.
+  inferred. Nor does it record which of the two firmware 2.0.0 builds ran,
+  so generation 1 labels error bits 0x01 and 0x02 together.
+
+## Not built
+
+Left out of the firmware 4.0.0 work and the Paradigm analyses by decision:
+
+- **Acclimation as Facets outside Progressive Ratio.** Acclimation stays
+  columns (`AcclimationEndMin`, `AcclimationActivations`, `MainActivations`);
+  splitting every result at each chamber's own Acclimation end, as
+  Progressive Ratio's Training and Test do, was deferred.
+- **Lick microstructure under light**: bout structure within an Activation
+  against outside it.
+- **Analyses of their own for Circadian programs or for Mutual groups**,
+  beyond their Roles.
+- **Re-running a Paradigm offline** with other thresholds: it needs
+  fine-mode data.

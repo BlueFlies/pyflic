@@ -15,7 +15,9 @@ hidden in the signal, Light Events from a 5 Hz snapshot of the LEDs, the
 paradigm from which of five numbers were zero, and the firmware's own trigger
 by emulating it on the raw signal. The firmware now records what it decided,
 so pyflic reads the decisions and stops inferring them wherever the file
-carries them. The plan is `docs/v4-data-plan.md`; terms are in `CONTEXT.md`
+carries them. The plan was `docs/v4-data-plan.md`, removed once built (its
+text is at commit 82aace9, see [Removed plans](../README.md#removed-plans));
+terms are in `CONTEXT.md`
 (*Generation*, *Paradigm*, *Program Interval*, *Activation*, *Requirement* /
 *Progress*, *Firmware Event*, *Phase* / *Acclimation*, *Hold*).
 
