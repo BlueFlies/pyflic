@@ -176,12 +176,14 @@ ACTIONS: list[Action] = [
     Action(
         action="load",
         label="Load experiment",
-        blurb="Read DFM CSVs into memory for the rest of the script.",
+        blurb="Does nothing: the member is loaded before a script runs. Kept so "
+              "older scripts run unchanged.",
         icon="load", category=Category.LOAD, produces="none",
         params=[
             Param(key="parallel", label="Load DFMs in parallel", type="bool",
-                  note="Loads DFMs on a thread pool. Turn off for easier "
-                       "debugging on machines with slow disks.",
+                  note="Changes nothing: the member is already loaded. Parallel "
+                       "loading is on by default; turn it off with the Hub's "
+                       "Load DFMs in parallel option.",
                   default=None, inheritable=True),
             _START, _END,
         ],

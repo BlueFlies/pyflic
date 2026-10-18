@@ -6,18 +6,15 @@ These are the levers.
 
 ## Parallel loading
 
-```yaml
-- action: load
-  parallel: true
-```
-
 ```python
 exp = load_experiment_yaml(path, parallel=True)
 ```
 
-DFMs are loaded concurrently. It is on by default — in the loader, the Hub and a script's
-`load` step — and worth keeping on for any experiment with more than one device. Turn it off
-(`parallel: false`) only to debug a load, or on a machine with a slow disk.
+DFMs are loaded concurrently. It is on by default — in the loader and in the Hub's **Load
+DFMs in parallel** option — and worth keeping on for any experiment with more than one
+device. Turn it off (`parallel=False`, or untick the option) only to debug a load, or on a
+machine with a slow disk. A script's `load` step changes nothing: the member is loaded
+before the script runs, so its `parallel` is ignored.
 
 ## The disk cache
 

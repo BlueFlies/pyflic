@@ -71,6 +71,24 @@ def test_the_catalogue_offers_every_action_the_runner_runs():
     assert get_action("facet_csv").category == get_action("feeding_csv").category
 
 
+def test_the_load_steps_parallel_note_says_it_changes_nothing(tmp_path: Path):
+    """The member is loaded before a script runs, so `load` and its
+    `parallel` do nothing; the editor's note once offered to switch a thread
+    pool on and off."""
+    from types import SimpleNamespace
+
+    from pyflic.base.script_editor.actions import get_action
+    from pyflic.base.script_editor.runner import run_experiment_script
+
+    lines: list[str] = []
+    run_experiment_script(SimpleNamespace(analysis_dir=tmp_path),
+                          {"steps": [{"action": "load", "parallel": False}]},
+                          log=lines.append)
+    assert "Experiment already loaded." in lines
+    note = next(p.note for p in get_action("load").params if p.key == "parallel")
+    assert "Changes nothing" in note and "on by default" in note
+
+
 def test_an_experiment_action_in_a_project_script_is_rejected_by_name(tmp_path: Path):
     project = _make_project(tmp_path)
     problems = validate_project_script(
