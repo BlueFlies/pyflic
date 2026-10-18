@@ -309,7 +309,3 @@ Design rationale is recorded in
 (how it renders, and why the anchor code looks the way it does). Every other design
 decision is an ADR in [docs/adr/](docs/adr/), and [docs/README.md](docs/README.md) indexes
 the developer references, including where to read the plans removed once they were built.
-
-## License
-
-See [LICENSE](LICENSE) for details.
