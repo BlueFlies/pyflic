@@ -335,6 +335,34 @@ def test_an_item_the_data_cannot_answer_is_reported_with_its_reason(ran):
     assert sel.applies(sel.item(sel.PLOTS, "well_comparison"), ran["hedonic_g2"].exp)
 
 
+def test_the_hedonic_manifest_names_the_files_its_runs_write(ran):
+    """The Hedonic module once named a weighted_duration.csv nothing writes;
+    the weighted duration summary is treatment_means.csv."""
+    from pyflic.base.analysis_modules.hedonic import HEDONIC
+
+    hedonic = ran["hedonic_g2"]
+    manifest = hedonic.exp.experiment_type.output_manifest()
+    assert set(HEDONIC.outputs) == {"hedonic_feeding_plot.png", "treatment_means.csv"}
+    assert set(HEDONIC.outputs) <= set(manifest)
+    assert "weighted_duration.csv" not in manifest
+    for name in HEDONIC.outputs:
+        assert (hedonic.root / "analysis" / name).is_file(), name
+    table = pd.read_csv(hedonic.root / "analysis" / "treatment_means.csv")
+    assert list(table.columns) == [
+        "Treatment",
+        "MeanDurationA", "SemDurationA", "WeightedMeanDurationA", "WeightedSemDurationA",
+        "SampleSizeA",
+        "MeanDurationB", "SemDurationB", "WeightedMeanDurationB", "WeightedSemDurationB",
+        "SampleSizeB"]
+    ## The script step names the file it wrote, not the table.
+    from pyflic.base.script_editor.runner import run_experiment_script
+
+    lines: list[str] = []
+    run_experiment_script(hedonic.exp, {"steps": [{"action": "weighted_duration"}]},
+                          log=lines.append)
+    assert f"Wrote: {Path(hedonic.exp.analysis_dir) / 'treatment_means.csv'}" in lines
+
+
 def test_the_paired_yoked_difference_is_greyed_without_a_yoked_chamber(ran, monkeypatch):
     from pyflic.base.progressive_ratio_experiment import ProgressiveRatioExperiment
 

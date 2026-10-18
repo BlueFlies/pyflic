@@ -236,18 +236,20 @@ class HedonicFeedingExperiment(TwoWellExperiment):
         path: str | Path | None = None,
     ) -> pd.DataFrame:
         """
-        Compute weighted mean and weighted standard deviation of median bout
-        duration for each treatment, using event counts as weights.
+        Median bout duration at each well, by treatment: the plain mean over
+        chambers and the mean weighted by each chamber's events.
 
-        For each treatment the following are calculated per well:
+        For each treatment, per well (shown for A; B is the same with
+        ``MedDurationB`` and ``EventsB``):
 
-        - **WeightedMeanDurationA** — weighted mean of ``MedDurationA``
-          using ``EventsA`` as weights.
-        - **WeightedStdDurationA**  — weighted population std of ``MedDurationA``
-          using ``EventsA`` as weights.
-        - **WeightedMeanDurationB** / **WeightedStdDurationB** — same for Well B.
-        - **N** — number of chambers that contributed (rows with finite weights
-          and values for both wells).
+        - **MeanDurationA** — mean of ``MedDurationA`` over the chambers
+          that have one.
+        - **SemDurationA** — its standard error (sample std / √n; NaN for a
+          single chamber).
+        - **WeightedMeanDurationA** — mean of ``MedDurationA`` weighted by
+          ``EventsA``, over chambers with a value and positive events.
+        - **WeightedSemDurationA** — the weighted population std / √n.
+        - **SampleSizeA** — how many chambers the weighted figures use.
 
         Parameters
         ----------
@@ -255,13 +257,17 @@ class HedonicFeedingExperiment(TwoWellExperiment):
             Time window used to compute the feeding summary.
         transform_licks:
             Whether to apply lick transformation before computing the summary.
+        save:
+            Write the table as CSV (default ``True``).
+        path:
+            Where to write it; by default ``analysis/treatment_means.csv``.
 
         Returns
         -------
         pd.DataFrame
-            One row per treatment with columns ``Treatment``,
-            ``WeightedMeanDurationA``, ``WeightedStdDurationA``,
-            ``WeightedMeanDurationB``, ``WeightedStdDurationB``, ``N``.
+            One row per treatment with columns ``Treatment``, then
+            ``MeanDurationA``, ``SemDurationA``, ``WeightedMeanDurationA``,
+            ``WeightedSemDurationA``, ``SampleSizeA`` and the same five for B.
         """
         import numpy as np
 

@@ -209,7 +209,9 @@ def run_experiment_script(
             ctx.log(f"Binned rows: {len(df)}")
 
         elif action == "weighted_duration":
-            ctx.log(f"Wrote: {exp.weighted_duration_summary(save=True, range_minutes=rm)}")
+            ## It returns the table; the file it writes is this one.
+            exp.weighted_duration_summary(save=True, range_minutes=rm)
+            ctx.log(f"Wrote: {analysis_dir / 'treatment_means.csv'}")
 
         elif action == "plot_feeding_summary":
             fig = exp.plot_feeding_summary(range_minutes=rm)

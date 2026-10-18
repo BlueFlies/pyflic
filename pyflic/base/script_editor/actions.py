@@ -270,6 +270,8 @@ ACTIONS: list[Action] = [
         icon="weighted", category=Category.ANALYZE, produces="csv",
         requires="hedonic",
         params=[_START, _END],
+        notes="Writes analysis/treatment_means.csv: per treatment and well, the "
+              "chambers' median bout duration, plain and weighted by events.",
     ),
     Action(
         ## The action key stays ``tidy_export``: it is written into every
