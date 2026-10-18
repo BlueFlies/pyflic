@@ -993,9 +993,12 @@ _Avoid_: manual, documentation, the docs, USAGE.
   **Paradigms** present (ADR-0017), whatever the type.
 - "the docs" was ambiguous between `doc/` (user prose) and `docs/` (ADRs).
   Resolved: user-facing prose is now **help topics**, which live with the
-  shipped code; `docs/` holds decision records for developers and nothing
-  else. Long-form prose is a **guide**, assembled from topics rather than
-  written. Say **help topic**, **guide**, or **ADR**, never "the docs".
+  shipped code. `docs/` holds the user guides written for researchers
+  (Getting Started, the QC guide, the Progressive Ratio guide), developer
+  references, an index (`docs/README.md`) and the ADRs. Long-form prose in
+  the help window is a **guide**, assembled from topics rather than written.
+  Say **help topic**, **guide**, **developer reference** or **ADR**, never
+  "the docs".
 
 - The Progressive Ratio training flag was described as clearing on all four
   wells of a Chamber Group at once, but the first real dataset
