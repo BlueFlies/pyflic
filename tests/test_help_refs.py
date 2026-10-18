@@ -186,8 +186,8 @@ def test_hub_tile_help_map_resolves():
 
     mapping = AnalysisHubWindow._TILE_HELP
     assert mapping, "_TILE_HELP is empty — has it moved?"
-    extra = {**AnalysisHubWindow._CARD_HELP, **AnalysisHubWindow._TYPE_GROUP_HELP}
-    assert extra, "_CARD_HELP / _TYPE_GROUP_HELP are empty — have they moved?"
+    extra = {**AnalysisHubWindow._CARD_HELP, **AnalysisHubWindow._GROUP_HELP}
+    assert extra, "_CARD_HELP / _GROUP_HELP are empty — have they moved?"
 
     problems: list[str] = []
     for card_key, ref in [*mapping.items(), *extra.items()]:

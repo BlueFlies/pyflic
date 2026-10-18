@@ -40,7 +40,7 @@ import traceback
 from pathlib import Path
 from typing import Any, Callable
 
-from PyQt6.QtCore import QObject, QSize, Qt, QThread, pyqtSignal
+from PyQt6.QtCore import QObject, QSize, Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QBrush, QColor
 from PyQt6.QtWidgets import (
     QAbstractItemView,
@@ -73,6 +73,7 @@ from PyQt6.QtWidgets import (
 from . import batch as batch_mod
 from . import layout as layout_mod
 from . import project as project_mod
+from . import selections as sel
 from .gui_env import sanitize_input_method_environment
 from .light_summary import NO_TRAINING_INFORMATION
 from .light_summary import no_training_information as _no_training_information
@@ -106,20 +107,26 @@ TILE_SPECS: list[tuple[str, str, str, Category, int]] = [
 ]
 
 #: The Experiment sub-strip: compact, title-only subtiles for the tools that
-#: act on the loaded member.  Their panels are deliberately narrow — a column
-#: of buttons, and a button only needs its label.
+#: act on the loaded member.  Their panels are deliberately narrow.  QC,
+#: Analyze and Plots are a column of checkboxes over one button (ADR-0018),
+#: and a checkbox label cannot wrap, so their widths are set by the longest
+#: label beside a group's ``?``.
 ## QC before Analyze: checking the recording and deciding exclusions is what
 ## happens before the analysis that depends on them.
 SUBTILE_SPECS: list[tuple[str, str, str, Category, int]] = [
-    ("qc",      "QC",      "qc",      Category.QC,      310),
-    ("analyze", "Analyze", "analyze", Category.ANALYZE, 310),
-    ("plots",   "Plots",   "plots",   Category.PLOTS,   370),
+    ("qc",      "QC",      "qc",      Category.QC,      340),
+    ("analyze", "Analyze", "analyze", Category.ANALYZE, 340),
+    ("plots",   "Plots",   "plots",   Category.PLOTS,   380),
     ("scripts", "Scripts", "scripts", Category.SCRIPTS, 390),
     ("ai",      "AI",      "ai",      Category.AI,      300),
 ]
 
 #: The subtile keys, for "is this an experiment-level panel" checks.
 EXPERIMENT_SUBTILES = tuple(spec[0] for spec in SUBTILE_SPECS)
+
+#: What the selection panels were built for before their first build: not
+#: ``None``, which is "built with nothing loaded".
+_NOT_BUILT = object()
 
 
 # ---------------------------------------------------------------------------
@@ -203,6 +210,16 @@ class AnalysisHubWindow(QMainWindow):
         #: Whether the running task is one the suppress-tabs switch governs
         #: (a Batch Run).  Set by _start, read by _tabs_suppressed.
         self._suppress_tabs_task = False
+        #: The QC, Analyze and Plots panels' Selection (ADR-0018): the host
+        #: each set's group boxes are rebuilt into, and the checkbox of each
+        #: item offered (by kind and id) and the group boxes shown (by kind
+        #: and title) as the last rebuild made them.
+        self._selection_hosts: dict[str, QWidget] = {}
+        self._selection_boxes: dict[str, dict[str, QCheckBox]] = {}
+        self._selection_groups: dict[str, dict[str, CardGroup]] = {}
+        #: The member the panels were last built for; a sentinel until the
+        #: first build, so that one runs with nothing loaded too.
+        self._selection_member: Any = _NOT_BUILT
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -312,25 +329,31 @@ class AnalysisHubWindow(QMainWindow):
     _CARD_HELP: dict[tuple[str, str], str] = {
         ("project", "Experiments"): "concepts-project#blocked-members",
         ("project", "Analysis"): "app-hub#the-analysis-card",
+        ("qc", "View"): "app-qc-viewer",
     }
 
-    #: (tile key, Experiment Type key) → help topic, for the type-specific
-    #: groups of the Analyze, QC and Plots cards.
-    _TYPE_GROUP_HELP: dict[tuple[str, str], str] = {
-        ("analyze", "progressive_ratio"): "concepts-progressive-ratio#outputs",
-        ("qc", "optogenetics"): "concepts-optogenetics",
-        ("plots", "progressive_ratio"): "plots-catalog#progressive-ratio-plots",
-        ("plots", "hedonic"): "plots-catalog#hedonic-plots",
+    #: (set kind, group title) → help topic, for the group boxes of the QC,
+    #: Analyze and Plots panels: one per ``selections.groups(kind)``.  The
+    #: groups are rebuilt for each member, so their ``?`` is added then.
+    _GROUP_HELP: dict[tuple[str, str], str] = {
+        (sel.QC, "QC reports"): "plots-catalog#qc-plots",
+        (sel.QC, "Optogenetics"): "concepts-optogenetics",
+        (sel.QC, "Progressive Ratio"): "concepts-progressive-ratio#light-qc",
+        (sel.ANALYSES, "Analyses"): "app-hub#analyze-panel",
+        (sel.ANALYSES, "Optogenetics"): "concepts-optogenetics#the-light-table",
+        (sel.ANALYSES, "Progressive Ratio"): "concepts-progressive-ratio#outputs",
+        (sel.ANALYSES, "Hedonic"): "concepts-experiment-types#hedonic",
+        (sel.ANALYSES, "Report"): "reports#the-experiment-report",
+        (sel.PLOTS, "Figures"): "plots-catalog#summary-plots",
+        (sel.PLOTS, "Chosen metric"): "plots-catalog#binned-metric-by-treatment",
+        (sel.PLOTS, "Progressive Ratio"): "plots-catalog#progressive-ratio-plots",
+        (sel.PLOTS, "Hedonic"): "plots-catalog#hedonic-plots",
     }
-
-    def _type_groups(self, key: str) -> dict[str, CardGroup]:
-        """The Experiment-Type groups on the *key* tile's card."""
-        return {"analyze": self._type_analyze_groups, "qc": self._type_qc_groups,
-                "plots": self._type_plot_groups}[key]
 
     def _install_panel_help(self) -> None:
-        """Put a ``?`` in each panel's card title rows and type groups, one
-        after the dock's clear buttons, and bind F1.
+        """Put a ``?`` in each panel's card title rows, one after the dock's
+        clear buttons, and bind F1.  The selection panels' group boxes get
+        theirs as they are built (:meth:`_fill_selection`).
 
         Imported here rather than at module scope so a failure in the help
         package degrades to a Hub without help buttons instead of no Hub.
@@ -347,8 +370,6 @@ class AnalysisHubWindow(QMainWindow):
                 card_ref = ref if i == 0 else self._CARD_HELP.get((key, card.title()))
                 if card_ref:
                     card.add_title_widget(HelpButton(card_ref, card))
-        for (key, requires), ref in self._TYPE_GROUP_HELP.items():
-            self._type_groups(key)[requires].add_title_widget(HelpButton(ref))
         ## General help, for when no panel is open: the dock's corner, after
         ## Clear Errors.  The first topic in reading order is the way in.
         self.dock.add_corner_widget(HelpButton(
@@ -696,6 +717,13 @@ class AnalysisHubWindow(QMainWindow):
             button = ActionButton(label, Category.NEUTRAL, icon_name)
             button.clicked.connect(handler)
             buttons.append(button)
+        ## By the user's choice Analyze all keeps Basic analysis and does not
+        ## read the Selection (ADR-0018), so the tooltip says so: otherwise
+        ## the QC, Analyze and Plots panels' ticks look as if they reach it.
+        buttons[0].setToolTip(
+            "Run each member's QC reports, Basic analysis and experiment "
+            "report, as before.  It does not read the QC, Analyze and Plots "
+            "panels' ticks, and it removes no earlier output.")
         self.view_reports_btn = ActionButton("View reports", Category.NEUTRAL,
                                              "report")
         self.view_reports_btn.setToolTip(
@@ -772,76 +800,104 @@ class AnalysisHubWindow(QMainWindow):
         ## add_card force-shows reparented cards; this one starts hidden.
         card.setVisible(False)
 
+    # ---- the QC, Analyze and Plots panels: a Selection over one button --
+    #
+    # Each panel is a checkbox per item of its set (the QC Set, the Analysis
+    # Set, the Plot Set) in a group box per ``selections.groups(kind)``, over
+    # the one button that runs them (ADR-0018).  The ticks are the config's
+    # ``global.omit:``, so what a click runs is what a script's run_qc,
+    # run_analysis or run_plots step runs.  The single-item actions stay the
+    # script vocabulary; as buttons they were two dozen ways to run one
+    # analysis piecemeal.  The groups depend on the member, so the builders
+    # below make only what stays (the hosts, the Bin size box, the metric
+    # menu, the buttons) and _fill_selection makes the groups for each
+    # member.
+
+    @staticmethod
+    def _muted(text: str) -> QLabel:
+        """A quiet, wrapping line: a note on the controls around it."""
+        label = QLabel(text)
+        label.setWordWrap(True)
+        label.setStyleSheet("color: palette(mid); font-style: italic;")
+        return label
+
+    def _selection_host(self, kind: str, card: Card) -> None:
+        """The widget a set's group boxes are rebuilt into, on *card*."""
+        host = QWidget()
+        layout = QVBoxLayout(host)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+        card.add_body(host)
+        self._selection_hosts[kind] = host
+
     def _build_analyze_panel(self) -> None:
+        """The Analysis Set over **Run analysis**, under the Bin size box."""
         card = Card("Analyze", Category.ANALYZE, icon_name="analyze",
-                    subtitle="Actions on the loaded member.")
-        grid = QVBoxLayout()
-        for label, icon_name, action in (
-            ("Basic analysis", "basic", {"action": "basic_analysis"}),
-            ("Feeding summary CSV", "csv", {"action": "feeding_csv"}),
-            ("Faceted summary CSV", "csv", {"action": "facet_csv"}),
-            ("Binned CSV", "binned", {"action": "binned_csv"}),
-            ("Event statistics", "tidy", {"action": "tidy_export"}),
-            ("PDF report", "pdf", {"action": "pdf_report"}),
-        ):
-            button = ActionButton(label, Category.ANALYZE, icon_name)
-            button.clicked.connect(
-                lambda _c=False, s=action: self._run_experiment_action(s))
-            grid.addWidget(button)
-        card.add_body(grid)
-
-        ## Experiment-Type-specific analyses, shown only while a member of that
-        ## type is loaded — the same gating, and the same keys, as the Plots
-        ## card's type groups.  (The type's QC lives on the QC card.)
-        self._type_analyze_groups: dict[str, CardGroup] = {}
-        for requires, title, buttons in (
-            ("progressive_ratio", "Progressive Ratio only",
-             (("Paired − yoked difference CSV", "csv", "paired_yoked_diff"),
-              ("Breaking point CSV", "csv", "breaking_point"))),
-        ):
-            group = CardGroup(title)
-            for label, icon_name, action in buttons:
-                button = ActionButton(label, Category.ANALYZE, icon_name)
-                button.clicked.connect(
-                    lambda _c=False, a=action: self._run_experiment_action({"action": a}))
-                group.add(button)
-            group.setVisible(False)
-            card.add_body(group)
-            self._type_analyze_groups[requires] = group
-
+                    subtitle="Tick what Run analysis writes into analysis/.  "
+                             "The ticks are configuration: a script's "
+                             "run_analysis leaves out the same.")
         row = QHBoxLayout()
         row.addWidget(QLabel("Bin size (min):"))
         self.spin_binsize = QDoubleSpinBox()
         self.spin_binsize.setRange(0.5, 600.0)
         self.spin_binsize.setValue(30.0)
+        self.spin_binsize.setToolTip(
+            "The bin of the binned summary, of the experiment report's time "
+            "courses, and of the Plots panel's Binned time course.  The light "
+            "QC figures, the Program timeline and the Progressive Ratio "
+            "curves keep their own bins.")
         row.addWidget(self.spin_binsize)
         row.addStretch(1)
         card.add_body(row)
+        card.add_body(self._muted(
+            "Used by the binned summary, the report and the Plots panel's "
+            "Binned time course only."))
+        ## The core has no checkbox, because every other item reads it; one
+        ## line says so, or a missing feeding_summary box reads as a fault.
+        card.add_body(self._muted(
+            "The core always runs: the feeding summary, its Facet variant, "
+            "summary.txt and the removed chambers."))
+        self._selection_host(sel.ANALYSES, card)
+        run = ActionButton(sel.RUN_NAMES[sel.ANALYSES], Category.ANALYZE,
+                           "basic", primary=True)
+        run.setToolTip(
+            "Write the core into analysis/, then every ticked analysis, the "
+            "report last.  summary.txt and the log list what was left out "
+            "and what does not apply; an item left out keeps the files an "
+            "earlier run wrote.")
+        run.clicked.connect(lambda: self._run_selection(sel.ANALYSES))
+        card.add_body(run)
+        self.run_analysis_btn = run
         self.panels["analyze"].add_card(card)
 
     def _build_qc_panel(self) -> None:
-        """Everything QC for the loaded member, in the order the work
-        happens: write the reports, inspect them, decide exclusions."""
+        """The QC Set over **Run QC**, then the View card: the windows and
+        look-ups that run nothing."""
         card = Card("QC", Category.QC, icon_name="qc",
-                    subtitle="Per-DFM quality control for the loaded member: "
-                             "integrity, bleeding, and the raw / baselined / "
-                             "cumulative-licks signal plots.")
+                    subtitle="Tick what Run QC writes into qc/.  The ticks "
+                             "are configuration: a script's run_qc leaves out "
+                             "the same.")
+        self._selection_host(sel.QC, card)
+        run = ActionButton(sel.RUN_NAMES[sel.QC], Category.QC, "qc",
+                           primary=True)
+        run.setToolTip(
+            "Write every ticked QC item into qc/ (the Progressive Ratio light "
+            "QC into analysis/).  The log lists what was left out and what "
+            "does not apply; an item left out keeps the files an earlier run "
+            "wrote.")
+        run.clicked.connect(lambda: self._run_selection(sel.QC))
+        card.add_body(run)
+        self.run_qc_btn = run
+        self.panels["qc"].add_card(card)
+
+        view = Card("View", Category.QC, icon_name="plot",
+                    subtitle="Look at what QC wrote, and decide exclusions.")
         ## Not "which member is loaded" — the Experiment tile this panel
         ## hangs from already says that, and so does the status strip.  Only
         ## what is true of THIS card: whether there is anything to look at.
         self.qc_hint = QLabel("")
         self.qc_hint.setWordWrap(True)
-        card.add_body(self.qc_hint)
-
-        run_btn = ActionButton("QC reports", Category.QC, "qc", primary=True)
-        run_btn.setToolTip(
-            "Write the QC bundle into qc/: integrity report, data breaks, "
-            "simultaneous-feeding and bleeding matrices (two-well), and the "
-            "Raw Signal, Baselined, and Cumulative Licks plots.  Basic "
-            "analysis deliberately skips this slow half.")
-        run_btn.clicked.connect(
-            lambda: self._run_experiment_action({"action": "run_qc"}))
-        card.add_body(run_btn)
+        view.add_body(self.qc_hint)
 
         viewer_btn = ActionButton("Open QC Viewer", Category.QC, "qc")
         viewer_btn.setToolTip(
@@ -849,163 +905,260 @@ class AnalysisHubWindow(QMainWindow):
             "bleeding tables, the signal plots, and per-chamber exclusions "
             "saved to remove_chambers.csv.")
         viewer_btn.clicked.connect(self._open_qc_viewer)
-        card.add_body(viewer_btn)
+        view.add_body(viewer_btn)
 
         plots_btn = ActionButton("View QC plots", Category.QC, "plot")
         plots_btn.setToolTip(
-            "Open the saved Raw Signal, Baselined, and Cumulative Licks "
-            "plots — one tab per DFM and kind — in the output area.")
+            "Open the saved Raw Signal, Baselined and Cumulative Licks plots, "
+            "and the light QC's figure and the Program timeline when a run "
+            "wrote them — one tab per DFM and kind — in the output area.")
         plots_btn.clicked.connect(self._view_qc_plots)
-        card.add_body(plots_btn)
+        view.add_body(plots_btn)
 
         folder_btn = ActionButton("Open qc folder", Category.TOOLS, "open")
         folder_btn.setToolTip(
             "Open the member's qc/ folder in the system file browser.")
         folder_btn.clicked.connect(self._open_qc_folder)
-        card.add_body(folder_btn)
-
-        ## The light QC, in one group: every optogenetic member's (was the light
-        ## where the licks were?), shown whenever the member is optogenetic,
-        ## and Progressive Ratio's own (did the paired fly earn its light?),
-        ## shown for that type.
-        self._type_qc_groups: dict[str, CardGroup] = {}
-        opto = CardGroup("Optogenetics")
-        self._opto_qc_buttons: list[ActionButton] = []
-        for label, icon_name, run, tip in (
-            ("Opto light QC table", "qc",
-             lambda: self._run_experiment_action({"action": "opto_light_qc"}),
-             "Per linkage group: was the light where the licks were?  Writes "
-             "qc/opto/ (the verdicts, the intervals, every light event and the "
-             "Program.txt as read) and logs every flagged group.  Any "
-             "Experiment Type; a failed group's chambers leave the analysis only "
-             "when exclude_failed_opto_chambers is on."),
-            ("Light explained by licks (QC)", "plot",
-             lambda: self._run_plot_action("plot_opto_light"),
-             "Per DFM: each linkage group's lit time, explained by a trigger-well "
-             "lick or touch and unexplained, and the time the emulated firmware "
-             "trigger saw contact that pyflic did not."),
-            ("Program timeline", "plot",
-             lambda: self._run_plot_action("plot_program_timeline"),
-             "Per DFM: the Program Intervals by Paradigm, and for each well its "
-             "Acclimation, its Activations and the light it received.  Writes "
-             "qc/program/; needs firmware 4.0.0 data or data/Program.txt."),
-            ("Light summary CSV", "csv",
-             lambda: self._run_experiment_action({"action": "light_summary"}),
-             "The light table: per chamber (light_summary.csv) and per well "
-             "(light_wells.csv), lit time, Activations, Acclimation, Firmware Events "
-             "and the Paradigm type's own measures, with the Treatment, factor and "
-             "Role columns, written into analysis/ (and per Facet when faceted).  "
-             "Basic analysis writes it too."),
-        ):
-            button = ActionButton(label, Category.QC, icon_name)
-            button.setToolTip(tip)
-            button.clicked.connect(lambda _c=False, r=run: r())
-            opto.add(button)
-            self._opto_qc_buttons.append(button)
-        self._pr_qc_buttons: list[ActionButton] = []
-        for label, icon_name, run, tip in (
-            ("Light QC table", "qc",
-             lambda: self._run_experiment_action({"action": "pr_light_qc"}),
-             "Per chamber group: did the paired fly earn its light?  Writes "
-             "pr_light_qc.csv and pr_light_events.csv and logs every flagged "
-             "group.  A failed group leaves the analysis at the next Basic "
-             "analysis unless exclude_failed_pr_groups is off."),
-            ("Licks per light event (QC)", "plot",
-             lambda: self._run_plot_action("plot_pr_light_events"),
-             "Per DFM: the sucrose licks credited to each Test light event.  A "
-             "working progressive ratio climbs; hollow red rings are lick-free "
-             "light events."),
-            ("Sucrose Well resting level (QC)", "plot",
-             lambda: self._run_plot_action("plot_pr_resting_level"),
-             "Per DFM: the paired Sucrose Well's per-minute median raw signal "
-             "against the DFM's other Sucrose Wells, light onsets as a rug."),
-        ):
-            button = ActionButton(label, Category.QC, icon_name)
-            button.setToolTip(tip)
-            button.clicked.connect(lambda _c=False, r=run: r())
-            opto.add(button)
-            self._pr_qc_buttons.append(button)
-        opto.setVisible(False)
-        card.add_body(opto)
-        self._type_qc_groups["optogenetics"] = opto
-        self.panels["qc"].add_card(card)
+        view.add_body(folder_btn)
+        self.qc_view_card = view
+        self.panels["qc"].add_card(view)
 
     def _build_plots_panel(self) -> None:
-        """Quick figures for the loaded member — and only that.
+        """The Plot Set over **Generate plots** — quick figures for the loaded
+        member, and only that.
 
         Publication figures are Project-level, so the Plot editor and the
         headless render live on the Project panel's Analysis card instead
-        (mirroring PyTrackingAnalysis).
-
-        The card is three groups, because its buttons are three kinds of
-        thing and a flat list said they were one.  The Metric dropdown steers
-        exactly two of them, so it lives *inside* their group rather than
-        above the lot; the figures that fix their own metrics sit apart; and
-        anything an Experiment Type adds is grouped under that type's name and
-        shown only while such a member is loaded.
+        (mirroring PyTrackingAnalysis).  The Metric menu steers exactly the
+        *Chosen metric* group, so it is rebuilt into that group rather than
+        sitting above the lot; it outlives the rebuilds, so the choice stays.
         """
         card = Card("Plots", Category.PLOTS, icon_name="plots",
-                    subtitle="Quick figures for the loaded member.")
-        ## The one note on the card: which buttons the dropdown reaches is
-        ## the whole point of the grouping, and a box cannot say "only".
-        metric_group = CardGroup(
-            "Chosen metric", note="Applies to these two figures only.")
-        row = QHBoxLayout()
+                    subtitle="Tick the figures Generate plots saves into "
+                             "analysis/ and opens in tabs.  The ticks are "
+                             "configuration, as on QC and Analyze.")
+        self._metric_row = QWidget()
+        row = QHBoxLayout(self._metric_row)
+        row.setContentsMargins(0, 0, 0, 0)
         row.addWidget(QLabel("Metric:"))
         self.plot_metric = QComboBox()
-        self.plot_metric.setMinimumWidth(180)
+        self.plot_metric.setMinimumWidth(150)
+        self.plot_metric.setToolTip(
+            "The metric of the Binned time course and the Dot plot.  The "
+            "other figures draw their own metrics.")
         row.addWidget(self.plot_metric, 1)
-        metric_group.add(row)
-        for label, icon_name, action in (
-            ("Binned time course", "binned", "plot_binned"),
-            ("Dot plot", "dot", "plot_dot"),
-        ):
-            metric_group.add(self._plot_button(label, icon_name, action))
-        card.add_body(metric_group)
-
-        fixed_group = CardGroup("Standard figures")
-        for label, icon_name, action in (
-            ("Feeding summary", "feeding", "plot_feeding_summary"),
-            ("Well A vs B", "well", "plot_well_comparison"),
-        ):
-            button = self._plot_button(label, icon_name, action)
-            fixed_group.add(button)
-            if action == "plot_well_comparison":
-                ## Two-well only — a single-well member has no B to compare.
-                self._two_well_plot_buttons = [button]
-        card.add_body(fixed_group)
-
-        ## Experiment-Type-specific figures.  One group per type, titled with
-        ## the type, hidden unless a member of that type is loaded — so the
-        ## card never offers a button whose only possible answer is "this
-        ## action requires a different Experiment Type".
-        self._type_plot_groups: dict[str, CardGroup] = {}
-        for requires, title, buttons in (
-            ("progressive_ratio", "Progressive Ratio only",
-             (("Cumulative difference curve", "plot",
-               "plot_pr_cumulative_diff"),
-              ("Training-aligned traces (QC)", "plot",
-               "plot_pr_cumulative_licks"),
-              ("Still-responding curve", "plot", "plot_pr_still_responding"),
-              ("Breaking-point plots", "plot", "plot_breaking_point"))),
-            ("hedonic", "Hedonic only",
-             (("Hedonic feeding plot", "feeding", "plot_hedonic"),)),
-        ):
-            group = CardGroup(title)
-            for label, icon_name, action in buttons:
-                group.add(self._plot_button(label, icon_name, action))
-            group.setVisible(False)
-            card.add_body(group)
-            self._type_plot_groups[requires] = group
+        self._selection_host(sel.PLOTS, card)
+        run = ActionButton(sel.RUN_NAMES[sel.PLOTS], Category.PLOTS, "plot",
+                           primary=True)
+        run.setToolTip(
+            "Save every ticked figure into analysis/ and open it in a tab, "
+            "replacing the tab of the same title.  The log lists what was "
+            "left out and what does not apply.")
+        run.clicked.connect(lambda: self._run_selection(sel.PLOTS))
+        card.add_body(run)
+        self.generate_plots_btn = run
         self.panels["plots"].add_card(card)
 
-    def _plot_button(self, label: str, icon_name: str,
-                     action: str) -> ActionButton:
-        """One Plots-card button, wired to its plot action."""
-        button = ActionButton(label, Category.PLOTS, icon_name)
-        button.clicked.connect(
-            lambda _c=False, a=action: self._run_plot_action(a))
-        return button
+    def _refresh_selection(self, *, force: bool = False) -> None:
+        """Rebuild the three panels' groups when the loaded member changes:
+        a load, an unload or a reload, each a new experiment object.  Not
+        on every refresh, which runs after every task and every Batch
+        checkbox: the boxes already show what a tick wrote."""
+        if force or self.experiment is not self._selection_member:
+            self._rebuild_selection()
+
+    def _rebuild_selection(self, kind: str | None = None) -> None:
+        """Rebuild the group boxes of *kind*'s panel, or of all three."""
+        exp = self.experiment
+        self._selection_member = exp
+        for each in (kind,) if kind is not None else sel.OMIT_KINDS:
+            self._fill_selection(each, exp)
+
+    def _fill_selection(self, kind: str, exp) -> None:
+        """One panel's group boxes for *exp*: a box per item it can have,
+        ticked unless the Selection leaves it out, greyed with the reason
+        where the data cannot answer it.  An item the member cannot have
+        is not offered, and a group left empty is not shown."""
+        host = self._selection_hosts[kind]
+        layout = host.layout()
+        if kind == sel.PLOTS:
+            ## The metric menu outlives the group it sits in.
+            self._metric_row.setParent(None)
+        while layout.count():
+            entry = layout.takeAt(0)
+            widget = entry.widget()
+            if widget is not None:
+                widget.setParent(None)
+                widget.deleteLater()
+        boxes: dict[str, QCheckBox] = {}
+        groups: dict[str, CardGroup] = {}
+        self._selection_boxes[kind] = boxes
+        self._selection_groups[kind] = groups
+        if exp is None:
+            layout.addWidget(self._muted(
+                "Load a member to see what "
+                f"{sel.RUN_NAMES[kind]} can write for it."))
+            return
+
+        try:
+            left_out = sel.omitted(exp, kind)
+        except Exception:  # noqa: BLE001 - a status display must not fail
+            left_out = frozenset()
+        not_offered: list[tuple[str, list[tuple[sel.Item, str]], bool]] = []
+        for title in sel.groups(kind):
+            offered: list[sel.Item] = []
+            hidden: list[tuple[sel.Item, str]] = []
+            for item in (i for i in sel.items(kind) if i.group == title):
+                why = self._not_applicable(item, exp)
+                if why is None:
+                    offered.append(item)
+                else:
+                    hidden.append((item, why))
+            if hidden:
+                not_offered.append((title, hidden, not offered))
+            if not offered:
+                continue
+            group = CardGroup(title)
+            if kind == sel.PLOTS and title == "Chosen metric":
+                group.add(self._metric_row)
+                self._metric_row.show()
+            for item in offered:
+                box = self._selection_box(kind, item, exp,
+                                          checked=item.id not in left_out)
+                group.add(box)
+                boxes[item.id] = box
+            self._add_group_help(kind, title, group)
+            layout.addWidget(group)
+            groups[title] = group
+        self._add_not_offered(layout, not_offered)
+        self._settle_geometry(host)
+
+    @staticmethod
+    def _settle_geometry(widget: QWidget) -> None:
+        """Drop the size hints cached above *widget*, up to its panel.
+
+        A panel is hidden while its groups are rebuilt, and a hidden widget's
+        layout never re-runs, so each ancestor kept the hint of the member
+        before: the panel opened at that member's height, the space spread
+        through the cards.  ``activate`` re-runs a layout and its sub-layouts
+        (a Card's body is one, which ``invalidate`` alone leaves cached), and
+        ``updateGeometry`` drops the hint the parent's layout cached.
+        """
+        while widget is not None and not isinstance(widget, TilePanel):
+            layout = widget.layout()
+            if layout is not None:
+                layout.invalidate()
+                layout.activate()
+            widget.updateGeometry()
+            widget = widget.parentWidget()
+
+    @staticmethod
+    def _not_applicable(item: sel.Item, exp) -> str | None:
+        try:
+            return sel.not_applicable_reason(item, exp)
+        except Exception as err:  # noqa: BLE001 - a status display must not fail
+            return f"could not be checked ({err})"
+
+    def _selection_box(self, kind: str, item: sel.Item, exp, *,
+                       checked: bool) -> QCheckBox:
+        """One item: ticked = included in every run."""
+        box = QCheckBox(item.label)
+        box.setChecked(checked)
+        tip = item.caption
+        try:
+            why = sel.unavailable(item, exp)
+        except Exception as err:  # noqa: BLE001 - a status display must not fail
+            why = f"could not be checked ({err})"
+        if why:
+            ## The design allows it and the data cannot answer it: greyed
+            ## where it would be ticked, with the reason, so a run that
+            ## writes nothing for it is not a surprise.
+            box.setEnabled(False)
+            tip += f"\n\nNot available for this member: {why}."
+        box.setToolTip(tip)
+        box.toggled.connect(
+            lambda on, k=kind, i=item: self._set_included(k, i, on))
+        return box
+
+    def _add_group_help(self, kind: str, title: str, group: CardGroup) -> None:
+        ref = self._GROUP_HELP.get((kind, title))
+        if ref is None:
+            return
+        try:
+            from pyflic.help.button import HelpButton
+        except Exception:  # noqa: BLE001 - no help package, no help button
+            return
+        group.add_title_widget(HelpButton(ref))
+
+    def _add_not_offered(self, layout,
+                         not_offered: list[tuple[str, list[tuple[sel.Item, str]], bool]],
+                         ) -> None:
+        """One quiet line, so a missing box reads as a property of the member
+        rather than a fault: what is not offered, and why (in its tooltip).
+        A group none of whose items is offered (*whole*) is named as the
+        group."""
+        if not not_offered:
+            return
+        names: list[str] = []
+        by_reason: dict[str, list[str]] = {}
+        for title, hidden, whole in not_offered:
+            names += [title] if whole else [i.label for i, _why in hidden]
+            for item, why in hidden:
+                by_reason.setdefault(why, []).append(item.label)
+        note = self._muted("Not offered for this member: " + ", ".join(names) + ".")
+        note.setToolTip("\n".join(f"{', '.join(labels)}: {why}."
+                                  for why, labels in by_reason.items()))
+        layout.addWidget(note)
+
+    def _set_included(self, kind: str, item: sel.Item, included: bool) -> None:
+        """Write a tick to the Selection at once, and say where."""
+        exp = self.experiment
+        if exp is None:
+            return
+        try:
+            path = sel.set_included(exp, kind, item.id, included,
+                                    project=self.project)
+        except Exception as err:  # noqa: BLE001 - a message, not a traceback
+            self._log_issue(f"[selection] {item.label}: not saved — {err}")
+            QMessageBox.warning(self, "Selection not saved", str(err))
+            ## The box shows a choice nothing recorded; rebuild it from the
+            ## Selection.  Deferred: this runs inside the box's own toggled
+            ## signal, and the rebuild deletes the box.
+            QTimer.singleShot(0, lambda k=kind: self._rebuild_selection(k))
+            return
+        self.log.append_line(self._selection_line(kind, item, included, path))
+
+    def _selection_line(self, kind: str, item: sel.Item, included: bool,
+                        path: Path) -> str:
+        """The log line for one tick: the item, the choice and the file."""
+        choice = "included in" if included else "left out of"
+        if path.name == project_mod.PROJECT_FILENAME:
+            ## A Member's Selection is its Project's: say so, or unticking
+            ## a box on one member looks like it touched only that one.
+            project = self.project.name if self.project is not None \
+                else path.parent.name
+            scope = (f"every member's runs in Project {project}, not only "
+                     f"{self.experiment_name}'s")
+            key = f"design.global.{sel.OMIT_KEY}.{kind}"
+        else:
+            scope = f"every run of {self.experiment_name}"
+            key = f"global.{sel.OMIT_KEY}.{kind}"
+        return f"[selection] {item.label}: {choice} {scope} ({key} in {path})"
+
+    def _run_selection(self, kind: str) -> None:
+        """Run QC, Run analysis or Generate plots: the script action of the
+        same name, so a click and a script's step write the same files."""
+        if kind == sel.QC:
+            step: dict[str, Any] = {"action": "run_qc"}
+        elif kind == sel.ANALYSES:
+            step = {"action": "run_analysis",
+                    "binsize": self.spin_binsize.value()}
+        else:
+            step = {"action": "run_plots",
+                    "metric": self.plot_metric.currentData() or "Licks",
+                    "binsize": self.spin_binsize.value()}
+        self._run_experiment_action(step, label=sel.RUN_NAMES[kind],
+                                    replace_tabs=kind == sel.PLOTS)
 
     def _build_scripts_panel(self) -> None:
         """The **member** script level, and only that.
@@ -1791,7 +1944,9 @@ class AnalysisHubWindow(QMainWindow):
                     and getattr(self, "chk_suppress_tabs", None)
                     and self.chk_suppress_tabs.isChecked())
 
-    def _show_figures(self, result) -> None:
+    def _show_figures(self, result, *, replace: bool = False) -> None:
+        """Open each ``(title, figure)`` of *result* as a tab; with *replace*,
+        in the tab already carrying that title."""
         if not isinstance(result, list):
             return
         if self._tabs_suppressed():
@@ -1809,7 +1964,8 @@ class AnalysisHubWindow(QMainWindow):
             if isinstance(entry, tuple) and len(entry) == 2:
                 title, figure = entry
                 try:
-                    self.dock.add_figure(str(title), figure)
+                    self.dock.add_figure(str(title), figure,
+                                         replace_existing=replace)
                 except Exception as err:  # noqa: BLE001
                     self._log_issue(f"could not show '{title}': {err}")
 
@@ -1823,7 +1979,14 @@ class AnalysisHubWindow(QMainWindow):
             return False
         return True
 
-    def _run_experiment_action(self, step: dict) -> None:
+    def _run_experiment_action(self, step: dict, *, label: str | None = None,
+                               replace_tabs: bool = False) -> None:
+        """Run one script step on the loaded member in the worker.
+
+        *replace_tabs* opens each returned figure in the tab of the same
+        title, if one is open, rather than beside it: Generate plots run
+        twice should not leave two of every figure.
+        """
         if not self._require_experiment():
             return
         from .script_editor.runner import ScriptContext, run_experiment_script
@@ -1835,22 +1998,13 @@ class AnalysisHubWindow(QMainWindow):
         def task():
             return run_experiment_script(exp, script, context=context)
 
-        self._start(task, step["action"])
+        on_done = None
+        if replace_tabs:
+            def on_done(result):
+                self._show_figures(result, replace=True)
+                self.refresh()
 
-    def _run_plot_action(self, action: str) -> None:
-        if not self._require_experiment():
-            return
-        step = {"action": action}
-        if action in ("plot_binned", "plot_dot"):
-            metric = self.plot_metric.currentData()
-            if metric:
-                step["metric"] = metric
-        if action in ("plot_pr_cumulative_diff", "plot_pr_cumulative_licks",
-                      "plot_opto_light", "plot_program_timeline"):
-            ## These read the bin from the step, not the context, so a script
-            ## keeps its own default; from the Hub the spinbox rules.
-            step["binsize"] = self.spin_binsize.value()
-        self._run_experiment_action(step)
+        self._start(task, label or step["action"], on_done)
 
     def _run_experiment_script(self) -> None:
         if not self._require_experiment():
@@ -2563,7 +2717,7 @@ class AnalysisHubWindow(QMainWindow):
         else:
             QMessageBox.information(
                 self, "No QC plots",
-                "No QC plots on disk yet — run 'QC reports' first.")
+                "No QC plots on disk yet — press Run QC first.")
 
     def _open_qc_folder(self) -> None:
         if not self._require_experiment():
@@ -2572,7 +2726,7 @@ class AnalysisHubWindow(QMainWindow):
         if not qc_dir.is_dir():
             QMessageBox.information(
                 self, "No QC folder",
-                "This member has no qc/ folder yet — run 'QC reports' "
+                "This member has no qc/ folder yet — press Run QC "
                 "first.")
             return
         self._open_externally(qc_dir)
@@ -3067,10 +3221,7 @@ class AnalysisHubWindow(QMainWindow):
             for tile_key in ("analyze", "qc", "plots"):
                 self.tiles[tile_key].set_summary(["no member loaded", ""])
             self.plot_metric.clear()
-            for group in (*getattr(self, "_type_plot_groups", {}).values(),
-                          *getattr(self, "_type_analyze_groups", {}).values(),
-                          *getattr(self, "_type_qc_groups", {}).values()):
-                group.setVisible(False)
+            self._refresh_selection()
             self.experiment_script.clear()
             self.scripts_hint.setText(
                 "No member is loaded — Experiment Scripts run on one.  "
@@ -3089,7 +3240,7 @@ class AnalysisHubWindow(QMainWindow):
         qc_on_disk = qc_dir is not None and qc_dir.is_dir()
         self.qc_hint.setText(
             "" if qc_on_disk else
-            "No QC reports on disk yet; 'QC reports' writes them.")
+            "No QC reports on disk yet; Run QC writes them.")
         self.tiles["qc"].set_summary(
             [str(self.experiment_name),
              "reports on disk" if qc_on_disk else "no reports yet"])
@@ -3100,35 +3251,6 @@ class AnalysisHubWindow(QMainWindow):
         self.tiles["plots"].set_summary(
             [str(self.experiment_name),
              f"{facets} facet(s)" if facets else "no facets"])
-        ## Type-specific plot groups, keyed by the same ``requires`` string
-        ## the Script Editor's action catalogue gates on — one spelling of
-        ## "this belongs to that Experiment Type", not two.
-        from .script_editor.actions import requires_key_for
-
-        active = requires_key_for(type_name)
-        for key, group in (*getattr(self, "_type_plot_groups", {}).items(),
-                           *getattr(self, "_type_analyze_groups", {}).items(),
-                           *getattr(self, "_type_qc_groups", {}).items()):
-            group.setVisible(key == active)
-        ## The Optogenetics QC group follows the member, not the type: the
-        ## light QC is every optogenetic experiment's, and Progressive Ratio's
-        ## own light checks sit in it for that type.
-        opto_group = getattr(self, "_type_qc_groups", {}).get("optogenetics")
-        if opto_group is not None:
-            try:
-                optogenetic = bool(getattr(exp, "is_optogenetic", False))
-            except Exception:  # noqa: BLE001 - a status display must not fail
-                optogenetic = False
-            is_pr = active == "progressive_ratio"
-            opto_group.setVisible(optogenetic or is_pr)
-            for button in getattr(self, "_opto_qc_buttons", []):
-                button.setVisible(optogenetic)
-            for button in getattr(self, "_pr_qc_buttons", []):
-                button.setVisible(is_pr)
-            ## Its help button sits beside the first button still shown.
-            opto_group.reflow_title_widget()
-        for button in getattr(self, "_two_well_plot_buttons", []):
-            button.setVisible(layout != "single_well")
 
         from .metrics import binned_metrics
 
@@ -3140,6 +3262,9 @@ class AnalysisHubWindow(QMainWindow):
             index = self.plot_metric.findData(current)
             if index >= 0:
                 self.plot_metric.setCurrentIndex(index)
+        ## The QC, Analyze and Plots panels follow the member: its layout,
+        ## its type and its light decide what they offer (ADR-0018).
+        self._refresh_selection()
 
         self.experiment_script.clear()
         names: list[str] = []
