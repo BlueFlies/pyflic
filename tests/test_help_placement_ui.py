@@ -500,11 +500,24 @@ def test_every_help_button_the_viewer_builds_resolves(viewer):
 # Help opened over a modal dialog
 # ---------------------------------------------------------------------------
 
-def test_help_over_an_application_modal_dialog_is_usable(app):
+@pytest.fixture
+def real_help(app):
+    """The real help window, discarded afterwards without being closed:
+    closing is what saves its geometry, and these tests must save nothing
+    (the settings fixture would catch it in a temporary folder anyway)."""
+    import pyflic.help.window as window_mod
+
+    yield
+    win, window_mod._window = window_mod._window, None
+    if win is not None:
+        win.hide()
+        win.deleteLater()
+
+
+def test_help_over_an_application_modal_dialog_is_usable(real_help):
     """An application-modal dialog blocks every other window, so help opened
     from one was visible but took no input; it is modal itself then, and
-    modeless again when opened from anywhere else.  (Real help windows: the
-    settings fixture keeps their geometry away from the user's file.)"""
+    modeless again when opened from anywhere else."""
     from PyQt6.QtCore import QTimer
 
     from pyflic.help.window import help_window, open_help
@@ -527,7 +540,7 @@ def test_help_over_an_application_modal_dialog_is_usable(app):
     assert seen == [Qt.WindowModality.ApplicationModal, Qt.WindowModality.NonModal]
 
 
-def test_help_over_a_window_modal_dialog_stays_modeless(app):
+def test_help_over_a_window_modal_dialog_stays_modeless(real_help):
     from PyQt6.QtCore import QTimer
 
     from pyflic.help.window import help_window, open_help
