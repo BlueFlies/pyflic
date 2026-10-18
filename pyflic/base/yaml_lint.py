@@ -44,6 +44,8 @@ _KNOWN_PARAM_KEYS = {
 _KNOWN_DFM_KEYS = {
     "id", "ID", "params", "parameters", "chambers", "Chambers",
     "excluded_chambers", "well_names", "paired_chambers", "optogenetics",
+    # Progressive Ratio's Chamber Groups without Program.txt: paired | single.
+    "chamber_groups",
 }
 
 
@@ -265,8 +267,9 @@ def lint_flic_config(path: str | Path) -> list[LintIssue]:
 
         chambers = dfm.get("chambers") or dfm.get("Chambers")
         ## Per-DFM constraints the Experiment Type imposes (Progressive
-        ## Ratio's paired_chambers and same-treatment chamber groups), after
-        ## what the Opto Program fills in, exactly as the loader does it.
+        ## Ratio's Chamber Groups: paired_chambers, or chamber_groups, or
+        ## what the Opto Program's Linkage makes, and same-treatment pairs),
+        ## after what the Opto Program fills in, exactly as the loader does it.
         try:
             from . import experiment_types as _et
             _type = _et.get_experiment_type(g.get("experiment_type"))

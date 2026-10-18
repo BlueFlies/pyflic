@@ -3,8 +3,11 @@ Training/Test Facets, and the within-group difference (ADR-0013).
 
 Vocabulary is fixed in ``CONTEXT.md`` under *Progressive Ratio*:
 
-* a **Chamber Group** is a fixed pair of adjacent chambers (1+2, 3+4, 5+6)
-  that shares one light circuit, one Treatment and one training end;
+* a **Chamber Group** is the chambers of one light circuit, sharing one
+  Treatment and one training end: a pair (1+2, 3+4, 5+6, or as Program.txt's
+  Linkage makes them), or a **solo** group of one chamber with no yoked
+  control (decision 13 of ``docs/paradigm-analyses-plan.md``;
+  :func:`~pyflic.base.experiment_types.progressive_ratio.resolve_chamber_groups`);
 * the **Paired** chamber's feeding at the **Sucrose Well** (always well A)
   drives the light; the **Yoked** chamber is lit at the same moments;
 * **Training** ends, per group, at the paired chamber's Sucrose Well's
@@ -26,8 +29,15 @@ How a recording says where Training ends depends on its **Generation**
   seconds come from ``OnMs``, and the Test window ends where the ratio
   Paradigm's run ends.
 
-Everything here is derived from the ordinary two-well machinery plus one config
-key per DFM, ``paired_chambers``.
+Everything here is derived from the ordinary two-well machinery plus the
+Chamber Groups: ``Program.txt``'s Linkage, or one config key per DFM,
+``paired_chambers`` (or ``chamber_groups: single``).  The paired-minus-yoked
+parts skip a solo group, and the report says so once.
+
+A DFM that restarts on its own inside a group's Test window ends that
+window: the ratio starts again after a restart, so the Breaking Point is
+judged up to it, censored when the fly was still responding there
+(decision 15).
 """
 
 from __future__ import annotations
@@ -46,13 +56,11 @@ from . import windowing
 from .dfm import DFM
 from .experiment import Experiment
 from .experiment_types.progressive_ratio import (
-    CHAMBER_GROUPS,
     PAIRED_KEY,
     ROLE_PAIRED,
     ROLE_YOKED,
-    group_of,
-    parse_paired_chambers,
-    partner_of,
+    ChamberGroup,
+    resolve_chamber_groups,
 )
 from .opto_program import (
     FIXED_RATIO,
@@ -82,6 +90,9 @@ NO_TRAINING_INFORMATION = ("no training information: recorded with DFM firmware 
 #: Acclimation leaves nothing to call Training (decision 11).
 EMPTY_TRAINING_NOTE = ("Training was empty: the ratio Paradigm had no Acclimation "
                        "and no Interval before it")
+#: What the report says, once, of a design whose Chamber Groups are all solo
+#: (decision 13 of ``docs/paradigm-analyses-plan.md``).
+NO_YOKED_CONTROLS = "the design has no yoked controls"
 
 #: Per-chamber metrics the Paired-Yoked Difference table carries, as ``d<name>``.
 #: ``PersistA`` is Sucrose Persistence, measured from training end (ADR-0014),
@@ -146,7 +157,7 @@ class ChamberRole:
     chamber: int
     group: int
     role: str          # ROLE_PAIRED | ROLE_YOKED
-    partner: int
+    partner: int | None  # None: a solo group's chamber has no partner
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,7 +167,7 @@ class GroupTraining:
     dfm_id: int
     group: int
     paired_chamber: int
-    yoked_chamber: int
+    yoked_chamber: int | None      # None: a solo group
     sucrose_well: int
     training_end: float | None     # minutes; None = never completed
     notes: tuple[str, ...] = ()    # QC notes, never fatal
@@ -180,7 +191,7 @@ class GroupTraining:
 class ProgressiveRatioExperiment(TwoWellExperiment):
     """A Progressive Ratio specialisation of :class:`TwoWellExperiment`."""
 
-    _pr_paired: dict | None = None
+    _pr_groups: dict | None = None      # {dfm_id: (ChamberGroup, ...)}
     _pr_training: dict | None = None
     _pr_light: dict | None = None       # light QC caches, per DFM object
     _pr_snapshot: dict | None = None    # design before auto-removal thinned it
@@ -217,48 +228,86 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
     # Roles: paired / yoked within Chamber Groups
     # ------------------------------------------------------------------
 
-    def paired_chambers_by_dfm(self) -> dict[int, list[int]]:
-        """``{dfm_id: [paired chamber per group]}`` from the config's
-        ``paired_chambers`` entries (validated at load time)."""
-        if self._pr_paired is not None:
-            return self._pr_paired
+    def chamber_groups_by_dfm(self) -> dict[int, tuple[ChamberGroup, ...]]:
+        """``{dfm_id: (ChamberGroup, ...)}``: each loaded DFM's Chamber
+        Groups, in number order, from its resolved ``dfms:`` entry — the
+        config's ``paired_chambers`` or ``chamber_groups``, or what the
+        loader took from Program.txt
+        (:func:`~pyflic.base.experiment_types.progressive_ratio.resolve_chamber_groups`).
+        Validated at load time; a DFM whose groups cannot be resolved
+        raises."""
+        if self._pr_groups is not None:
+            return self._pr_groups
         nodes = (self.config or {}).get("dfms", (self.config or {}).get("DFMs")) or []
         if isinstance(nodes, dict):
             nodes = [{"id": int(k), **dict(v)} for k, v in nodes.items()]
-        out: dict[int, list[int]] = {}
+        out: dict[int, tuple[ChamberGroup, ...]] = {}
         for node in nodes:
             dfm_id = int(node.get("id", node.get("ID")))
             if dfm_id not in self.dfms:
                 continue
-            paired, problems = parse_paired_chambers(node.get(PAIRED_KEY))
-            if problems:
+            result = resolve_chamber_groups(node)
+            if result.problems or result.groups is None:
                 raise ValueError(
-                    f"DFM {dfm_id}: " + "; ".join(problems))
-            out[dfm_id] = paired
+                    f"DFM {dfm_id}: " + "; ".join(result.problems))
+            out[dfm_id] = result.groups
         missing = sorted(set(self.dfms) - set(out))
         if missing:
             raise ValueError(
                 f"DFM(s) {missing} have no '{PAIRED_KEY}' entry in the config.")
-        self._pr_paired = out
+        self._pr_groups = out
         return out
+
+    def chamber_groups(self, dfm_id: int) -> tuple[ChamberGroup, ...]:
+        """*dfm_id*'s Chamber Groups, in number order."""
+        return self.chamber_groups_by_dfm()[int(dfm_id)]
+
+    def chamber_group(self, dfm_id: int, group: int) -> ChamberGroup:
+        """Chamber Group *group* of *dfm_id*."""
+        return next(g for g in self.chamber_groups(dfm_id) if g.number == int(group))
+
+    def _group_pairs(self) -> list[tuple[int, ChamberGroup]]:
+        """``(dfm_id, group)`` for every Chamber Group of every DFM, in
+        order: the rows of every per-group table."""
+        return [(d, g) for d in sorted(self.dfms) for g in self.chamber_groups(d)]
+
+    def solo_groups(self) -> list[tuple[int, int]]:
+        """``(dfm_id, group)`` of every solo Chamber Group: one chamber, no
+        yoked control."""
+        return [(d, g.number) for d, g in self._group_pairs() if g.solo]
+
+    def has_yoked_controls(self) -> bool:
+        """Whether any Chamber Group is a pair, so a Paired-Yoked Difference
+        can exist."""
+        return any(not g.solo for _d, g in self._group_pairs())
+
+    def paired_chambers_by_dfm(self) -> dict[int, list[int]]:
+        """``{dfm_id: [paired chamber per group]}``, in chamber order; every
+        chamber of a solo design is Paired."""
+        return {d: sorted(g.paired for g in groups)
+                for d, groups in self.chamber_groups_by_dfm().items()}
 
     def role_of(self, dfm_id: int, chamber: int) -> ChamberRole:
         dfm_id, chamber = int(dfm_id), int(chamber)
-        paired = self.paired_chambers_by_dfm()[dfm_id]
-        role = ROLE_PAIRED if chamber in paired else ROLE_YOKED
-        return ChamberRole(dfm_id=dfm_id, chamber=chamber, group=group_of(chamber),
-                           role=role, partner=partner_of(chamber))
+        group = next(g for g in self.chamber_groups(dfm_id) if chamber in g.chambers)
+        paired = chamber == group.paired
+        partner = group.yoked if paired else group.paired
+        return ChamberRole(dfm_id=dfm_id, chamber=chamber, group=group.number,
+                           role=ROLE_PAIRED if paired else ROLE_YOKED, partner=partner)
 
     def roles_table(self) -> pd.DataFrame:
         """``DFM, Chamber, Group, Role, Partner`` for every chamber of every
-        loaded DFM, assigned to a Treatment or not."""
+        loaded DFM, assigned to a Treatment or not.  ``Partner`` is NA for a
+        solo group's chamber."""
         rows = []
         for dfm_id in sorted(self.dfms):
             for chamber in range(1, 7):
                 r = self.role_of(dfm_id, chamber)
                 rows.append({"DFM": dfm_id, "Chamber": chamber, "Group": r.group,
                              "Role": r.role, "Partner": r.partner})
-        return pd.DataFrame(rows, columns=["DFM", "Chamber", "Group", "Role", "Partner"])
+        out = pd.DataFrame(rows, columns=["DFM", "Chamber", "Group", "Role", "Partner"])
+        out["Partner"] = _chamber_column(out["Partner"].tolist())
+        return out
 
     def _sucrose_well(self, dfm: DFM, chamber: int) -> int:
         return int(dfm.chambers[int(chamber) - 1].well_a)
@@ -283,10 +332,9 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
         if key in cache:
             return cache[key]
         dfm = self.dfms[dfm_id]
-        chambers = CHAMBER_GROUPS[group]
-        paired = next(c for c in chambers
-                      if c in self.paired_chambers_by_dfm()[dfm_id])
-        yoked = partner_of(paired)
+        layout = self.chamber_group(dfm_id, group)
+        chambers = layout.chambers
+        paired, yoked = layout.paired, layout.yoked
         sucrose = self._sucrose_well(dfm, paired)
         end = dfm.training_end_minutes(sucrose)
 
@@ -388,20 +436,56 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
         test_run = self._test_ratio_run(state, sucrose)
         later = ([run for run in _true_runs(state.ratio_rows(sucrose)) if run[0] >= test_run[1]]
                  if test_run is not None else [])
+        ## A DFM restart (decision 15) starts the Paradigm state over too:
+        ## said so, with its minute, where the state starts again after it.
+        rebooted = {span.resume_row: span for span in state.restarts()}
+
+        def after_restart(i0: int) -> str:
+            span = rebooted.get(i0)
+            return ("" if span is None else
+                    f" after the DFM restarted at minute {span.minute:.1f}")
+
         restarted: set[int] = set()
         for i0, _i1 in state.acclimation_runs(sucrose)[1:]:
-            note = f"Paradigm restarted at Program Interval {_interval_at(state, i0)}"
+            note = (f"Paradigm restarted at Program Interval {_interval_at(state, i0)}"
+                    f"{after_restart(i0)}")
             run = next((r for r in later if r[0] <= i0 < r[1]), None)
             if run is not None:
                 restarted.add(run[0])
-                note += " (after the Test window, which is the first ratio run only)"
+                note += (" (after the Test window, which ends at the restart)" if i0 in rebooted
+                         else " (after the Test window, which is the first ratio run only)")
             notes.append(note)
         for i0, _i1 in later:
             if i0 not in restarted:
                 notes.append(f"a ratio Paradigm ran again from Program Interval "
-                             f"{_interval_at(state, i0)}, after the Test window (the "
-                             f"first ratio run only)")
+                             f"{_interval_at(state, i0)}{after_restart(i0)}, after the Test "
+                             f"window (" + ("which ends at the restart)" if i0 in rebooted
+                                            else "the first ratio run only)"))
         return notes
+
+    def test_restart(self, dfm_id: int, group: int):
+        """The first DFM restart (a
+        :class:`~pyflic.base.paradigm_state.RestartSpan`) inside the group's
+        Test window, which then ends at it (decision 15); ``None`` when the
+        DFM did not restart there, off generation 3, and for a group whose
+        training never ended.
+
+        The Test window is the Paired Sucrose Well's ratio run that holds
+        its training end; a restart's unknown-instruction rows end that run,
+        so a restart is inside it when its first such row is the run's end
+        or falls within it."""
+        dfm = self.dfms[int(dfm_id)]
+        if not self._reads_phase(dfm):
+            return None
+        gt = self.group_training(dfm_id, group)
+        if not gt.complete:
+            return None
+        state = dfm.paradigm
+        run = self._test_ratio_run(state, gt.sucrose_well)
+        start = state.training_end(gt.sucrose_well)
+        if run is None or start is None:
+            return None
+        return next((span for span in state.restarts() if start < span.row <= run[1]), None)
 
     @staticmethod
     def _test_ratio_run(state: ParadigmState, well: int) -> tuple[int, int] | None:
@@ -474,22 +558,25 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
     def training_table(self) -> pd.DataFrame:
         """One row per Chamber Group: ``DFM, Group, PairedChamber, YokedChamber,
         SucroseWell, TrainingEndMin, TrainingComplete, Notes``.
-        ``TrainingComplete`` is NA on a DFM that records no Training."""
+        ``TrainingComplete`` is NA on a DFM that records no Training, and
+        ``YokedChamber`` for a solo group."""
         rows = []
-        for dfm_id in sorted(self.dfms):
-            for group in CHAMBER_GROUPS:
-                gt = self.group_training(dfm_id, group)
-                rows.append({
-                    "DFM": dfm_id, "Group": group,
-                    "PairedChamber": gt.paired_chamber,
-                    "YokedChamber": gt.yoked_chamber,
-                    "SucroseWell": gt.sucrose_well,
-                    "TrainingEndMin": (np.nan if gt.training_end is None
-                                       else float(gt.training_end)),
-                    "TrainingComplete": gt.training_complete,
-                    "Notes": "; ".join(gt.notes),
-                })
-        return pd.DataFrame(rows)
+        for dfm_id, layout in self._group_pairs():
+            gt = self.group_training(dfm_id, layout.number)
+            rows.append({
+                "DFM": dfm_id, "Group": layout.number,
+                "PairedChamber": gt.paired_chamber,
+                "YokedChamber": gt.yoked_chamber,
+                "SucroseWell": gt.sucrose_well,
+                "TrainingEndMin": (np.nan if gt.training_end is None
+                                   else float(gt.training_end)),
+                "TrainingComplete": gt.training_complete,
+                "Notes": "; ".join(gt.notes),
+            })
+        out = pd.DataFrame(rows)
+        if not out.empty:
+            out["YokedChamber"] = _chamber_column(out["YokedChamber"].tolist())
+        return out
 
     def training_warnings(self) -> list[str]:
         """Human-readable Training notes, for the summary and QC: per-well
@@ -500,7 +587,8 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
             if self.dfms[dfm_id].training_info == "none":
                 out.append(f"DFM {dfm_id}: {NO_TRAINING_INFORMATION}")
                 continue
-            for group in CHAMBER_GROUPS:
+            for layout in self.chamber_groups(dfm_id):
+                group = layout.number
                 gt = self.group_training(dfm_id, group)
                 for note in gt.notes:
                     out.append(f"DFM {dfm_id} group {group}: {note}")
@@ -588,8 +676,9 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
 
     def _group_treatment(self, dfm_id: int, group: int) -> str:
         snapshot = self._design_snapshot()
-        a, b = CHAMBER_GROUPS[int(group)]
-        return snapshot.get((int(dfm_id), a)) or snapshot.get((int(dfm_id), b)) or ""
+        return next((snapshot[(int(dfm_id), c)]
+                     for c in self.chamber_group(dfm_id, group).chambers
+                     if snapshot.get((int(dfm_id), c))), "")
 
     def _light_cache(self, dfm_id: int) -> dict:
         """The light QC's cache for one DFM, dropped whenever that DFM object
@@ -815,6 +904,15 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
         reference = self.resting_reference(dfm_id, gt.sucrose_well)
         reference_level = float(reference.median()) if not reference.empty else np.nan
         phase = self._reads_phase(dfm)
+        name, paradigm = self.test_paradigm(dfm_id, group)
+        ## Requirement series wrong (decision 6), on the Test window's Main
+        ## Activations of the Paired Sucrose Well against the Test Paradigm's
+        ## series: lqc.requirement_series_mismatches is the place for stream
+        ## S1's check, and gives None until it is merged.
+        series = (lqc.requirement_series_mismatches(
+                      self._test_ledger_rows(dfm_id, group), paradigm)
+                  if phase and paradigm is not None and paradigm.type in RATIO_PARADIGMS
+                  else None)
         verdict = lqc.judge_group(
             settings,
             training_complete=gt.training_complete,
@@ -830,12 +928,15 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
             check_trend=not self._fixed_ratio(dfm_id, group),
             light_source=("Activations at the paired Sucrose Well" if phase
                           else "OptoCol1 light bits"),
+            series_mismatches=series,
         )
         notes = list(verdict.notes)
-        name, paradigm = self.test_paradigm(dfm_id, group)
         if name is not None and paradigm is None:
             notes.append(f"the Test Paradigm {name}'s type is unknown without its "
                          f"Program.txt entry, so it is judged as a progressive ratio")
+        restart = self.test_restart(dfm_id, group)
+        if restart is not None:
+            notes.append(restart_note(restart, float(gt.training_end)))
         run_start = (float(test["Minutes"].iloc[verdict.lick_free_run_start])
                      if verdict.lick_free_run_start is not None else np.nan)
         row = {
@@ -871,9 +972,11 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
     def light_qc_table(self) -> pd.DataFrame:
         """One row per Chamber Group: did the Paired fly earn its light?
 
-        ``Flags`` lists what fired — *self-triggered light* and *implausible
-        training* fail the group; *no increasing trend*, *resting level rise*
-        and *resting level elevated* are warnings.  ``Verdict`` is ``ok``,
+        ``Flags`` lists what fired — *self-triggered light*, *implausible
+        training* and, on generation 3, *requirement series wrong* fail the
+        group; *no increasing trend*, *resting level rise* and *resting level
+        elevated* are warnings.  ``YokedChamber`` is NA for a solo group, and
+        ``Notes`` names a DFM restart that ends the Test window.  ``Verdict`` is ``ok``,
         ``warning`` or ``failed``; ``Excluded`` says a failed group leaves the
         analysis (``exclude_failed_pr_groups``, on by default).
         ``LickFreeRunStartMin`` is where the first failing run of Lick-free
@@ -883,14 +986,63 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
         :mod:`pyflic.base.pr_light_qc`.
         """
         settings = self.light_qc_settings()
-        rows = [self._light_qc_row(dfm_id, group, settings)
-                for dfm_id in sorted(self.dfms) for group in CHAMBER_GROUPS]
-        return pd.DataFrame(rows, columns=list(LIGHT_QC_COLUMNS))
+        rows = [self._light_qc_row(dfm_id, layout.number, settings)
+                for dfm_id, layout in self._group_pairs()]
+        out = pd.DataFrame(rows, columns=list(LIGHT_QC_COLUMNS))
+        if not out.empty:
+            out["YokedChamber"] = _chamber_column(out["YokedChamber"].tolist())
+        return out
 
     def _light_qc_by_group(self) -> dict[tuple[int, int], dict]:
         settings = self.light_qc_settings()
-        return {(int(d), int(g)): self._light_qc_row(d, g, settings)
-                for d in sorted(self.dfms) for g in CHAMBER_GROUPS}
+        return {(int(d), int(g.number)): self._light_qc_row(d, g.number, settings)
+                for d, g in self._group_pairs()}
+
+    def _test_ledger_rows(self, dfm_id: int, group: int) -> pd.DataFrame:
+        """The Activation ledger's rows
+        (:func:`~pyflic.base.activation_ledger.ledger`) of the group's Paired
+        Sucrose Well inside its Test window: Phase ``M``, from training end to
+        the end of the Test ratio run (or the restart that ends it).  The
+        ledger is computed once per DFM, with the Linkage the optogenetic
+        light QC passes it.  Empty off generation 3 and for a group whose
+        training never ended."""
+        from . import activation_ledger as al
+
+        dfm = self.dfms[int(dfm_id)]
+        gt = self.group_training(dfm_id, group)
+        empty = pd.DataFrame(columns=list(al.LEDGER_COLUMNS))
+        if not self._reads_phase(dfm) or not gt.complete:
+            return empty
+        cache = self._light_cache(dfm_id)
+        if "ledger" not in cache:
+            state = dfm.paradigm
+            program = getattr(self, "opto_program", None)
+            section = program.section(int(dfm_id)) if program is not None else None
+            if section is not None:
+                groups = list(section.linkage_groups().values())
+            else:
+                from .opto_roles import linkage_view
+
+                groups = list(linkage_view(None, state, None).groups.values())
+            wells = sorted({self.group_training(dfm_id, layout.number).sucrose_well
+                            for layout in self.chamber_groups(dfm_id)})
+            cache["ledger"] = al.ledger(state, wells=wells,
+                                        linked={w: tuple(g) for g in groups for w in g})
+        book = cache["ledger"]
+        state = dfm.paradigm
+        start = state.training_end(gt.sucrose_well)
+        run = self._test_ratio_run(state, gt.sucrose_well)
+        if start is None or run is None:
+            return empty
+        stop = run[1]
+        restart = self.test_restart(dfm_id, group)
+        if restart is not None:
+            stop = min(stop, restart.row)
+        rows = book["Row"].to_numpy(dtype=np.int64)
+        keep = ((book["Well"].to_numpy(dtype=np.int64) == int(gt.sucrose_well))
+                & (rows >= int(start)) & (rows < int(stop))
+                & (book["Phase"].astype(str).to_numpy() == "M"))
+        return book[keep].reset_index(drop=True)
 
     def light_qc_failed_groups(self) -> dict[tuple[int, int], list[str]]:
         """``{(dfm, group): failing flags}`` for the groups the light QC
@@ -904,17 +1056,27 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
 
     def estimated_increment(self) -> tuple[float, float, int] | None:
         """``(slope, intercept, n_groups)`` of the requirement across this
-        experiment's groups (:func:`pr_light_qc.estimate_increment`), for the
-        reference line and the summary; ``None`` when no group qualifies."""
+        experiment's groups whose Test Paradigm is progressive
+        (:func:`pr_light_qc.estimate_increment`), for the reference line and
+        the summary; ``None`` when no group qualifies.  A fixed ratio's
+        requirement does not rise, so its groups give none (decision 14)."""
         series = []
-        for dfm_id in sorted(self.dfms):
-            for group in CHAMBER_GROUPS:
-                if not self.group_training(dfm_id, group).complete:
-                    continue
-                events = self.light_events_table(dfm_id, group)
-                series.append(events.loc[events["Facet"] == TEST_LABEL,
-                                         "LicksSincePrev"].to_numpy())
+        for dfm_id, layout in self._group_pairs():
+            group = layout.number
+            if not self.group_training(dfm_id, group).complete or self._fixed_ratio(dfm_id, group):
+                continue
+            events = self.light_events_table(dfm_id, group)
+            series.append(events.loc[events["Facet"] == TEST_LABEL,
+                                     "LicksSincePrev"].to_numpy())
         return lqc.estimate_increment(series)
+
+    def progressive_groups(self, dfm_id: int | None = None) -> list[tuple[int, int]]:
+        """``(dfm_id, group)`` of the groups whose Test Paradigm is, or is
+        taken as, a progressive ratio: every group but a FixedRatio one
+        (decision 14), on *dfm_id* alone when given.  The requirement
+        estimate and the wording about a climbing requirement are theirs."""
+        return [(d, g.number) for d, g in self._group_pairs()
+                if (dfm_id is None or d == int(dfm_id)) and not self._fixed_ratio(d, g.number)]
 
     def light_events_ledger(self) -> pd.DataFrame:
         """Every group's Test-phase Light Event Ledger stacked — the Paired
@@ -924,18 +1086,18 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
         cols = ["DFM", "Group", "PairedChamber", "Event",
                 *BREAKING_POINT_COLUMNS, *LEDGER_COLUMNS, COUNTED_COLUMN]
         frames = []
-        for dfm_id in sorted(self.dfms):
-            for group in CHAMBER_GROUPS:
-                gt = self.group_training(dfm_id, group)
-                bp = self.breaking_point_table(dfm_id, gt.paired_chamber)
-                if bp.empty:
-                    continue
-                bp = bp.copy()
-                bp.insert(0, "Event", np.arange(1, len(bp) + 1))
-                bp.insert(0, "PairedChamber", gt.paired_chamber)
-                bp.insert(0, "Group", group)
-                bp.insert(0, "DFM", dfm_id)
-                frames.append(bp)
+        for dfm_id, layout in self._group_pairs():
+            group = layout.number
+            gt = self.group_training(dfm_id, group)
+            bp = self.breaking_point_table(dfm_id, gt.paired_chamber)
+            if bp.empty:
+                continue
+            bp = bp.copy()
+            bp.insert(0, "Event", np.arange(1, len(bp) + 1))
+            bp.insert(0, "PairedChamber", gt.paired_chamber)
+            bp.insert(0, "Group", group)
+            bp.insert(0, "DFM", dfm_id)
+            frames.append(bp)
         if not frames:
             return pd.DataFrame(columns=cols)
         return pd.concat(frames, ignore_index=True)[cols]
@@ -990,6 +1152,11 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
                     reasons.append(
                         f"resting level elevated: {r['RestingRatio']:.1f}× the "
                         f"DFM's other sucrose wells")
+                elif flag == lqc.SERIES_WRONG:
+                    reasons.append(
+                        f"{lqc.SERIES_WRONG}: a Test light event met a Requirement the "
+                        f"Test Paradigm's series does not give; Program.txt is probably "
+                        f"not the program that ran")
             if r["Verdict"] == lqc.VERDICT_FAILED:
                 outcome = ("EXCLUDED (exclude_failed_pr_groups)" if r["Excluded"]
                            else "FAILED but retained (exclude_failed_pr_groups is off)")
@@ -1005,6 +1172,15 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
                     lines.append(f"{where}:")
                 lines.extend(f"    · {note}" for note in _split_notes(r["Notes"]))
         return lines
+
+    def _group_chambers_phrase(self, of: str = "each") -> str:
+        """What leaving takes from a group, in words: ``both chambers of
+        <of>`` for pairs, ``the chamber of <of>`` for solo groups, ``every
+        chamber of <of>`` with both."""
+        kinds = {g.solo for _d, g in self._group_pairs()}
+        if kinds == {True}:
+            return f"the chamber of {of}"
+        return f"every chamber of {of}" if kinds == {True, False} else f"both chambers of {of}"
 
     def _light_qc_summary_lines(self) -> list[str]:
         settings = self.light_qc_settings()
@@ -1041,7 +1217,9 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
         out.append(show.to_string(index=False))
         out.append("")
         inc = self.estimated_increment()
-        if inc is None:
+        if not self.progressive_groups():
+            pass                  # a fixed ratio's requirement does not rise (decision 14)
+        elif inc is None:
             out.append("Estimated requirement increment: n/a (no chamber group has "
                        f"{lqc.INCREMENT_EVENTS} Test light events with a rising count).")
         else:
@@ -1058,7 +1236,8 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
         if not excluded.empty:
             groups = ", ".join(f"DFM {int(r.DFM)} group {int(r.Group)}"
                                for r in excluded.itertuples())
-            out.append(f"Excluded by the light QC (both chambers of each): {groups}.")
+            out.append(f"Excluded by the light QC ({self._group_chambers_phrase()}): "
+                       f"{groups}.")
         if not failed_kept.empty:
             groups = ", ".join(f"DFM {int(r.DFM)} group {int(r.Group)}"
                                for r in failed_kept.itertuples())
@@ -1236,24 +1415,23 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
         if transform_licks is None:
             transform_licks = self.transform_licks
         frames: list[pd.DataFrame] = []
-        for dfm_id in sorted(self.dfms):
-            for group, chambers in CHAMBER_GROUPS.items():
-                for label, window in self.group_windows(dfm_id, group):
-                    df = self._chamber_rows(
-                        dfm_id, chambers,
-                        range_minutes=windowing.as_range_minutes(window),
-                        transform_licks=bool(transform_licks))
-                    if df is None or df.empty:
-                        continue
-                    df = df.copy()
-                    df.insert(0, "FacetRange", windowing.format_range(window))
-                    df.insert(0, "Facet", label)
-                    if label != TEST_LABEL:
-                        ## Sucrose Persistence is measured from training end:
-                        ## a Training row has none.
-                        df["PersistA"] = np.nan
-                        df["PersistACensored"] = None
-                    frames.append(df)
+        for dfm_id, layout in self._group_pairs():
+            for label, window in self.group_windows(dfm_id, layout.number):
+                df = self._chamber_rows(
+                    dfm_id, layout.chambers,
+                    range_minutes=windowing.as_range_minutes(window),
+                    transform_licks=bool(transform_licks))
+                if df is None or df.empty:
+                    continue
+                df = df.copy()
+                df.insert(0, "FacetRange", windowing.format_range(window))
+                df.insert(0, "Facet", label)
+                if label != TEST_LABEL:
+                    ## Sucrose Persistence is measured from training end:
+                    ## a Training row has none.
+                    df["PersistA"] = np.nan
+                    df["PersistACensored"] = None
+                frames.append(df)
         if not frames:
             return pd.DataFrame()
         out = pd.concat(frames, ignore_index=True)
@@ -1600,14 +1778,16 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
                      f"EventsA or EventsB > {float(max_events):g}"
                      if max_events is not None else
                      "  • max_events_cutoff: not configured.")
-        lines.append("  • require_training_complete = true: both chambers of a "
-                     "chamber group whose paired fly never finished training are excluded"
+        whose = self._group_chambers_phrase("a chamber group")
+        verb = "is" if whose.startswith("the chamber") else "are"
+        lines.append(f"  • require_training_complete = true: {whose} whose paired fly "
+                     f"never finished training {verb} excluded"
                      if require_training else
                      "  • require_training_complete = false: incomplete-training "
                      "groups are kept (TrainingComplete = false).")
-        lines.append("  • exclude_failed_pr_groups = true: both chambers of a chamber "
-                     "group whose light QC fails (self-triggered light, implausible "
-                     "training) are excluded — see pr_light_qc.csv"
+        lines.append(f"  • exclude_failed_pr_groups = true: {whose} whose light QC fails "
+                     f"(self-triggered light, implausible training) {verb} excluded — see "
+                     f"pr_light_qc.csv"
                      if light_settings.exclude else
                      "  • exclude_failed_pr_groups = false: groups that fail the light "
                      "QC are kept; pr_light_qc.csv still lists them.")
@@ -1645,7 +1825,8 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
         for dfm_id in sorted(self.dfms):
             dfm = self.dfms[dfm_id]
             mins_all = dfm.lick_df["Minutes"].to_numpy(dtype=float)
-            for group, chambers in CHAMBER_GROUPS.items():
+            for layout in self.chamber_groups(dfm_id):
+                group, chambers = layout.number, layout.chambers
                 gt = self.group_training(dfm_id, group)
                 if not gt.complete:
                     continue
@@ -1764,8 +1945,10 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
 
         data = self.cumulative_diff_data(binsize_min=binsize_min)
         if data.empty:
-            return p9.ggplot() + p9.labs(title="Paired − yoked cumulative licks — no data "
-                                               "(no chamber group completed training)")
+            why = ("no chamber group completed training" if self.has_yoked_controls()
+                   else NO_YOKED_CONTROLS)
+            return p9.ggplot() + p9.labs(title=f"Paired − yoked cumulative licks — no data "
+                                               f"({why})")
         data = data.copy()
         data["Trace"] = data["DFM"].astype(str) + ":" + data["Group"].astype(str)
         stat = self.cumulative_diff_stat(binsize_min=binsize_min)
@@ -1822,19 +2005,20 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
             return p9.ggplot() + p9.labs(title=f"DFM {dfm_id} — {why}")
         curves = curves.copy()
         panel = {}
-        for group in CHAMBER_GROUPS:
+        numbers = [g.number for g in self.chamber_groups(dfm_id)]
+        for group in numbers:
             gt = self.group_training(dfm_id, group)
             end = "n/a" if not gt.complete else f"{gt.training_end:.1f} min"
             panel[group] = self._qc_panel_label(dfm_id, group, f"trained {end}")
         present = set(curves["Group"])
-        order = [panel[g] for g in CHAMBER_GROUPS if g in present]
+        order = [panel[g] for g in numbers if g in present]
         curves["Panel"] = pd.Categorical(curves["Group"].map(panel), categories=order,
                                          ordered=True)
         curves["Role"] = pd.Categorical(curves["Role"], categories=[ROLE_PAIRED, ROLE_YOKED])
         lit = curves[curves["LightOn"]]
         ## Lick-free Light Events, on the paired trace at the moment they fired.
         rings = []
-        for group in CHAMBER_GROUPS:
+        for group in numbers:
             if group not in present:
                 continue
             events = self.light_events_table(dfm_id, group)
@@ -1847,7 +2031,7 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
         well_a = (self.well_names or {}).get("A", "well A")
         n = curves["Panel"].nunique()
         if figsize is None:
-            figsize = (4.0 * max(n, 1), 5.0)
+            figsize = _panel_figsize(n)
         g = (p9.ggplot(curves, p9.aes("Minutes", "CumLicks", color="Role"))
              + p9.geom_line(size=0.7)
              + p9.geom_point(data=lit, size=1.4, alpha=0.9))
@@ -1876,14 +2060,19 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
         climbs; a Lick-free Light Event is a hollow red ring; the dashed line
         is the group's own linear trend and the faint grey one the
         requirement estimated across the experiment
-        (:meth:`estimated_increment`), when there is one.
+        (:meth:`estimated_increment`), when there is one.  The grey line and
+        its caption are drawn only for groups whose Test Paradigm is a
+        progressive ratio: a fixed ratio's requirement does not climb
+        (decision 14).
         """
         import plotnine as p9
 
         dfm_id = int(dfm_id)
         frames, fits = [], []
         panel = {}
-        for group in CHAMBER_GROUPS:
+        numbers = [g.number for g in self.chamber_groups(dfm_id)]
+        progressive = {g for _d, g in self.progressive_groups(dfm_id)}
+        for group in numbers:
             events = self.light_events_table(dfm_id, group)
             test = events[events["Facet"] == TEST_LABEL]
             if test.empty:
@@ -1905,7 +2094,7 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
             return p9.ggplot() + p9.labs(
                 title=f"DFM {dfm_id} — no Test light events in any chamber group")
         data = pd.concat(frames, ignore_index=True)
-        order = [panel[g] for g in CHAMBER_GROUPS if g in panel]
+        order = [panel[g] for g in numbers if g in panel]
 
         def with_panel(df: pd.DataFrame) -> pd.DataFrame:
             df = df.copy()
@@ -1917,13 +2106,14 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
         earned, free = data[~data["LickFree"]], data[data["LickFree"]]
         well_a = (self.well_names or {}).get("A", "well A")
         if figsize is None:
-            figsize = (4.0 * max(len(order), 1), 5.0)
+            figsize = _panel_figsize(len(order))
         g = p9.ggplot(data, p9.aes("Event", "Licks"))
         inc = self.estimated_increment()
-        if inc is not None:
+        climbing = data[data["Group"].isin(progressive)]
+        if inc is not None and not climbing.empty:
             slope, intercept, _n = inc
             ref = []
-            for group, sub in data.groupby("Group", sort=True):
+            for group, sub in climbing.groupby("Group", sort=True):
                 last = float(sub["Event"].max())
                 ## Stop the line just above the panel's own data: drawn to the
                 ## last of 400 self-triggered events it would set the y axis
@@ -1946,12 +2136,13 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
                                size=2.2, stroke=0.6)
         caption = ("Filled: light events with licks; hollow red: lick-free. Dashed: "
                    "the group's trend. ")
-        caption += ("Grey: estimated requirement "
-                    f"({inc[0]:.1f} licks per event)." if inc is not None
-                    else "No requirement could be estimated.")
+        if not climbing.empty:
+            caption += ("Grey: estimated requirement "
+                        f"({inc[0]:.1f} licks per event)." if inc is not None
+                        else "No requirement could be estimated.")
         g = (g + p9.facet_wrap("~ Panel", ncol=3, scales="free")
               + p9.labs(title=f"DFM {dfm_id} — {well_a} licks per light event, Test phase",
-                        caption=caption, x="Light event (Test phase)",
+                        caption=caption.rstrip(), x="Light event (Test phase)",
                         y=f"{well_a} licks since the previous light event")
               + p9.theme_bw(base_size=base_font_size)
               + p9.theme(figure_size=figsize))
@@ -1976,7 +2167,8 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
         series, rugs, ends = [], [], []
         panel = {}
         own, others = "Paired Sucrose Well", "Other Sucrose Wells (median)"
-        for group in CHAMBER_GROUPS:
+        numbers = [g.number for g in self.chamber_groups(dfm_id)]
+        for group in numbers:
             gt = self.group_training(dfm_id, group)
             column = f"W{gt.sucrose_well}"
             if column not in levels.columns:
@@ -2001,7 +2193,7 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
                                           "Group": group}))
         if not series:
             return p9.ggplot() + p9.labs(title=f"DFM {dfm_id} — no Sucrose Well signal")
-        order = [panel[g] for g in CHAMBER_GROUPS if g in panel]
+        order = [panel[g] for g in numbers if g in panel]
 
         def with_panel(df: pd.DataFrame) -> pd.DataFrame:
             df = df.copy()
@@ -2012,7 +2204,7 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
         data = with_panel(pd.concat(series, ignore_index=True))
         data["Series"] = pd.Categorical(data["Series"], categories=[own, others])
         if figsize is None:
-            figsize = (4.0 * max(len(order), 1), 5.0)
+            figsize = _panel_figsize(len(order))
         g = (p9.ggplot(data, p9.aes("Minute", "Level", color="Series"))
              + p9.geom_line(size=0.6))
         if rugs:
@@ -2084,7 +2276,12 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
         Sucrose Well's ratio Paradigm run that holds its training end, not at
         the end of the recording (decision 12): a ClosedLoop Interval after it
         is no part of the Test, and a later ratio run is noted
-        (:meth:`group_training`) and left to Program Facets."""
+        (:meth:`group_training`) and left to Program Facets.  A DFM restart
+        inside that run ends it at the last row before the restart
+        (:meth:`test_restart`; decision 15 of
+        ``docs/paradigm-analyses-plan.md``): the ratio starts again after
+        it, so the first-gap rule sees the window only up to there and a
+        count still running is censored."""
         gt = self.group_training(dfm_id, group)
         if not gt.complete:
             return None
@@ -2093,7 +2290,11 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
         if self._reads_phase(dfm):
             run = self._test_ratio_run(dfm.paradigm, gt.sucrose_well)
             if run is not None:
-                end = float(dfm.paradigm.minutes[run[1] - 1])
+                last = run[1] - 1
+                restart = self.test_restart(dfm_id, group)
+                if restart is not None:
+                    last = min(last, restart.row - 1)
+                end = float(dfm.paradigm.minutes[last])
         return settings.test_end(end - float(gt.training_end))
 
     def _test_events(self, dfm_id: int, group: int) -> pd.DataFrame:
@@ -2111,7 +2312,9 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
         ``pr_break_gap_min``, and ``counted`` which Test events count —
         aligned with the Test rows of :meth:`light_events_table`.  Lick-free
         Light Events never count and never end a gap.  ``None`` for a group
-        that never completed training.
+        that never completed training.  A DFM restart inside the Test window
+        ends the window (:meth:`_test_window`), so events after it never
+        count, and a count still running at it is censored.
         """
         settings = settings or self.break_settings()
         window = self._test_window(dfm_id, group, settings)
@@ -2135,7 +2338,7 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
         key = ("persist", chamber, settings)
         if key in cache:
             return cache[key]
-        group = group_of(chamber)
+        group = self.role_of(dfm_id, chamber).group
         window = self._test_window(dfm_id, group, settings)
         result = None
         if window is not None:
@@ -2364,8 +2567,9 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
     # ------------------------------------------------------------------
 
     def breaking_point_summary(self) -> pd.DataFrame:
-        """One row per Chamber Group in the analysis — both chambers in the
-        design and training complete — as ``analysis/pr_breaking_point.csv``.
+        """One row per Chamber Group in the analysis — every chamber of it
+        (both of a pair, the one of a solo group) in the design and training
+        complete — as ``analysis/pr_breaking_point.csv``.
 
         ``BreakingPoint`` is the paired fly's lick-backed Test Light Events
         before the first gap longer than ``pr_break_gap_min`` (ADR-0014);
@@ -2374,7 +2578,7 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
         window ended, so the count is a lower bound; ``TestMinutes`` the window
         the rule saw (recording end minus training end, capped at
         ``pr_test_window_min``; on generation 3 the end of the ratio
-        Paradigm's run); ``LargestRequirement`` the most Sucrose Well licks
+        Paradigm's run, or a DFM restart inside it); ``LargestRequirement`` the most Sucrose Well licks
         credited to one counted event, descriptive only, and on generation 3
         the recorded ``BreakRequirement``; ``BreakRequirement`` the
         Requirement the last counted Light Event met and ``FirmwareEvents``
@@ -2391,36 +2595,37 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
         settings = self.break_settings()
         by_group = self._light_qc_by_group()
         rows = []
-        for dfm_id in sorted(self.dfms):
-            for group, pair in CHAMBER_GROUPS.items():
-                if any(self.design.treatment_for(dfm_id, c) is None for c in pair):
-                    continue
-                result = self.group_break(dfm_id, group, settings)
-                if result is None:
-                    continue
-                gt = self.group_training(dfm_id, group)
-                test = self._test_events(dfm_id, group)
-                credited = test["LicksSincePrev"].to_numpy(dtype=float)[result.counted]
-                largest = int(credited.max()) if credited.size else 0
-                recorded = self._reads_phase(self.dfms[dfm_id])
-                requirement, firmware = self._break_requirement(
-                    dfm_id, group, test, result.counted)
-                qc = by_group.get((int(dfm_id), int(group)), {})
-                rows.append({
-                    "Treatment": self.design.treatment_for(dfm_id, gt.paired_chamber),
-                    "DFM": int(dfm_id), "Chamber": int(gt.paired_chamber),
-                    "Group": int(group), "PairedChamber": int(gt.paired_chamber),
-                    "BreakingPoint": int(result.count),
-                    "BreakMin": float(result.last_min),
-                    "Censored": bool(result.censored),
-                    "TestMinutes": float(self._test_window(dfm_id, group, settings)),
-                    "LargestRequirement": requirement if recorded else largest,
-                    "BreakRequirement": requirement,
-                    "FirmwareEvents": firmware,
-                    "LickFreeLightEvents": qc.get("LickFreeEvents", np.nan),
-                    "LightQC": qc.get("Flags", ""),
-                    "ParadigmType": self.test_paradigm_type(dfm_id, group),
-                })
+        for dfm_id, layout in self._group_pairs():
+            group = layout.number
+            ## A pair still needs both chambers; a solo group, its one.
+            if any(self.design.treatment_for(dfm_id, c) is None for c in layout.chambers):
+                continue
+            result = self.group_break(dfm_id, group, settings)
+            if result is None:
+                continue
+            gt = self.group_training(dfm_id, group)
+            test = self._test_events(dfm_id, group)
+            credited = test["LicksSincePrev"].to_numpy(dtype=float)[result.counted]
+            largest = int(credited.max()) if credited.size else 0
+            recorded = self._reads_phase(self.dfms[dfm_id])
+            requirement, firmware = self._break_requirement(
+                dfm_id, group, test, result.counted)
+            qc = by_group.get((int(dfm_id), int(group)), {})
+            rows.append({
+                "Treatment": self.design.treatment_for(dfm_id, gt.paired_chamber),
+                "DFM": int(dfm_id), "Chamber": int(gt.paired_chamber),
+                "Group": int(group), "PairedChamber": int(gt.paired_chamber),
+                "BreakingPoint": int(result.count),
+                "BreakMin": float(result.last_min),
+                "Censored": bool(result.censored),
+                "TestMinutes": float(self._test_window(dfm_id, group, settings)),
+                "LargestRequirement": requirement if recorded else largest,
+                "BreakRequirement": requirement,
+                "FirmwareEvents": firmware,
+                "LickFreeLightEvents": qc.get("LickFreeEvents", np.nan),
+                "LightQC": qc.get("Flags", ""),
+                "ParadigmType": self.test_paradigm_type(dfm_id, group),
+            })
         if not rows:
             return pd.DataFrame(columns=cols)
         out = pd.DataFrame(rows)
@@ -2529,6 +2734,13 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
             lines += ["", f"{censored} of {len(summary)} chamber group(s) censored: still "
                           f"responding when the Test window ended, so the count is a "
                           f"lower bound."]
+        ## Decision 15: a DFM restart inside a Test window ends it there.
+        for r in summary.itertuples(index=False):
+            restart = self.test_restart(r.DFM, r.Group)
+            if restart is not None:
+                end = float(self.group_training(r.DFM, r.Group).training_end)
+                lines.append(f"DFM {int(r.DFM)} group {int(r.Group)}: "
+                             f"{restart_note(restart, end)}")
         return lines
 
     def _breaking_point_summary_lines(self) -> list[str]:
@@ -2596,9 +2808,11 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
         if incomplete:
             required = _truthy((self.global_constants or {}).get(
                 "require_training_complete", True))
+            whose = self._group_chambers_phrase("each")
             blocks.append(rl.Callout(
                 f"Training never completed in {rc.join_groups(incomplete)}; "
-                + ("both chambers of each were excluded." if required
+                + (f"{whose} {'was' if whose.startswith('the chamber') else 'were'} "
+                   f"excluded." if required
                    else "they are kept (require_training_complete is off)."),
                 tone="warning", title="Training"))
         return blocks
@@ -2619,6 +2833,9 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
                          "complete" if c else "never completed"
                          for c in training["TrainingComplete"]],
         })
+        if not self.has_yoked_controls():
+            ## Every group is one chamber: a column of NA says nothing.
+            training_view = training_view.drop(columns="Yoked chamber")
 
         def training_tone(value: Any) -> str | None:
             return ("ok" if value == "complete" else
@@ -2676,6 +2893,12 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
             firmware = ("  The firmware records each light event's Activation, so the "
                         "trend is also read on its Firmware Events; one that rises while "
                         "the licks do not is a note on pyflic's detection, not a warning.")
+        progressive = bool(self.progressive_groups())
+        warnings = ("no increasing trend in licks per light event and a rising or "
+                    "elevated resting level are warnings" if progressive else
+                    "a rising or elevated resting level is a warning; under a fixed ratio "
+                    "the requirement does not rise, so licks per light event are not "
+                    "judged for a trend")
         blocks += [
             rl.Heading("Progressive ratio: light QC", level=2),
             rl.Paragraph(
@@ -2686,9 +2909,8 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
                 "fires on its own schedule.  Self-triggered light (a run of "
                 f"{settings.lick_free_run} or more lick-free Test light events) and "
                 "implausible training (training light events with no sucrose lick) fail a "
-                "group; no increasing trend in licks per light event and a rising or "
-                "elevated resting level are warnings.  Computed over the whole recording."
-                + firmware),
+                f"group; {warnings}.  Computed over the whole recording."
+                + (firmware if progressive else "")),
             rl.Table(view, caption="Light QC by chamber group",
                      formats={"Trend rho": "{:.2f}", "Firmware trend rho": "{:.2f}",
                               "Resting rise": "{:.0f}", "Resting ratio": "{:.1f}"},
@@ -2706,24 +2928,34 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
                 f"(median over {inc[2]} chamber group(s)' first {lqc.INCREMENT_EVENTS} Test "
                 f"light events).", size=rl.SIZE_SMALL, color=rl.MUTED))
         for dfm_id in sorted(self.dfms):
+            ## One row of panels per three groups: six solo groups take two.
+            rows = -(-len(self.chamber_groups(dfm_id)) // 3)
+            caption = ("Sucrose Well licks credited to each Test light event. "
+                       "A working progressive ratio climbs; hollow red rings are "
+                       "lick-free light events, the dashed line the group's trend, "
+                       "the grey line the estimated requirement."
+                       if self.progressive_groups(dfm_id) else
+                       "Sucrose Well licks credited to each Test light event, under a "
+                       "fixed ratio; hollow red rings are lick-free light events, the "
+                       "dashed line the group's trend.")
             blocks += [
                 rl.Heading(f"Light QC figures — DFM {dfm_id}", level=2),
                 rl.Plot(lambda d=dfm_id: self.plot_light_events_dfm(d, base_font_size=8.5),
-                        height=3.4, title=f"Licks per light event — DFM {dfm_id}",
-                        caption="Sucrose Well licks credited to each Test light event. "
-                                "A working progressive ratio climbs; hollow red rings are "
-                                "lick-free light events, the dashed line the group's trend, "
-                                "the grey line the estimated requirement."),
+                        height=3.4 * rows, title=f"Licks per light event — DFM {dfm_id}",
+                        caption=caption),
                 rl.Plot(lambda d=dfm_id: self.plot_resting_level_dfm(d, base_font_size=8.5),
-                        height=3.2, title=f"Sucrose Well resting level — DFM {dfm_id}",
+                        height=3.2 * rows, title=f"Sucrose Well resting level — DFM {dfm_id}",
                         caption="Per-minute median raw signal of the paired Sucrose Well "
                                 "against the DFM's other Sucrose Wells; light onsets as a "
                                 "rug, training end dashed."),
                 rl.Plot(lambda d=dfm_id: self.plot_cumulative_licks_dfm(d, base_font_size=8.5),
-                        height=3.4, title=f"Training-aligned traces — DFM {dfm_id}",
-                        caption="Paired and yoked cumulative Sucrose Well licks since "
-                                "training end; points: light on; rings: lick-free light "
-                                "events."),
+                        height=3.4 * rows, title=f"Training-aligned traces — DFM {dfm_id}",
+                        caption=("Paired and yoked cumulative Sucrose Well licks since "
+                                 "training end; points: light on; rings: lick-free light "
+                                 "events." if any(not g.solo for g in self.chamber_groups(dfm_id))
+                                 else "Each paired fly's cumulative Sucrose Well licks since "
+                                      "training end; points: light on; rings: lick-free "
+                                      "light events.")),
             ]
         return blocks
 
@@ -2749,10 +2981,10 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
         experiment pool each paired fly with its own yoked control.  In their
         place — the Cumulative Difference Curve, the Paired-Yoked Difference in
         the Test phase (between treatments and against zero), and the breaking
-        point (ADR-0014)."""
+        point (ADR-0014).  A design of solo groups has no yoked controls, so
+        the first two give way to one sentence saying so (decision 13)."""
         from . import report_content as rc
         from . import report_layout as rl
-        from .analytics import breaking_point_comparisons, treatment_comparisons, zero_tests
 
         names = self.well_names or {}
         well_a = names.get("A") or "well A"
@@ -2763,8 +2995,36 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
             return lambda: rc.dot_plot(frame, column, y_label=label,
                                        factors=self.design_factors, hline_at=hline)
 
+        if self.has_yoked_controls():
+            blocks = self._paired_yoked_blocks(options, well_a, settings, half, dot)
+        else:
+            blocks = [rl.Paragraph(f"{NO_YOKED_CONTROLS.capitalize()}: every chamber group "
+                                   f"is one chamber, lit by its own fly alone, so there is "
+                                   f"no paired − yoked difference or cumulative difference "
+                                   f"curve.")]
+        blocks += self._breaking_point_blocks(options, settings)
+        return blocks
+
+    def _paired_yoked_blocks(self, options: Any, well_a: str, settings, half: float,
+                             dot) -> list[Any]:
+        """The Cumulative Difference Curve and the Paired-Yoked Difference in
+        the Test phase, over the groups that are pairs; a sentence names the
+        solo groups left out."""
+        from . import report_content as rc
+        from . import report_layout as rl
+        from .analytics import treatment_comparisons, zero_tests
+
+        names = self.well_names or {}
         diff = self.paired_yoked_diff()
         test = diff[diff["Facet"] == TEST_LABEL] if not diff.empty else diff
+        solo = self.solo_groups()
+        left_out = ""
+        if solo:
+            where = rc.join_groups(solo)
+            left_out = (f"  {where[0].upper()}{where[1:]} "
+                        f"{'is one chamber' if len(solo) == 1 else 'are one chamber each'}, "
+                        f"with no yoked control, and {'is' if len(solo) == 1 else 'are'} "
+                        f"left out of the paired − yoked comparison.")
         blocks: list[Any] = [
             rl.Heading("Cumulative difference curve", level=2),
             rl.Paragraph(
@@ -2772,7 +3032,7 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
                 f"training end: above zero, the paired fly worked for the light more than "
                 f"its yoked control fed.  Mean ± SEM per treatment, drawn only over the "
                 f"time every group covers; the faint lines are the individual groups.  "
-                f"Groups the light QC excluded are not included."),
+                f"Groups the light QC excluded are not included.{left_out}"),
             rl.Plot(lambda: self.plot_cumulative_diff(base_font_size=9.5), height=3.5),
             rl.Heading("Paired − yoked difference, Test phase", level=2),
             rl.Paragraph(
@@ -2809,15 +3069,26 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
                     zero_tests([(TEST_LABEL, test)], metrics),
                     caption="Paired − yoked difference against zero, per treatment, "
                             "Test phase", well_names=names)
+        return blocks
 
+    def _breaking_point_blocks(self, options: Any, settings) -> list[Any]:
+        """The breaking point section of the results (ADR-0014): its rule, the
+        still-responding curve and dot plot, the comparisons, the table by
+        group and the per-DFM ΔLicks figures."""
+        from . import report_content as rc
+        from . import report_layout as rl
+        from .analytics import breaking_point_comparisons
+
+        names = self.well_names or {}
+        blocks: list[Any] = []
         summary = self.breaking_point_summary()
         window = ("" if settings.test_window_min is None else
                   f"  Every Test window is capped at {settings.test_window_min:g} minutes "
                   f"(pr_test_window_min).")
         ## A FixedRatio Test Paradigm runs the same first-gap rule; what it
         ## measures is activations earned at a constant requirement (decision 14).
-        tested = [(d, g) for d in sorted(self.dfms) for g in CHAMBER_GROUPS
-                  if self.group_training(d, g).complete]
+        tested = [(d, g.number) for d, g in self._group_pairs()
+                  if self.group_training(d, g.number).complete]
         fixed = bool(tested) and all(self._fixed_ratio(d, g) for d, g in tested)
         recorded = summary["BreakRequirement"].notna().any() if not summary.empty else False
         extra = ""
@@ -2828,6 +3099,8 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
         elif recorded:
             extra = ("  The firmware recorded the Requirement each light event met; the "
                      "break requirement is the last counted one's.")
+        yoked = ("  The yoked fly has no breaking point: its light is its partner's."
+                 if self.has_yoked_controls() else "")
         blocks += [
             rl.Heading("Fixed ratio: activations earned" if fixed else "Breaking point",
                        level=2),
@@ -2837,9 +3110,14 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
                 f"{settings.gap_min:g} minutes (pr_break_gap_min); a lick-free light event "
                 f"neither counts nor ends a pause.  A group still responding when its Test "
                 f"window ended is censored: its count is a lower bound, drawn open, and the "
-                f"curve and the log-rank test treat it so.  The yoked fly has no breaking "
-                f"point: its light is its partner's.{window}{extra}"),
+                f"curve and the log-rank test treat it so.{yoked}{window}{extra}"),
         ]
+        restarts = [f"DFM {d} group {g.number}: "
+                    f"{restart_note(span, float(self.group_training(d, g.number).training_end))}"
+                    for d, g in self._group_pairs()
+                    for span in [self.test_restart(d, g.number)] if span is not None]
+        if restarts:
+            blocks.append(rl.Bullets(restarts, size=rl.SIZE_SMALL))
         if summary.empty:
             blocks.append(rl.Callout("No chamber group in the analysis has a Test phase.",
                                      tone="warning"))
@@ -2876,13 +3154,15 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
                                             "Test minutes": "{:.0f}"},
                                    status={"Light QC": rl.tone_of}))
         for dfm_id in sorted(self.dfms):
+            roles = ("both roles; " if any(not g.solo for g in self.chamber_groups(dfm_id))
+                     else "")
             blocks.append(rl.Plot(
                 lambda d=dfm_id: self.plot_breaking_point_dfm(d, base_font_size=8.5),
                 height=4.4, title=f"Licks per light-on period — DFM {dfm_id}",
-                caption="ΔLicks between successive light onsets after training end, one "
-                        "panel per chamber (both roles; groups excluded by the light QC "
-                        "included for reference).  Dashed: the break; grey: past it; "
-                        "hollow red: lick-free light events, never counted."))
+                caption=f"ΔLicks between successive light onsets after training end, one "
+                        f"panel per chamber ({roles}groups excluded by the light QC "
+                        f"included for reference).  Dashed: the break; grey: past it; "
+                        f"hollow red: lick-free light events, never counted."))
         return blocks
 
     def execute_basic_analysis(
@@ -2930,6 +3210,32 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
         result.update(figs)
         print(f"  Done → {len(figs)} figure(s)", flush=True)
         return result
+
+
+def restart_note(span, training_end: float) -> str:
+    """What a group's light QC notes and the breaking point lines say of a
+    DFM restart (a :class:`~pyflic.base.paradigm_state.RestartSpan`) inside
+    its Test window (decision 15 of ``docs/paradigm-analyses-plan.md``)."""
+    return (f"the DFM restarted at minute {span.minute:.1f}, "
+            f"{span.minute - float(training_end):.1f} min after training end: the Test "
+            f"window ends at the restart, because the ratio starts again after it, so a "
+            f"breaking point still running there is censored")
+
+
+def _chamber_column(values: Sequence[Any]) -> Any:
+    """Chamber numbers as a table column: plain integers, or nullable ones
+    with NA for a solo group's missing Yoked chamber when any is missing."""
+    if any(v is None or (isinstance(v, float) and np.isnan(v)) for v in values):
+        return pd.array([None if v is None or pd.isna(v) else int(v) for v in values],
+                        dtype="Int64")
+    return [int(v) for v in values]
+
+
+def _panel_figsize(n: int) -> tuple[float, float]:
+    """The size of a per-DFM figure with one panel per Chamber Group, three
+    panels to a row: six solo groups take two rows, not one 24-inch one."""
+    columns, rows = min(max(int(n), 1), 3), -(-max(int(n), 1) // 3)
+    return 4.0 * columns, 5.0 * rows
 
 
 def _truthy(value) -> bool:

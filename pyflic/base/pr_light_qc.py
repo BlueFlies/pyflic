@@ -30,7 +30,11 @@ On Generation 3 the firmware also records the **Firmware Events** each
 Activation took, so the licks-per-event trend has a second witness
 (decision 13 of ``docs/v4-data-plan.md``): the warning stays on pyflic's
 licks, and a firmware trend that rises while pyflic's does not is a note
-pointing at the lick detection.
+pointing at the lick detection.  It records the Requirement each Activation
+met too, so a Requirement off the Test Paradigm's series fails the group
+(*requirement series wrong*, :func:`requirement_series_mismatches`, the
+optogenetic light QC's check; decision 6 of
+``docs/paradigm-analyses-plan.md``).
 """
 
 from __future__ import annotations
@@ -57,11 +61,16 @@ IMPLAUSIBLE_TRAINING = "implausible training"
 NO_TREND = "no increasing trend"
 RESTING_RISE = "resting level rise"
 RESTING_ELEVATED = "resting level elevated"
+#: Generation 3: a Test light event met a Requirement other than the Test
+#: Paradigm's series gives (decision 6 of ``docs/paradigm-analyses-plan.md``,
+#: the optogenetic light QC's flag of the same name).  The firmware is
+#: deterministic, so it cannot happen with the right program: it fails.
+SERIES_WRONG = "requirement series wrong"
 
 #: Flags that fail a Chamber Group.  The others are warnings: a drifting
 #: Resting Level is the precursor of a failure and a flat lick trend can be a
 #: fly that simply stopped trying, so neither is proof on its own.
-FAILING_FLAGS: tuple[str, ...] = (SELF_TRIGGERED, IMPLAUSIBLE_TRAINING)
+FAILING_FLAGS: tuple[str, ...] = (SELF_TRIGGERED, IMPLAUSIBLE_TRAINING, SERIES_WRONG)
 WARNING_FLAGS: tuple[str, ...] = (NO_TREND, RESTING_RISE, RESTING_ELEVATED)
 
 VERDICT_OK = "ok"
@@ -307,6 +316,7 @@ def judge_group(
     firmware_events: np.ndarray | None = None,
     check_trend: bool = True,
     light_source: str = "OptoCol1 light bits",
+    series_mismatches: int | None = None,
 ) -> GroupVerdict:
     """Flags and notes for one Chamber Group from its measured quantities.
 
@@ -323,7 +333,10 @@ def judge_group(
     (:data:`FIRMWARE_TREND_NOTE`) — the warning itself stays on the licks.
     *check_trend* is False under a FixedRatio Test Paradigm, whose
     requirement never rises.  *light_source* names what a group without any
-    Light Event lacks, for its note."""
+    Light Event lacks, for its note.  *series_mismatches* is the count of
+    Test light events whose Requirement is not the Test Paradigm's series
+    (:func:`requirement_series_mismatches`); any one fails the group with
+    :data:`SERIES_WRONG`, and ``None`` means the check did not run."""
     flags: list[str] = []
     notes: list[str] = []
     counts = np.asarray(test_counts, dtype=int)
@@ -370,6 +383,8 @@ def judge_group(
                 notes.append(f"{counts.size} Test light event(s); "
                              f"{settings.trend_min_events} are needed for a "
                              f"trend verdict")
+        if series_mismatches:
+            flags.append(SERIES_WRONG)
 
     rise = float(resting.get("max", np.nan)) - float(resting.get("start", np.nan))
     if np.isfinite(rise) and rise >= settings.resting_rise:
@@ -390,6 +405,37 @@ def judge_group(
         trend_rho=rho, trend_slope=slope,
         trend_rho_firmware=rho_firmware,
     )
+
+
+def requirement_series_mismatches(ledger_rows: pd.DataFrame, paradigm: Any) -> int | None:
+    """*Requirement series wrong* for one Chamber Group (decision 6 of
+    ``docs/paradigm-analyses-plan.md``): how many of its Test light events
+    met a Requirement other than the Test Paradigm's ``requirement_for(K)``,
+    for :func:`judge_group`'s *series_mismatches*.
+
+    *ledger_rows* are the Activation ledger's rows
+    (:mod:`pyflic.base.activation_ledger`) of the Paired Sucrose Well inside
+    the group's Test window, Phase ``M``; *paradigm* is the Test Paradigm
+    from ``Program.txt``.  The experiment passes them only on generation 3,
+    for a ratio Test Paradigm the program defines.
+
+    ``None`` (not checked) until the check of the optogenetic light QC is
+    merged: it is stream S1's ``rule_checks.requirement_series_mismatches``,
+    and the Progressive Ratio light QC calls it rather than repeating it.
+    """
+    # ------------------------------------------------------------------
+    # >>> REQUIREMENT SERIES WRONG: THE PLACE FOR S1's CALL <<<
+    # When pyflic/base/rule_checks.py is merged, replace the return below
+    # with:
+    #
+    #     from .rule_checks import requirement_series_mismatches as check
+    #     return len(check(ledger_rows, paradigm))
+    #
+    # Nothing else changes: the experiment already builds the ledger rows
+    # (ProgressiveRatioExperiment._test_ledger_rows), judge_group fails the
+    # group on any mismatch (SERIES_WRONG), and light_qc_lines words it.
+    # ------------------------------------------------------------------
+    return None
 
 
 def estimate_increment(series: list[np.ndarray]) -> tuple[float, float, int] | None:
