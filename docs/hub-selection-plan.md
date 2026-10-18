@@ -7,7 +7,7 @@ ADR-0012. The decision and its reasons are in
 [../CONTEXT.md](../CONTEXT.md)'s: *QC Set*, *Analysis Set*, *Plot Set*,
 *Selection*.
 
-**Status (2026-10-18): being built on `v4_Dev`.**
+**Status (2026-10-18): implemented on `v4_Dev`** (merged at d02ea6a; the gate on 0d25431 passes with only the eight pre-existing failures). *Analyze all* and Batch Runs are unchanged and do not read the Selection, and no run removes an output, by the user's choice.
 
 - [What the user sees](#what-the-user-sees)
 - [The three sets](#the-three-sets)
