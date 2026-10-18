@@ -844,10 +844,15 @@ def _yoked_blocks(experiment: Experiment, options: ReportOptions) -> list[Any]:
     from . import analytics
     from . import yoked_report as yr
 
-    if not analytics.yoked_groups(experiment):
-        return []
-    frame = analytics.yoked_comparison(experiment, range_minutes=options.range_minutes,
-                                       transform_licks=options.transform_licks)
+    try:
+        if not analytics.yoked_groups(experiment):
+            return []
+        frame = analytics.yoked_comparison(experiment, range_minutes=options.range_minutes,
+                                           transform_licks=options.transform_licks)
+    except Exception as exc:  # noqa: BLE001 - one subsection, not the report
+        return [rl.Heading("Paired and yoked", level=2),
+                rl.Callout(f"The paired − yoked comparison could not be made: {exc}",
+                           tone="failed")]
     tables = yr.yoked_table_blocks(frame, well_names=experiment.well_names or {},
                                    two_well=_is_two_well(experiment),
                                    include_comparison=options.include_comparison)

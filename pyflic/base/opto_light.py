@@ -969,10 +969,14 @@ class OptoLightQC:
         settings = self.settings()
         generations = self.generations()
         firmware4 = GENERATION_PARADIGM in generations.values()
+        rules_error = None
         if firmware4:
             ## Generation 3 records each Activation's light, and each Paradigm's
             ## rule is checked below; generations 1 and 2 keep the decay rule.
-            rules = rule_figures.rule_sections(self)
+            try:
+                rules = rule_figures.rule_sections(self)
+            except Exception as exc:  # noqa: BLE001 - the subsections, not the report
+                rules, rules_error = [], exc
             intro = (
                 "The firmware lights a linkage group from its own reading of the group's "
                 "trigger wells during the run; pyflic counts licks afterwards, from the "
@@ -985,7 +989,7 @@ class OptoLightQC:
                 "sustained contact or a hardware fault.  "
                 + ("Each Paradigm is also checked against its own rule, one Activation at a "
                    "time, with Program.txt's settings: one subsection per Paradigm follows "
-                   "the figures.  " if rules else
+                   "the figures.  " if rules or rules_error is not None else
                    "Each Paradigm's own rule is checked only with Program.txt's settings, "
                    "and this recording has none for its firmware 4.0.0 DFMs.  ")
                 + "Computed over the whole recording.")
@@ -1059,6 +1063,9 @@ class OptoLightQC:
         ## Each Paradigm against its own rule (stream S3).
         if rules:
             blocks += rule_figures.report_blocks(self, rules)
+        elif rules_error is not None:
+            blocks.append(rl.Callout(f"The rule checks' subsections could not be built: "
+                                     f"{rules_error}", tone="failed"))
         return blocks
 
     def _bullets(self) -> list[str]:
