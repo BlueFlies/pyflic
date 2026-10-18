@@ -77,7 +77,7 @@ results there; to compare phases of one recording, use [Facets](concepts-facets.
 options* on the Project panel's Experiments card, below the members table. Figures are embedded as static images, rasterised once and released, so many tabs
 cost little memory; **Clear Tabs** in the output area closes them all. During a Batch Run,
 **Suppress new plot / output tabs** stops them being created at all. **Clear cache** on the
-Tools panel clears the loaded member's cache; load the member first.
+Tools panel clears the loaded member's cache, or, with only a Project open, every member's.
 
 ---
 

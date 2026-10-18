@@ -378,7 +378,8 @@ Project open, use **AI narrative…** on the Project panel's Analysis card inste
   hand-edited config three folders down before an unattended run finds it.
 - **Lint / migration check** — the linter and its migration checks, as `pyflic lint`.
 - **Open this folder** — the selected folder in the system file browser.
-- **Clear cache** — removes the loaded member's cached feeding summaries; see
+- **Clear cache** — removes the loaded member's cached feeding summaries or, with only a
+  Project open, every member's, and the log says how many it removed from each; see
   [The disk cache](performance.md#the-disk-cache).
 - **Toggle theme** — light or dark, remembered for next time.
 - **Help** — this help window, at its first page.

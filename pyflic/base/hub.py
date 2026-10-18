@@ -3012,11 +3012,24 @@ class AnalysisHubWindow(QMainWindow):
         self._open_externally(Path(directory))
 
     def _clear_cache(self) -> None:
+        """Remove the cached feeding summaries of the loaded member, or, with
+        only a Project open, of every member: a Project keeps no cache of its
+        own, so clearing its folder cleared nothing."""
+        from . import cache
+
+        project = self.project
+        if self.experiment is None and project is not None:
+            counts = [(name, cache.clear(Path(project.member_dir(name))))
+                      for name in project.member_names]
+            total = sum(n for _name, n in counts)
+            each = ", ".join(f"{name} {n}" for name, n in counts)
+            self.log.append_line(
+                f"Removed {total} cache file(s) from {len(counts)} member(s) of "
+                f"{project.name}" + (f" ({each})" if counts else ""))
+            return
         directory = self._current_dir()
         if not directory:
             return
-        from . import cache
-
         removed = cache.clear(Path(directory))
         self.log.append_line(f"Removed {removed} cache file(s) from {directory}")
 
