@@ -45,6 +45,8 @@ from typing import Any, Mapping
 import numpy as np
 import pandas as pd
 
+from .paradigm_state import NO_TRAINING_INFORMATION
+
 #: Design ``constants:`` read by the light QC, with their defaults.  The
 #: Progressive Ratio type merges these into its ``default_constants``.
 DEFAULT_CONSTANTS: dict[str, Any] = {
@@ -353,8 +355,8 @@ def judge_group(
         notes.append(f"no light events recorded for this group (no {light_source}), "
                      f"so the light checks do not apply")
     elif training_complete is None:
-        notes.append("no training information (DFM firmware older than 4.0.0): no "
-                     "Test phase to check, so no Breaking Point or Sucrose Persistence")
+        notes.append(f"{NO_TRAINING_INFORMATION}; no Test phase to check, so no "
+                     f"Breaking Point or Sucrose Persistence")
     elif not training_complete:
         notes.append("training never completed, so there is no Test phase to check")
     else:

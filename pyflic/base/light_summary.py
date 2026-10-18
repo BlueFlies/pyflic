@@ -102,7 +102,7 @@ from . import opto_program as op
 from . import paradigm_families as pfam
 from . import windowing
 from .opto_roles import ROLE_OPEN
-from .paradigm_state import GENERATION_PARADIGM
+from .paradigm_state import GENERATION_PARADIGM, NO_TRAINING_INFORMATION  # noqa: F401
 
 #: The Paradigm Families' columns (stream S2), grouped by family as
 #: :data:`paradigm_families.FAMILIES` declares them.
@@ -1276,9 +1276,9 @@ def has_generation_2(frame: pd.DataFrame | None) -> bool:
     return bool((pd.to_numeric(frame["Generation"], errors="coerce") == 2).any())
 
 
-#: What a member recorded from a DFM whose firmware predates 4.0.0 (generation
-#: 2) says wherever its Training would show (decision 15).
-NO_TRAINING_INFORMATION = "no training information (firmware older than 4.0.0)"
+## What a generation-2 member says wherever its Training would show is
+## paradigm_state.NO_TRAINING_INFORMATION, imported above and used from here
+## by the Hub and the Project Report.
 
 
 def no_training_information(exp) -> bool:

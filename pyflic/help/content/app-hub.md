@@ -30,7 +30,7 @@ needs one:
 
 | Note | Means |
 |---|---|
-| *no training information (firmware older than 4.0.0)* | a DFM was recorded by PyMCU 4.0.0 from a DFM whose firmware is older: no Training, so a Progressive Ratio member has one `Recording` Facet and no Test |
+| *no training information: recorded with DFM firmware older than 4.0.0* | a DFM was recorded by PyMCU 4.0.0 from a DFM whose firmware is older: no Training, so a Progressive Ratio member has one `Recording` Facet and no Test |
 | *DFM n: firmware 4.0.0 recording without Program.txt: Paradigm types and settings unknown* | copy the `Program.txt` PyMCU exported for this recording into `data/` |
 
 See [Generations](concepts-optogenetics.md#generations).

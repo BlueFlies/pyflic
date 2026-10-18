@@ -69,7 +69,7 @@ from .opto_program import (
     RATIO_PARADIGMS,
     TYPE_NAMES,
 )
-from .paradigm_state import GENERATION_PARADIGM, ParadigmState
+from .paradigm_state import GENERATION_PARADIGM, NO_TRAINING_INFORMATION, ParadigmState
 from .two_well_experiment import TwoWellExperiment
 from .utils import range_bounds, range_is_specified
 
@@ -82,10 +82,10 @@ RECORDING_LABEL = "Recording"
 #: Every Facet this type makes, in the order its tables list them.
 _FACET_ORDER = (TRAINING_LABEL, TEST_LABEL, RECORDING_LABEL)
 
-#: What ``summary.txt``, the report, the Hub and the Project Report say of a
-#: generation-2 DFM (:meth:`ProgressiveRatioExperiment.training_information`).
-NO_TRAINING_INFORMATION = ("no training information: recorded with DFM firmware "
-                           "older than 4.0.0")
+## What summary.txt and the report say of a generation-2 DFM
+## (ProgressiveRatioExperiment.training_information) is
+## paradigm_state.NO_TRAINING_INFORMATION, imported above: the one wording
+## the Hub and the Project Report use too.
 #: Generation 3: a ratio Paradigm that is the first Interval and has no
 #: Acclimation leaves nothing to call Training (decision 11).
 EMPTY_TRAINING_NOTE = ("Training was empty: the ratio Paradigm had no Acclimation "
