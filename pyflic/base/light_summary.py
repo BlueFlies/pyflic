@@ -68,11 +68,13 @@ record wider for an Activation timed to the record:
 * open loop (decision 11; the chamber's Role is Open, or in the window its
   wells run open loop and nothing else): ``LicksPerMinLit`` and
   ``LicksPerMinDark``, the licks while the chamber's own light is on and
-  off per minute of each (:func:`analytics.chamber_light_phases
+  off per minute of each, over the rows a Program Interval ran
+  (:func:`analytics.chamber_light_phases
   <pyflic.base.analytics.chamber_light_phases>`, which
-  ``light_phase_summary`` reports), and ``LightFeedingIndex``, (lit - dark)
-  / (lit + dark) of the two, ``NA`` when either phase is absent or both
-  rates are 0.
+  ``light_phase_summary`` reports over the whole recording, baseline
+  included), and ``LightFeedingIndex``, (lit - dark) / (lit + dark) of the
+  two.  A phase shorter than :data:`MIN_LIGHT_PHASE_MIN` has no rate, and
+  the index is ``NA`` when either rate is, or both are 0.
 
 A window is the feeding summary's: one ``(a, b]`` range of minutes
 (``(0, 0)`` the whole recording), or a list of them, as a Program Facet
@@ -768,15 +770,23 @@ def _light_index(lit: float, dark: float) -> float:
     return float((lit - dark) / (lit + dark))
 
 
+#: The least time, in minutes, a light phase must last before its licks per
+#: minute is given.  A few seconds of dark (an Interval boundary, a late
+#: record) cannot stand for a fly's feeding in the dark; with less, the rate
+#: and the LightFeedingIndex are NA.
+MIN_LIGHT_PHASE_MIN = 1.0
+
+
 def _open_loop_rates(ctx: _DFMLight, phases: dict, wells: Sequence[int]) -> dict[str, Any]:
     """LicksPerMinLit, LicksPerMinDark and LightFeedingIndex of *wells*' licks,
-    by the chamber's own light (*phases*)."""
+    by the chamber's own light (*phases*); a phase shorter than
+    :data:`MIN_LIGHT_PHASE_MIN` has no rate."""
     rates = {}
     for phase, column in (("light", "LicksPerMinLit"), ("dark", "LicksPerMinDark")):
         counts = phases[phase]
         phase_min = counts.samples / ctx.sps / 60.0
         licks = sum(counts.licks[int(w)] for w in wells)
-        rates[column] = float(licks) / phase_min if phase_min > 0 else np.nan
+        rates[column] = float(licks) / phase_min if phase_min >= MIN_LIGHT_PHASE_MIN else np.nan
     rates["LightFeedingIndex"] = _light_index(rates["LicksPerMinLit"], rates["LicksPerMinDark"])
     return rates
 
@@ -787,7 +797,13 @@ def _open_loop_phases(ctx: _DFMLight, chamber: int, win: _Window) -> dict | None
     depend on its fly (decision 11): its Role is Open, or its wells run open
     loop (``On``, or under OpenLoop) in the window and no rule of theirs
     their fly drives.  ``None`` otherwise, and off generation 3 with a
-    program."""
+    program.
+
+    Only the window's rows under a Program Interval count: the baseline
+    lead-in (``Interval`` 0) and rows under an unknown instruction are
+    dark because no program step ran, not because the program turned the
+    light off.  Counting them made a chamber lit for the whole program look
+    as if it had a dark phase of a few seconds."""
     if not ctx.typed or not win.size:
         return None
     cols = [int(w) - 1 for w in ctx.chambers[chamber].wells]
@@ -798,7 +814,9 @@ def _open_loop_phases(ctx: _DFMLight, chamber: int, win: _Window) -> dict | None
             return None
     from .analytics import chamber_light_phases
 
-    return chamber_light_phases(ctx.dfm, ctx.chambers[chamber].wells, lit=ctx.lit, rows=win.rows)
+    in_program = ctx.state.program_interval.to_numpy(dtype=np.int64, na_value=-1) > 0
+    rows = win.rows[in_program[win.rows]]
+    return chamber_light_phases(ctx.dfm, ctx.chambers[chamber].wells, lit=ctx.lit, rows=rows)
 
 
 def _acclimation(ctx: _DFMLight, w: int, win: _Window, acts: _Activations,

@@ -973,34 +973,45 @@ def test_suppressions_no_longer_count_max_on_ends(s2_loaded):
 
 # -- decision 11: feeding in light and dark, open loop only --------------------
 
-def _phase_rates(e) -> pd.DataFrame:
-    """light_phase_summary's licks per minute of each phase, per chamber
-    (``Both`` wells summed) and per well (``A``, ``B``), indexed by (DFM,
-    Chamber), columns (what, phase)."""
-    from pyflic.base.analytics import light_phase_summary
-
-    df = light_phase_summary(e, transform_licks=False)
-    minutes = df["PhaseSeconds"] / 60.0
-    out = df[["DFM", "Chamber", "Phase"]].copy()
-    for name, licks in (("Both", df["LicksA"] + df["LicksB"]), ("A", df["LicksA"]),
-                        ("B", df["LicksB"])):
-        out[name] = (licks / minutes).where(minutes > 0)
-    return out.set_index(["DFM", "Chamber", "Phase"]).unstack("Phase")
-
-
 def _index(lit, dark):
     return np.nan if pd.isna(lit) or pd.isna(dark) or lit + dark == 0 else (lit - dark) / (lit + dark)
 
 
-def test_the_open_loop_rates_are_light_phase_summarys(each, tmp_path):
-    """LicksPerMinLit and LicksPerMinDark are light_phase_summary's licks per
-    minute of the chamber's own light and dark (they share one
-    computation), for an Open chamber only: one_of_each's OpenLoop DFM, and
-    repeating_open_loop_spec (On for 3 minutes, Off for 12)."""
+def _program_rates(e, dfm: int, chamber: int) -> dict:
+    """Licks per minute of the chamber's own light and dark, ``Both`` wells
+    and each, over the rows a Program Interval ran: the computation
+    light_phase_summary shares, without its baseline lead-in, and NA for a
+    phase shorter than ``MIN_LIGHT_PHASE_MIN``."""
+    from pyflic.base.analytics import chamber_light_phases
+
+    d = e.dfms[dfm]
+    ch = next(c for c in d.chambers if int(c.index) == chamber)
+    a, b = int(ch.well_a), int(ch.well_b)
+    rows = np.flatnonzero(d.paradigm.program_interval.to_numpy(dtype=np.int64, na_value=-1) > 0)
+    phases = chamber_light_phases(d, (a, b), rows=rows)
+    out = {}
+    for phase in ("light", "dark"):
+        minutes = phases[phase].samples / float(d.params.samples_per_second) / 60.0
+        for name, wells in (("Both", (a, b)), ("A", (a,)), ("B", (b,))):
+            licks = sum(phases[phase].licks[w] for w in wells)
+            out[(name, phase)] = (licks / minutes if minutes >= ls.MIN_LIGHT_PHASE_MIN
+                                  else np.nan)
+    return out
+
+
+def test_the_open_loop_rates_are_the_programs_light_and_dark(each, tmp_path):
+    """LicksPerMinLit and LicksPerMinDark are the licks per minute of the
+    chamber's own light and dark, light_phase_summary's computation, over
+    the rows a Program Interval ran, for an Open chamber only.
+
+    The baseline lead-in is left out: its few dark seconds once gave
+    one_of_each's OpenLoop DFM, whose A wells are On throughout, a dark
+    rate of 0 and an index of 1 on every chamber.  It has no dark phase, so
+    both are NA; repeating_open_loop_spec (On for 3 minutes, Off for 12)
+    has a real one."""
     spec = repeating_open_loop_spec(minutes=20.0)
     repeating = _load(_recording(tmp_path / "rep", spec, simulate(spec)))
     for e, open_dfms in ((each[0], {1}), (repeating, {1})):
-        rates = _phase_rates(e)
         chambers = ls.light_summary(e).set_index(["DFM", "Chamber"])
         wells = ls.light_wells(e).set_index(["DFM", "Well"])
         for (dfm, chamber), row in chambers.iterrows():
@@ -1008,17 +1019,22 @@ def test_the_open_loop_rates_are_light_phase_summarys(each, tmp_path):
                 assert row[list(ls.OPEN_LOOP_COLUMNS)].isna().all(), (dfm, chamber)
                 continue
             assert row.Role == "Open"
-            lit, dark = rates.loc[(dfm, chamber), ("Both", "light")], \
-                rates.loc[(dfm, chamber), ("Both", "dark")]
-            assert row.LicksPerMinLit == pytest.approx(lit)
-            assert row.LicksPerMinDark == pytest.approx(dark)
-            assert row.LightFeedingIndex == pytest.approx(_index(lit, dark))
+            rates = _program_rates(e, dfm, chamber)
+            lit, dark = rates[("Both", "light")], rates[("Both", "dark")]
+            assert row.LicksPerMinLit == pytest.approx(lit, nan_ok=True)
+            assert row.LicksPerMinDark == pytest.approx(dark, nan_ok=True)
+            assert row.LightFeedingIndex == pytest.approx(_index(lit, dark), nan_ok=True)
             ch = next(c for c in e.dfms[dfm].chambers if int(c.index) == chamber)
             for well, side in ((int(ch.well_a), "A"), (int(ch.well_b), "B")):
                 assert wells.loc[(dfm, well), "LicksPerMinLit"] == pytest.approx(
-                    rates.loc[(dfm, chamber), (side, "light")])
+                    rates[(side, "light")], nan_ok=True)
                 assert wells.loc[(dfm, well), "LicksPerMinDark"] == pytest.approx(
-                    rates.loc[(dfm, chamber), (side, "dark")])
+                    rates[(side, "dark")], nan_ok=True)
+    ## Lit for the whole program: no dark phase, so no index.
+    always_on = ls.light_summary(each[0])
+    always_on = always_on[always_on["DFM"] == 1]
+    assert always_on["LicksPerMinLit"].notna().all()
+    assert always_on["LicksPerMinDark"].isna().all() and always_on["LightFeedingIndex"].isna().all()
     ## The Repeating program's dark is its Off Intervals: a real comparison.
     table = ls.light_summary(repeating)
     assert (table["LicksPerMinDark"] > 0).all() and table["LightFeedingIndex"].notna().all()
@@ -1031,7 +1047,9 @@ def test_the_open_loop_rates_are_light_phase_summarys(each, tmp_path):
 
 #: one_of_each_spec: each DFM's family columns (decision 8), per chamber.
 EACH_FAMILY_COLUMNS = {
-    1: set(ls.OPEN_LOOP_COLUMNS),
+    ## The OpenLoop DFM is lit for the whole program: no dark phase, so no
+    ## LicksPerMinDark and no LightFeedingIndex.
+    1: {"LicksPerMinLit"},
     2: {"MedianActivationSec", "CutOffs"},
     3: {"MaxActivations", "RewardEfficiency", "MedianReturnSec", "LockedOutContactSec"},
     4: {"Suppressions", "MedianSuppressionSec"},
@@ -1167,7 +1185,13 @@ def test_the_headline_metrics_follow_the_families(each, tmp_path):
     families = rc.light_families([(e.opto_program, e.opto.dfm_ids())])
     assert [f.key for f in families] == ["open loop", "closed loop", "interval", "ratio",
                                          "non-feeding", "acclimation"]
-    assert titles == [rc.metric_label(m) for f in families for m in f.metrics]
+    ## A metric no chamber has a value for is named, not drawn: one_of_each's
+    ## OpenLoop DFM is lit for the whole program, so it has no dark phase and
+    ## no LightFeedingIndex.
+    table = ls.light_summary(e)
+    defined = {m for m in headline if table[m].notna().any()}
+    assert "LightFeedingIndex" not in defined
+    assert titles == [rc.metric_label(m) for f in families for m in f.metrics if m in defined]
     assert list(dict.fromkeys(m for f in families for m in f.metrics)) == headline
     assert ls.experiment_headline_metrics(_load(make_opto_dir(tmp_path / "g1"))) == \
         list(ls.HEADLINE_METRICS)
