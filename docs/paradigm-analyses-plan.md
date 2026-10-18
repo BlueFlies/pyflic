@@ -437,6 +437,10 @@ The columns:
   - a well in `linked[well]` has an onset in `[Row, EndRow]`;
   - the row before `Row` was lit with no gap between, so the LED was
     already on;
+  - the light ran on into the well's next Activation: the next onset is the
+    row after `EndRow`, and `OnMs[EndRow]` is the whole record. Under
+    FixedInterval, with `LockoutMs` shorter than `ActivationMs`, held contact
+    does this, so neither Activation's length can be read;
   - two of the well's onsets fall in `Row`.
 
   Overlapped rows keep their `LitMs`, and checks skip them.
@@ -565,28 +569,75 @@ Decision 16.
 
 ## Stream S1: rule checks
 
-Files: `opto_qc.py`, `opto_light.py`, and the Opto editors for the
-constants.
+Files: `opto_qc.py`, `opto_light.py` (outside its report blocks), the Opto
+editors for the constants, and `qc_viewer.py`'s `OptoTab._COLUMNS`.
 
-- **The new flags** of decisions 6, 15 and 18, with the constants of
-  decision 7. Each check is a function in the family registry, applied per
-  Linkage Group and window, on generation 3.
-- **New columns in `opto_light_qc.csv`**: ShortActivations,
-  OverMaxOnActivations, CutOffs, WrongLengthActivations,
-  LockoutViolations, MissedContacts, SeriesMismatches, NonFeedingDarkSec,
-  RelightDelayMs, and IntervalLagSec (the worst).
-- **The QC Viewer's Opto tab** lists them (`OptoTab._COLUMNS`).
-- **Open loop**: the lit fraction is judged per Program Interval.
-- **Non-feeding** gets its own constants and *non-feeding dark*. Its windows
-  now expect light, so *no light recorded* can fire for a dead LED.
+**How every check judges.** A check judges the ledger rows of a Linkage
+Group's Trigger Wells, per window, on generation 3. Two kinds of row are
+**judgeable** for a length:
+- the row is not `Overlap`;
+- its `Boundary` is empty.
+
+The others are counted as not judged. A check needs `Program.txt`, because
+it reads the Paradigm's settings. Without one it does not run, and the
+reason says so. `tol` is `opto_activation_tolerance_ms`. A timing with
+`Timing` `record` widens `tol` by one record (200 ms).
+
+| Check and column | Applies to | Counted when | Verdict |
+|---|---|---|---|
+| *short activations*, `ShortActivations` | Closed loop: ClosedLoop Main, and any Phase-`A` Activation | a judgeable Activation's `LitMs` < min(Hold, `MaxOnMs` if > 0) − `tol`. The Hold is `HoldMs`, or `ActivationMs` in Acclimation. Lit time is the contact plus the Hold, so never less | fails when the count is above `opto_activation_length_fail_fraction` of the judgeable ones |
+| *max on exceeded*, `OverMaxOnActivations` | ClosedLoop with `MaxOnMs`; NonFeeding with `MaxOnMs` > 0 | a judgeable Activation's `LitMs` > `MaxOnMs` + `tol` | fails on any one |
+| `CutOffs` | ClosedLoop with `MaxOnMs` | a judgeable Activation with abs(`LitMs` − `MaxOnMs`) ≤ `tol` | reported |
+| *wrong activation length*, `WrongLengthActivations` | Fixed length, Phase `M` | a judgeable Activation with abs(`LitMs` − `ActivationMs`) > `tol` | fails above `opto_activation_length_fail_fraction` |
+| *lockout broken*, `LockoutViolations` | FixedInterval, Phase `M` | `SinceLastOnsetMs` < max(`LockoutMs`, `ActivationMs`) − `tol`, between consecutive Main Activations of one state run. The firmware needs both the Activation ended and the lockout passed | fails above `opto_lockout_fail_fraction` |
+| *contact without activation*, `MissedContacts` | FixedInterval, Phase `M` | a run of pyflic activity at the Trigger Well that begins while the well is free, with no Activation onset within the tolerance after the run starts. Free means its own Activation is over and max(`LockoutMs`, `ActivationMs`) has passed since its last onset | warns when the count is above `opto_missed_contact_warn_fraction` of the free runs, with at least 5 free runs |
+| *requirement series wrong*, `SeriesMismatches` | Ratio, Phase `M` | `RequirementMet` ≠ `requirement_for(K)`, where both are known and the row is not a two-onset row | fails on any one |
+| *non-feeding dark*, `NonFeedingDarkSec` | NonFeeding | time the well's `OnMs` is 0 although the firmware's rule says lit. The rule says lit with no pyflic activity at the Trigger Well for longer than `OnDelayMs` + `tol`, and, with `MaxOnMs` > 0, within the first `MaxOnMs` after that point | warns when the time is above `opto_non_feeding_dark_warn_fraction` of the expected-lit time |
+| `RelightDelayMs` | NonFeeding | the median, over Activations that follow pyflic activity at the Trigger Well, of `OnsetMs` minus the end of the last activity sample before it | reported, against `OnDelayMs` |
+| *open loop not lit*, `OpenLoopLitFraction` | Open loop | the column becomes the **lowest** lit fraction over the group's open-loop windows, so each Program Interval and each pass is judged | warns below `opto_open_loop_min_lit_fraction`, as now |
+| *interval started late*, `IntervalLagSec` | every family | the worst lag of a Program Interval's first row (on every Cycle) behind its `Program.txt` time. Extend `_check_program_times`, which already compares times | warns above `opto_interval_lag_warn_sec`. The firmware's normal lag is one row |
+| *DFM restarted*, `Restarts` | every family | the DFM's `ParadigmState.restarts()` | warns, on every group of that DFM, with the times |
+
+- ***Non-feeding light during feeding*** keeps its rule and reads
+  `opto_non_feeding_lit_warn_fraction` and `opto_non_feeding_min_sec`. Their
+  defaults equal the values it borrowed, so its results do not change.
+- **Non-feeding windows now expect light**, so *no light recorded* fires for
+  a NonFeeding DFM that never lit.
+- **`EndedBy`** in `opto_light_events.csv`, for each Activation:
+  - `interval`, `gap` or `end` from `Boundary`;
+  - `unknown` when `Overlap`;
+  - closed loop: `MaxOnMs` when within `tol` of it, otherwise `Hold`;
+  - fixed length: `length` when within `tol` of `ActivationMs`, otherwise
+    `unknown`;
+  - non-feeding: `MaxOnMs` when within `tol` of it, `contact` when pyflic
+    activity at the Trigger Well begins within the tolerance of `EndMs`,
+    otherwise `unknown`.
+- **The constants** of decision 7 go into `OptoQCSettings`, the yaml keys,
+  the Opto editors (rows like the existing ones) and `summary.txt`'s
+  constants line.
+- **Flag placement.** The new flags join `FAILING_FLAGS` or `WARNING_FLAGS`
+  per decision 6.
+- **Reasons.** Each reason names the setting, the measured value and, for a
+  failing check, the likely cause from decision 5.
+- **Not judged.** Activations that could not be judged are counted in the
+  notes.
 
 Acceptance:
-- every flag fires on its injected fault, and the reason names the setting
-  and the measured value;
-- no new flag fires on any clean spec, on the PyMCU-simulator recording or
-  on the quiet bench run;
-- generations 1 and 2 have the new columns `NA`, with the reason in
-  `summary.txt`.
+- **Each flag fires on its injected fault** from C1:
+  - `program_paradigms` with a different `ActivationMs`, `LockoutMs`, Step
+    or `MaxOnMs`;
+  - `on_ms_faults` shortening or blanking light;
+  - a restart.
+
+  The reason names the setting and the value.
+- **No new flag fires on clean data**:
+  - any clean spec (`family_specs`, `one_of_each`, `choice` apart from its
+    designed faults, `yoked_controls`, `stress`, `fixed_ratio`,
+    `repeating_open_loop`);
+  - the PyMCU-simulator recording;
+  - the quiet bench run.
+- **Generations 1 and 2** have the new columns `NA`, and their outputs are
+  unchanged.
 
 ## Stream S2: summary columns and headline metrics
 
@@ -594,88 +645,210 @@ Files: `light_summary.py`, `pubfigures.py` (`LIGHT_METRICS`), and
 `analytics.light_phase_summary`, which becomes the source of the light and
 dark rates.
 
-- the columns of decision 8, and the redefinitions of decision 10;
-- `HEADLINE_METRICS` becomes a function of the families present, per
-  decision 9;
-- the Project stacks keep every column.
+**Columns.** Per well and window, from the ledger, `NA` outside the family.
+"Judgeable" is as in S1, and `tol` is `opto_activation_tolerance_ms` from the
+member's opto settings.
+
+| Column | Family | Definition |
+|---|---|---|
+| `MedianActivationSec` | Closed loop | the median `LitMs` / 1000 of the judgeable closed-loop Activations (ClosedLoop Main, or Phase `A`) |
+| `CutOffs` | ClosedLoop with `MaxOnMs` | judgeable Activations with abs(`LitMs` − `MaxOnMs`) ≤ `tol` |
+| `MainActivations` | any Paradigm with Acclimation > 0 | the Phase-`M` Activations |
+| `MaxActivations` | FixedInterval | the window's Main time, divided by max(`LockoutMs`, `ActivationMs`), floored |
+| `RewardEfficiency` | FixedInterval | `MainActivations`, or `Activations` without Acclimation, divided by `MaxActivations` |
+| `MedianReturnSec` | FixedInterval | the median of `SinceLastOnsetMs` − max(`LockoutMs`, `ActivationMs`), over consecutive Main Activations, in seconds: how soon the fly came back once it could earn light |
+| `LockedOutContactSec` | FixedInterval (redefined, decision 10) | pyflic lick samples at the well in Main rows where its lockout is running and its own Activation is not lit, divided by samples per second |
+| `Suppressions` | NonFeeding (redefined, decision 10) | judgeable NonFeeding Activations not ended by `MaxOnMs`. Contact is the only other way the light goes out |
+| `MedianSuppressionSec` | NonFeeding | the median of the next Activation's `OnsetMs` minus a suppression's `EndMs`, within one state run, in seconds |
+| `LicksPerMinLit`, `LicksPerMinDark` | Open loop (the chamber's Role is Open, or its window's mode is open loop) | the chamber's licks while its own `OnMs` > 0, and while it is 0, per minute of each |
+| `LightFeedingIndex` | Open loop | (lit − dark) / (lit + dark) of those two rates; `NA` when either phase is absent or both rates are 0 |
+
+- The chamber table sums counts and takes medians over its wells, as it does
+  today.
+- `HEADLINE_METRICS` stays as a name, for compatibility. Callers move to
+  `paradigm_families.headline_metrics(...)` with the member's families
+  (decision 9).
+- `pubfigures.LIGHT_METRICS` offers every new column, with its label and
+  unit.
 
 Acceptance:
-- each column is exact on the simulator's truth for its spec;
-- every column is `NA` off-family;
-- the PyMCU-simulator recording's values match its truth where the truth
-  has them.
+- **Truth.** Each column equals a computation from the simulator's truth on
+  its `family_specs` entry. The licks columns are compared with
+  `light_phase_summary`.
+- **Off-family.** Every column is `NA` off its family, and on generations 1
+  and 2.
+- **PyMCU.** On the PyMCU-simulator recording, `MainActivations` equals the
+  truth's `MainActivations`.
+- **Stacks.** The Project stacks carry every column.
 
 ## Stream S3: reports, figures and views
 
-Files: `opto_light.report_qc_blocks`, `pdf_report`, `project_report`,
-`report_content`, `program_timeline`, and the QC Viewer's Program tab.
+Files: `opto_light.report_qc_blocks` and `report_glance_blocks`,
+`pdf_report.py`, `project_report.py`, `report_content.py`,
+`program_timeline.py`, a new `pyflic/base/rule_figures.py`, and the QC
+Viewer's Program tab.
 
-- **Quality control**: after the group table, one subsection per Paradigm in
-  the program, ordered by family. Each has:
-  - the rule in one sentence with its settings, for example "CL500 (closed
-    loop): lit during contact and for 500 ms after; at most 2500 ms per
-    light period";
-  - the family's check table per Linkage Group, with the verdict;
-  - its rule figure:
-    - Closed loop: a histogram of lit time per Activation, with lines at the
-      Hold and `MaxOnMs`;
-    - Fixed length, Interval: a histogram of onset-to-onset spacing, with a
-      line at the lockout, and the length histogram;
-    - Fixed length, Ratio: Requirement met against K for each Trigger Well,
-      over the program's series;
-    - Non-feeding: a histogram of the relight delay, with a line at
-      `OnDelayMs`;
-    - Open loop: the Program timeline already shows the schedule, so it has
-      no figure of its own.
+**Quality control, optogenetic light** (member report). On generation 3,
+after today's group table, the section gains one subsection per Paradigm in
+the member's program, in `FAMILY_ORDER`, then by Paradigm name. Each has:
 
-  On generation 3, the generic paragraph's "decay" wording gives way to these
-  per-rule sentences.
-- **Results, Light behaviour**: one subsection per family with its headline
-  set (decision 9). Open loop adds *Feeding in light and dark*: each
-  chamber's lit and dark rates, joined, by treatment, and the
-  LightFeedingIndex compared between treatments. The Project report does the
-  same, pooled.
-- **The Program timeline** shades per-well `On` and `Off`, and marks
-  restarts. The Requirement and Progress stay in the QC Viewer's well table.
-- **The rule for empty content** (`NothingToDraw`) carries over: a family
-  with no Activation gets a grey note, not a figure.
+- **The heading**: the Paradigm's name, family and DFMs.
+- **`rule_sentence(paradigm)`**.
+- **A table of the family's `qc_columns`** per Linkage Group running it,
+  with DFM, Group, Treatment, the judgeable and not-judged counts, and the
+  verdict.
+- **The rule figure**, from `rule_figures.py`, one panel per DFM:
+
+  | Family | Figure |
+  |---|---|
+  | Closed loop (`activation_length`) | a histogram of judgeable `LitMs`, with dashed lines at the Hold and at `MaxOnMs` |
+  | Fixed length, Interval (`onset_spacing`) | a histogram of `SinceLastOnsetMs`, with a dashed line at max(`LockoutMs`, `ActivationMs`); a small histogram of `LitMs` beside it, with a line at `ActivationMs` |
+  | Fixed length, Ratio (`requirement_series`) | `RequirementMet` against `K`, points per Trigger Well over the line of `requirement_for(k)`; points that differ are drawn in the failure colour |
+  | Non-feeding (`relight_delay`) | a histogram of each Activation's relight delay (the per-Activation value S1 takes the median of), with a dashed line at `OnDelayMs` |
+  | Open loop | none: the Program timeline shows the schedule |
+
+The rules for this section:
+- **Wording.** The paragraph that today speaks of "decay" says, on
+  generation 3, that each rule is checked below. Generations 1 and 2 keep
+  it.
+- **Empty families.** A family with no judgeable Activation gets a
+  `NothingToDraw` grey note, not a figure.
+- **The glance callout** counts the new failing and warning flags, as it
+  counts today's.
+
+**Results, Light behaviour** (member and Project reports). There is one
+subsection per family present, titled by family. Each has dot plots and
+the statistics of `headline_metrics(...)` for that family, computed on the
+rows S5 assigns (Activation-based metrics on chambers that earn light). Open
+loop adds a figure, *Feeding in light and dark*. It draws each chamber's
+`LicksPerMinLit` and `LicksPerMinDark` as two points joined by a line, by
+treatment, then `LightFeedingIndex` as a dot plot with its comparison
+between treatments. With one treatment, the one-treatment note applies, as
+elsewhere.
+
+**Paired and yoked** (Results). S5's table and figure go in their own
+subsection when any group has the Paired and Yoked Roles.
+
+**The Program timeline**:
+- per-well `On` and `Off` shading in the well lanes, from `Program.txt`;
+- a marked band for each `RestartSpan`, labelled "restart";
+- the same in the QC Viewer's Program tab.
+
+The QC Viewer's Program tab also gains an *Activations* table for the
+selected DFM. It lists the ledger rows from `opto_light_events.csv`:
+`Well`, `OnsetMin`, `Family`, `Phase`, `K`, `LitMs`, `EndedBy`,
+`RequirementMet` and `Overlap`.
 
 Acceptance:
-- the reports of `one_of_each`, `stress`, `choice`, `yoked_controls` and the
-  quiet bench run build with no red box and no "could not be drawn";
-- each family's subsection appears exactly when its family is in the
-  program.
+- **No error box.** The member and Project reports build with no red box
+  and no "could not be drawn":
+  - every `family_specs` entry;
+  - `one_of_each`, `stress`, `choice` and `yoked_controls`;
+  - the PyMCU-simulator recording;
+  - the quiet bench run.
+- **Subsections.** Each family's subsections appear exactly when its family
+  is in the program.
+- **Figures.** Each rule figure draws on its spec, and on an injected fault
+  shows the failing points.
+- **Generations 1 and 2.** Their reports are unchanged, apart from the
+  glance callout's count.
 
 ## Stream S4: Progressive Ratio
 
-Files: `progressive_ratio_experiment.py`, `experiment_types/progressive_ratio.py`
-and `pr_light_qc.py`.
+Files: `progressive_ratio_experiment.py`, `pr_light_qc.py`,
+`experiment_types/progressive_ratio.py`, and `yaml_lint.py` for the config
+rule.
 
-- solo Chamber Groups (decision 13): `CHAMBER_GROUPS` gives way to groups
-  from the Linkage; the config value; the lint rule;
-- the Fixed Ratio wording (decision 14);
-- *requirement series wrong* in the PR light QC, reusing S1's check;
-- restart censoring (decision 15).
+**Solo Chamber Groups** (decision 13). Today the Chamber Groups are fixed
+pairs (`CHAMBER_GROUPS`, chambers 1–2, 3–4, 5–6), each needing a paired and a
+yoked chamber. They become per-DFM groups:
+
+- **With `Program.txt`**:
+  - a Linkage Group lighting two chambers is a pair: the chamber holding
+    the trigger well is Paired, the other Yoked;
+  - a Linkage Group lighting one chamber is a solo group, its chamber
+    Paired.
+- **Without `Program.txt`**, the config's `chamber_groups: paired` (the
+  default, as today) or `single`.
+- **Numbering.** Groups are numbered in chamber order, so solo groups 1–6
+  are the six chambers.
+- **Group outputs.** The group columns keep their names. `YokedChamber` is
+  `NA` for a solo group.
+- **Skipped for solo groups**: the paired-minus-yoked comparison, the
+  cumulative difference figure, and the yoked checks of the PR light QC.
+  The report says, once, that the design has no yoked controls.
+- **Lint.** `pyflic lint` accepts a solo design without `paired_chambers`,
+  and still asks for it where a pair cannot be resolved.
+- **Exclusion.** A solo group whose chamber is excluded drops. A pair still
+  needs both chambers.
+
+**Also:**
+
+- **Wording** (decision 14): the "estimated requirement increment"
+  paragraph, its line on the licks-per-light-event figure, and the
+  "a working progressive ratio climbs" caption appear only when the
+  group's test Paradigm is ProgressiveRatio.
+- ***Requirement series wrong*** in the PR light QC, using S1's check
+  function, which S4 imports from `opto_qc`. S4 adds the call only.
+- **Restart censoring** (decision 15). When a `RestartSpan` falls in a
+  group's Test window, the breaking-point rule sees the Test window only up
+  to the restart, `Censored` is true, and `Notes` names the restart.
 
 Acceptance:
-- the PyMCU-simulator recording loads as Progressive Ratio without
-  `paired_chambers`, and every breaking point and `BreakRequirement` matches
-  the truth;
-- a fixed-ratio report has no progressive-only text;
-- the restart spec's group is censored at the restart.
+- **PyMCU.** The PyMCU-simulator recording loads as Progressive Ratio
+  without `paired_chambers`, as twelve solo groups. For each, the Test light
+  events equal the truth's Main Activations (`Activations.csv`) in count,
+  time and Requirement met. `BreakRequirement` is the Requirement of the
+  last counted Test light event. Where `Censored` is true, it equals the
+  truth's `Breakpoint`.
+- **Fixed ratio.** A fixed-ratio report has none of the progressive-only
+  text.
+- **Restart.** The `restart` spec's FixedRatio group is censored at its
+  restart.
+- **Unchanged.** Every existing Progressive Ratio test passes unchanged. The
+  paired-and-yoked designs are untouched.
 
 ## Stream S5: the yoked comparison for every type
 
-Files: `light_summary.behaviour_rows` and a new `yoked_comparison` in
-`analytics.py`; the report blocks reach S3 through the registry.
+Files: `light_summary.behaviour_rows`, a new `yoked_comparison` in
+`analytics.py`, `experiment.py`'s basic-analysis write step for its CSV, and
+the report blocks it hands S3, as functions S3 places.
 
-- decision 12: the table of paired minus yoked differences by treatment, and
-  Light behaviour statistics by Role;
-- Progressive Ratio's paired-yoked code is reused, not copied.
+- **Which groups.** A **yoked group** is a Linkage Group whose chambers have
+  Roles Paired (exactly one) and Yoked (one or more), under any Experiment
+  Type other than Progressive Ratio, which keeps its own.
+- **`yoked_comparison(experiment, metrics=None)`** returns one row per
+  yoked group and window: DFM, Group, PairedChamber, YokedChambers,
+  Treatment (the paired chamber's), and, for each metric, the paired value,
+  the mean of the yoked values and their difference.
+  - The metrics default to the report's (Licks, Events, MedDuration), from
+    the feeding summary. On two-well layouts they are taken per well (A and
+    B), as the feeding summary names them.
+  - The tests are Progressive Ratio's: a one-sample t-test of the
+    differences against 0 by treatment, with the Wilcoxon signed-rank test
+    beside it. Reuse its function; do not copy it.
+- **The CSV** is written to `analysis/yoked_comparison.csv` in basic
+  analysis. A Project stacks it as `<project>_YokedComparison.csv`.
+- **Light behaviour by Role** (decision 12). `behaviour_rows` gives
+  Activation-based metrics only the chambers whose Role earns light (Paired,
+  Self, Mutual): Activations, the Acclimation columns, FirmwareEvents, the
+  ratio columns, `MedianActivationSec`, `CutOffs`, `RewardEfficiency`,
+  `MedianReturnSec` and `Suppressions`. LitSec and LitFraction keep every
+  chamber, with Role as a column, so a yoked chamber's light is seen beside
+  its partner's. The function fixes today's filter, which recognises only
+  Progressive Ratio's lower-case role words.
+- **The report blocks**: a table of the differences by treatment, and one
+  figure, the paired against the yoked value per group, with the identity
+  line. S3 places them.
 
 Acceptance:
-- on `yoked_controls_spec` under Custom, the difference table equals a hand
-  computation, and the yoked chambers are absent from Activation statistics.
+- **Hand computation.** On `yoked_controls_spec` under Custom,
+  `yoked_comparison` equals a hand computation from the feeding summary.
+- **Role filter.** The yoked chambers are absent from the Activation
+  statistics and present in LitSec's.
+- **Progressive Ratio.** Its outputs are unchanged.
+- **Without yoking.** A design with no yoked group writes no CSV, and has no
+  subsection.
 
 ## Stream S6: help, guides and records
 
@@ -732,7 +905,8 @@ P0-sim (C1 simulator, C2 restarts, C6 integrity)     P0-ext (C8 PyMCU test)
 - **Shared surfaces**:
   - `opto_qc.py`: S1 owns it; S4 calls into it.
   - `light_summary.py`: S2 owns it; S5 adds `behaviour_rows` only.
-  - `pdf_report.py` and `project_report.py`: S3 only.
+  - `pdf_report.py`, `project_report.py`, `rule_figures.py`: S3 only.
+  - `experiment.py`: S5 adds the yoked-comparison write step only.
   - `qc_viewer.py`: S1 owns the Opto tab, and S3 the Program tab.
   - `paradigm_families.py`: P0-ledger creates it with every family's
     columns declared; a stream changes only its own family fields.
