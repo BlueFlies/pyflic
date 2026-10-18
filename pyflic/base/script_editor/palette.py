@@ -20,7 +20,7 @@ from PyQt6.QtWidgets import (
 )
 
 from ..ui import Category, category_color, icon
-from .actions import ACTIONS, Action, actions_by_category, unmet
+from .actions import EXPERIMENT_REGISTRY, Action, Registry, unmet
 
 
 # ---------------------------------------------------------------------------
@@ -100,8 +100,11 @@ class Palette(QWidget):
 
     actionRequested = pyqtSignal(str)
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, parent: QWidget | None = None, *,
+                 registry: Registry | None = None) -> None:
         super().__init__(parent)
+        #: The script level's actions: an Experiment Script's by default.
+        self._registry = registry or EXPERIMENT_REGISTRY
         self._tiles: list[tuple[_ActionTile, Action]] = []
         self._category_headers: dict[Category, QLabel] = {}
         self._experiment_type: str | None = None
@@ -137,7 +140,7 @@ class Palette(QWidget):
         self._tiles_lay.setContentsMargins(0, 0, 0, 0)
         self._tiles_lay.setSpacing(6)
 
-        for cat, actions in actions_by_category().items():
+        for cat, actions in self._registry.by_category().items():
             header = QLabel(cat.name, host)
             header.setStyleSheet(
                 f"color: {category_color(cat)}; font-size: 10pt; "

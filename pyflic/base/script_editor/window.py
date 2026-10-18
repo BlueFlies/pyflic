@@ -62,6 +62,16 @@ class ScriptEditorWindow(QMainWindow):
         self._active_idx: int = -1
         self._dirty: bool = False
         self._experiment_type: str | None = None
+        #: A ``project.yaml`` holds Project Scripts, whose actions are the
+        #: project registry's; the levels never mix (ADR-0005).
+        from ..project import PROJECT_FILENAME
+
+        self._is_project = self._config_path.name == PROJECT_FILENAME
+        if self._is_project:
+            from .project_actions import PROJECT_REGISTRY as registry
+        else:
+            from .actions import EXPERIMENT_REGISTRY as registry
+        self._registry = registry
 
         # ── Build UI ────────────────────────────────────────────────────
         self._build_ui()
@@ -113,9 +123,9 @@ class ScriptEditorWindow(QMainWindow):
         outer.addWidget(sub)
 
         # Main three-pane splitter
-        self._palette = Palette()
-        self._canvas = Canvas()
-        self._inspector = Inspector()
+        self._palette = Palette(registry=self._registry)
+        self._canvas = Canvas(registry=self._registry)
+        self._inspector = Inspector(registry=self._registry)
 
         self._install_pane_help(self._palette, self._canvas, self._inspector)
 
@@ -230,7 +240,20 @@ class ScriptEditorWindow(QMainWindow):
 
         # Pull experiment_type so the palette / inspector can surface warnings.
         # A Member normally states no global: at all and inherits the
-        # Project Design's (ADR-0005), so fall back to that.
+        # Project Design's (ADR-0005), so fall back to that.  A Project
+        # Script's actions run on any Project: nothing is dimmed.
+        self._experiment_type = None if self._is_project else self._capabilities(raw)
+        self._palette.set_experiment_type(self._experiment_type)
+        self._canvas.set_experiment_type(self._experiment_type)
+        self._inspector.set_experiment_type(self._experiment_type)
+
+        self._rebuild_switcher(preferred_idx=0 if self._scripts else -1)
+        self._set_dirty(False)
+
+    def _capabilities(self, raw: dict):
+        """What the experiment of this ``flic_config.yaml`` answers to
+        (:func:`~.actions.capabilities_for`), its ``global:`` over, for a
+        Member, the Project design's."""
         g = raw.get("global") or {}
         g = dict(g) if isinstance(g, dict) else {}
         if not g.get("experiment_type") and not g.get("chamber_layout"):
@@ -241,13 +264,7 @@ class ScriptEditorWindow(QMainWindow):
             except Exception:  # noqa: BLE001
                 pass
         from .actions import capabilities_for
-        self._experiment_type = capabilities_for(g, self._config_path.parent)
-        self._palette.set_experiment_type(self._experiment_type)
-        self._canvas.set_experiment_type(self._experiment_type)
-        self._inspector.set_experiment_type(self._experiment_type)
-
-        self._rebuild_switcher(preferred_idx=0 if self._scripts else -1)
-        self._set_dirty(False)
+        return capabilities_for(g, self._config_path.parent)
 
     def _reload_from_disk(self) -> None:
         if self._dirty:

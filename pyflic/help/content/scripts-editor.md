@@ -31,7 +31,9 @@ The left pane, **Actions**: every action, grouped under LOAD, ANALYZE, QC and PL
 tile with its name and one line on what it does. Type in **Search actions…** to narrow the
 list. Click a tile to add that step to the end of the script; with no script yet, the
 editor asks for a name first. A dimmed tile does not fit this configuration's Experiment
-Type — see [Actions for one Experiment Type](#actions-for-one-experiment-type).
+Type — see [Actions for one Experiment Type](#actions-for-one-experiment-type). On a
+`project.yaml` the tiles are the project actions — see
+[Project Scripts in the editor](#project-scripts-in-the-editor).
 
 ### The canvas
 
@@ -128,14 +130,16 @@ its data. On one that is not, they are skipped with a log line too.
 
 ## Project Scripts in the editor
 
-On a `project.yaml` the editor edits the Project Scripts in its `scripts:`, but its palette
-still lists the Experiment Script actions, which a Project Script cannot use: a Project
-Script holding one is refused when it runs. The project steps already in the file show on
-the canvas with a warning sign and no parameters in the inspector. You can reorder, delete
-and duplicate them, and saving keeps them as they are. To add a project action, or to
-change one's parameters, edit `project.yaml` in a text editor — see
-[Project actions](scripts-actions.md#project-actions). The Project's `experiment_scripts:`
-are not shown either; edit those in the YAML too.
+On a `project.yaml` the editor edits the Project Scripts in its `scripts:`, and its palette
+and inspector offer the project actions instead of the Experiment Script ones — see
+[Project actions](scripts-actions.md#project-actions). Add them, set their parameters,
+reorder, delete and duplicate them as in an Experiment Script. None is dimmed: every project
+action runs on any Project. To run an Experiment Script in the members, add
+`run_in_experiments` and name the script.
+
+An Experiment Script action found in a Project Script shows on the canvas with a warning
+sign, as an unknown action, because a Project Script holding one is refused when it runs.
+The Project's `experiment_scripts:` are not shown; edit those in the YAML.
 
 ---
 

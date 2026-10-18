@@ -27,8 +27,8 @@ from PyQt6.QtWidgets import (
 )
 
 from ..ui import Category, category_color, icon
-from .actions import (Action, Param, default_mode_for_metric, get_action, metric_choices,
-                      param_default, unmet)
+from .actions import (EXPERIMENT_REGISTRY, Action, Param, Registry, default_mode_for_metric,
+                      metric_choices, param_default, unmet)
 
 
 class Inspector(QWidget):
@@ -36,8 +36,11 @@ class Inspector(QWidget):
 
     stepEdited = pyqtSignal(dict)
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, parent: QWidget | None = None, *,
+                 registry: Registry | None = None) -> None:
         super().__init__(parent)
+        #: The script level's actions: an Experiment Script's by default.
+        self._registry = registry or EXPERIMENT_REGISTRY
         self._experiment_type: str | None = None
         self._current_step: dict[str, Any] | None = None
         self._current_action: Action | None = None
@@ -122,7 +125,7 @@ class Inspector(QWidget):
 
     def show_step(self, step: dict[str, Any] | None) -> None:
         self._current_step = step
-        self._current_action = get_action(step.get("action", "")) if step else None
+        self._current_action = self._registry.get(step.get("action", "")) if step else None
         self._rebuild()
 
     def clear(self) -> None:

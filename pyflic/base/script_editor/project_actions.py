@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from ..ui import Category
+from .actions import Registry
 
 ParamType = Literal["choice", "bool", "string", "int", "float", "list_str"]
 
@@ -29,6 +30,12 @@ class Param:
     default: Any = None
     choices: list[str] | None = None
     required: bool = False
+    ## The editor's inspector reads these of every parameter; no project
+    ## parameter has a unit, inherits, or derives its default.
+    unit: str = ""
+    inheritable: bool = False
+    derived_from: str | None = None
+    two_well_default: Any = None
 
 
 @dataclass(frozen=True)
@@ -41,6 +48,8 @@ class ProjectAction:
     produces: Literal["figure", "csv", "pdf", "none"]
     params: list[Param] = field(default_factory=list)
     notes: str = ""
+    #: A project action runs on any Project, so the editor dims none.
+    requires: None = None
 
 
 PROJECT_ACTIONS: list[ProjectAction] = [
@@ -136,6 +145,9 @@ PROJECT_ACTIONS: list[ProjectAction] = [
 PROJECT_ACTIONS_BY_NAME: dict[str, ProjectAction] = {
     a.action: a for a in PROJECT_ACTIONS
 }
+
+#: What the Script Editor offers on a ``project.yaml``.
+PROJECT_REGISTRY = Registry(PROJECT_ACTIONS)
 
 # ---------------------------------------------------------------------------
 # Built-in pipelines
