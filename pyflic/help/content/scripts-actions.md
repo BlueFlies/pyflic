@@ -2,29 +2,32 @@
 
 Every action a script step can take. `start` and `end` are accepted by nearly all of them
 and are omitted from the tables below — they are minutes, and blank means inherit (see
-[where values come from](scripts-overview.md#where-values-come-from)).
+[where values come from](scripts-overview.md#where-values-come-from)). `run_qc`,
+`run_analysis` and `run_plots` take neither: they read the whole recording.
 
 ## Load actions
 
 | Action | Parameters | What it does |
 |---|---|---|
-| `load` | `parallel` | Read the DFM CSVs into memory for the rest of the script |
-| `remove_chambers` | `group` | Apply exclusions from `remove_chambers.csv` |
+| `load` | `parallel` | Nothing. Kept so older scripts run unchanged |
+| `remove_chambers` | `group` | Apply a group of exclusions from `remove_chambers.csv` |
 | `write_summary` | — | Write `summary.txt` with excluded chambers and experiment metadata |
 
-`parallel: true` loads DFMs concurrently, which is worth having on any experiment with
-several devices. `group` defaults to the **script's name** — see
+The member is already loaded when a script starts, so `load` reads nothing, and its
+`parallel`, `start` and `end` change nothing — see
+[The member is already loaded](scripts-overview.md#the-member-is-already-loaded).
+`group` defaults to the **script's name** — see
 [exclusions](config-dfms-chambers.md#excluding-chambers).
 
 ## Analyse actions
 
 | Action | Parameters | What it does |
 |---|---|---|
-| `basic_analysis` | — | The standard pipeline: auto-removal (the `constants:` cutoffs, once), summary, feeding summary, summary plot, and for an optogenetic experiment the light QC, the light table, the yoked comparison (`yoked_comparison.csv`, a design with a yoked group only) and each firmware 4.0.0 DFM's Program timeline (QC is `run_qc`'s job) |
+| `basic_analysis` | — | The standard pipeline: auto-removal (the `constants:` cutoffs, once) and `removed_chambers.csv`, summary, feeding summary (and, with Facets, the faceted one), summary plot; for an optogenetic experiment the light QC, the light table, the yoked comparison (`yoked_comparison.csv`, a design with a yoked group only) and each firmware 4.0.0 DFM's Program timeline; and the type's own outputs — Hedonic's plot and weighted-duration summary, Progressive Ratio's difference table, light QC tables, breaking point and figures. QC is `run_qc`'s job, and it does not read `global.omit` |
 | `run_qc` | — | The Hub's **Run QC**: the QC Set minus `global.omit.qc`, into `qc/` — the integrity report, data breaks, simultaneous feeding and bleeding (two-well), the raw / baselined / cumulative-licks plots, and the optogenetic light QC, its figure and the Program timeline; Progressive Ratio's light QC and its two figures into `analysis/` |
 | `run_analysis` | `binsize` | The Hub's **Run analysis**: the core (auto-removal and `removed_chambers.csv`, `summary.txt`, `feeding_summary.csv` and, with Facets, `feeding_summary_facet.csv`), then the Analysis Set minus `global.omit.analyses`, the experiment report last. `binsize` is the binned summary's and the report's |
 | `feeding_csv` | — | Per-chamber feeding summary to CSV |
-| `facet_csv` | — | Per-chamber summary per Facet to `feeding_summary_facet.csv`, which `run_analysis` writes as part of its core; skipped when the experiment has no Facets |
+| `facet_csv` | — | Per-chamber summary per Facet to `feeding_summary_facet.csv`, which `run_analysis` writes as part of its core; skipped when the experiment has no Facets. Not offered in the Script Editor's palette: write it in the YAML |
 | `binned_csv` | `binsize` | Feeding metrics binned over time, to CSV |
 | `weighted_duration` | — | Weighted-duration summary (hedonic experiments) |
 | `paired_yoked_diff` | — | Paired − yoked table, one row per chamber group per Facet (progressive ratio) |
@@ -80,13 +83,13 @@ Selection says.
 | `run_plots` | `metric`, `binsize` | The Hub's **Generate plots**: the Plot Set minus `global.omit.plots`, each figure saved into `analysis/` and returned for a tab. `metric` is the Chosen metric's (the binned time course and the dot plot), `binsize` the binned time course's |
 | `plot_feeding_summary` | — | Bar/jitter plot of per-chamber metrics |
 | `plot_binned` | `metric`, `mode`, `binsize` | A metric binned over time, by treatment |
-| `plot_dot` | `metric`, `mode` | Jittered dot plot of a metric by treatment |
+| `plot_dot` | `metric`, `mode` | Jittered dot plot of a metric by treatment; on a Progressive Ratio member, one point per chamber group — the paired-minus-yoked difference, panelled by Facet |
 | `plot_moving_window` | `metric`, `mode`, `window`, `step` | Treatment mean ± SEM over a sliding window |
 | `plot_moving_median_chambers` | `window`, `step`, `mode` | Time-dependent median bout duration, one line per chamber |
 | `plot_moving_median_treatment` | `window`, `step`, `mode` | Treatment mean ± SEM of time-dependent median bout duration |
 | `plot_well_comparison` | `metric` | Well A against Well B for one metric |
 | `plot_hedonic` | — | Hedonic feeding plot |
-| `plot_pr_cumulative_diff` | `binsize` | Paired − yoked cumulative licks since training end, by treatment (progressive ratio) |
+| `plot_pr_cumulative_diff` | `binsize` | Paired − yoked cumulative licks since training end, by treatment; also writes `analysis/pr_cumulative_diff.csv` (progressive ratio) |
 | `plot_pr_cumulative_licks` | `binsize` | Per-DFM training-aligned paired/yoked traces, light-on as points, lick-free light events as rings (progressive ratio, QC) |
 | `plot_pr_light_events` | — | Per-DFM sucrose licks per Test light event; lick-free events as red rings (progressive ratio, QC) |
 | `plot_pr_resting_level` | — | Per-DFM paired Sucrose Well resting level over the recording, light onsets as a rug (progressive ratio, QC) |
@@ -101,7 +104,8 @@ strip's bins. See [Program timeline](plots-catalog.md#program-timeline).
 Every plot action also writes its figure into the member's `analysis/`:
 `feeding_summary.png`, `binned_<metric>.png`, `dot_<metric>.png`,
 `moving_window_<metric>.png`, `moving_median_duration_chambers.png`,
-`moving_median_duration_treatments.png`, `well_comparison_<metric>.png`, and for
+`moving_median_duration_treatments.png`, `well_comparison_<metric>.png`,
+`hedonic_feeding_plot.png`, and for
 Progressive Ratio `pr_cumulative_diff.png`, `pr_still_responding.png`, and per DFM
 `pr_cumulative_licks_dfm<id>.png`, `pr_light_events_dfm<id>.png`,
 `pr_resting_level_dfm<id>.png` and `breaking_point_dfm<id>.png`.  `plot_opto_light`
@@ -116,12 +120,12 @@ Experiment Script, nor the ones above in a Project Script.
 | Action | Parameters | What it does |
 |---|---|---|
 | `validate_design` | — | Fail the script early when a member contradicts the design |
-| `run_in_experiments` | `script`, `only` | Run a named Experiment Script in every member, or only those listed — the one bridge between the levels |
-| `run_all_analyses` | `skip_analyzed`, `reports` | Basic analysis in every member, with its QC reports, optionally skipping current ones and writing each member's PDF report. Like the Hub's **Analyze all**, it does not read `global.omit` |
+| `run_in_experiments` | `script`, `only` | Run a named Experiment Script in every member, or only those listed — the one bridge between the levels. A member that fails, or has no script of that name, is logged and counted, and the step carries on |
+| `run_all_analyses` | `skip_analyzed`, `reports` | Basic analysis in every member, with its QC reports, optionally skipping every member that already has a saved `feeding_summary.csv` (stale or not) and writing each member's PDF report. Like the Hub's **Analyze all**, it does not read `global.omit` |
 | `build_combined_analysis` | — | Stack the members' saved summaries into the Combined Analysis, with pooled and mixed-model statistics |
 | `project_report` | `ai_summary` | The Project Report; builds the Combined Analysis first when it is missing — see [Reports](reports.md#the-project-report) |
-| `render_publication_figures` | `format`, `only` | Every figure in `plot_specs.yaml` into `figures/`, SVG by default |
-| `generate_ai_narrative` | `provider` | The [AI summary](concepts-ai-summary.md) of the Combined Analysis |
+| `render_publication_figures` | `format`, `only` | Every figure in `plot_specs.yaml`, or the ids in `only`, into `figures/` — `svg` (default) or `pdf`. Skipped with a log line when the Project has no `plot_specs.yaml` |
+| `generate_ai_narrative` | `provider` | The [AI summary](concepts-ai-summary.md) of the Combined Analysis, into `analysis/ai_summary.txt`; `provider` is `anthropic` (default) or `openai` |
 
 The Combined Analysis never analyses a member: one with no saved summary is omitted and
 listed. For a Progressive Ratio Project it also stacks each member's
@@ -175,11 +179,9 @@ a figure. Both take `mode` of `mean_ab` (default), `A`, or `B`.
 ```yaml
 scripts:
   - name: "Standard Analysis"
+    start: 0
+    end: 240
     steps:
-      - action: load
-        start: 0
-        end: 240
-        parallel: true
       - action: remove_chambers
       - action: write_summary
       - action: basic_analysis

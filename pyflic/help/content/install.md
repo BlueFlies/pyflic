@@ -58,16 +58,21 @@ Both working means the package and its GUI dependencies are installed correctly.
 | Command | What it does |
 |---|---|
 | `pyflic` | Analysis Hub — the same as `pyflic hub` |
-| `pyflic hub [project]` | Analysis Hub |
-| `pyflic config [project]` | Config Editor |
-| `pyflic qc <project>` | QC Viewer |
+| `pyflic hub [folder]` | Analysis Hub, opened on a Batch, a Project or an Experiment Directory |
+| `pyflic config [folder]` | Config Editor, on the folder's `flic_config.yaml` (or a YAML file you name) |
+| `pyflic qc [experiment]` | QC Viewer on an Experiment Directory (default: the current folder) |
+| `pyflic plots [project]` | Plot Editor, on a Project's publication figures |
 | `pyflic help [topic]` | This help window |
-| `pyflic lint <project>` | Validate a configuration |
-| `pyflic report <project>` | Write a PDF report |
-| `pyflic clear-cache <project>` | Remove cached feeding summaries |
+| `pyflic lint <folder>` | Validate every `flic_config.yaml` under the folder, and report old layouts |
+| `pyflic report <folder>` | Write the PDF report of a Project or an Experiment Directory |
+| `pyflic batch <folder> [script]` | Run the designated Project Script in every Project under the folder |
+| `pyflic clear-cache <experiment>` | Remove an Experiment Directory's cached feeding summaries |
 | `pyflic version` | Print the installed version |
+| `pyflic-types [type]` | Experiment Type Editor, on the shipped types and your lab's library (optionally opened on one type) |
 
-`pyflic --help` prints the command list as text.
+`pyflic --help` prints the command list as text. The Experiment Type Editor has no
+`pyflic` subcommand: run `pyflic-types`, or open it from the Hub's Tools panel
+(**Experiment type editor**).
 
 ## Updating
 
@@ -93,8 +98,9 @@ figures/
 .pyflic_cache/
 ```
 
-Keep `flic_config.yaml`, `project.yaml`, `plot_specs.yaml` and `remove_chambers.csv` under
-version control — together they define the analysis, and they are small.
+Keep `flic_config.yaml`, `project.yaml`, `batch.yaml`, `experiment_type.yaml`,
+`plot_specs.yaml` and `remove_chambers.csv` under version control — together they define the
+analysis, and they are small.
 
 ---
 

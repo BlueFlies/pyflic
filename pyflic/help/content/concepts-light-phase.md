@@ -21,16 +21,22 @@ state from the feeding signal.
 
 ## What it is used for
 
-**Light-on markers.** Cumulative lick plots draw the light transitions, so you can see
-feeding bouts in relation to lights-on and lights-off without cross-referencing a separate
-file.
+**Light-on markers.** The single-chamber cumulative-licks plot,
+`exp.plot_cumulative_licks_chamber(dfm_id, chamber)` in [Python](python-api.md#working-with-an-experiment),
+marks every sample where a well's light was on with a gold diamond, so you can see feeding
+bouts in relation to the light without cross-referencing a separate file.
 
 **Light-phase summary.** An analysis that splits each chamber's activity into light and
-dark phases and reports metrics for each, exported with these columns:
+dark phases and reports metrics for each. The
+[script action](scripts-actions.md#analyse-actions) `light_phase_summary` writes it to
+`analysis/light_phase_summary.csv`, with these columns:
 
 ```
 DFM, Chamber, Treatment, Phase (light/dark), PhaseSeconds, Licks, Events, ...
 ```
+
+Two-well chambers have `LicksA`, `LicksB`, `EventsA` and `EventsB` instead, the design
+factors follow, and `Licks` is transformed as in the feeding summary.
 
 **The phase is each chamber's own.** A sample is *light* for a chamber when one of its own
 wells is lit: its `OptoCol1` bit, or on a firmware 4.0.0 recording its `OnMs` above zero.

@@ -56,7 +56,9 @@ Well A).
 An **event PI** is computed the same way from event counts rather than lick counts. The
 two can disagree, and the disagreement is informative: a fly that made many short visits to
 one well and a few long meals at the other will have an event PI and a lick PI pointing in
-opposite directions. Report which one you used.
+opposite directions. Report which one you used. The event PI also depends on the
+[link gap](concepts-licks-events.md#event-linking-the-link-gap), which merges events; the
+lick PI does not.
 
 Both are undefined when a chamber recorded no licks at all — a chamber with zero activity
 has no preference, and you should exclude it rather than treat it as indifferent. See
@@ -69,15 +71,18 @@ into the other, producing apparent simultaneous feeding at both. Left uncorrecte
 pushes every PI toward zero — it looks like indifference.
 
 When `correct_for_dual_feeding` is enabled, pyflic finds samples where both wells register
-feeding licks at once, adjusts the baseline of the non-preferred well to remove the
-crosstalk contribution, and re-runs feeding detection on the corrected signal.
+feeding licks at once, treats the weaker of the two signals at each of them as crosstalk
+and sets it to zero (both, when they are equal), and re-runs feeding detection on the
+corrected signal.
 
 **This defaults to `true` for two-well experiments** and `false` for single-well ones,
 where it has nothing to correct. It is on unless you turn it off, which is usually what
 you want — but it does mean your results depend on it, so state it in your methods.
 
-The QC viewer has a **Sim. Feeding** tab showing where simultaneous feeding was detected,
-which is the place to look if you suspect crosstalk is distorting a plate.
+Each DFM tab of the [QC Viewer](app-qc-viewer.md#tabs) has a **Sim. Feeding** sub-tab,
+once QC has run: per chamber, the samples licked at each well and at both at once, after
+the correction and (the `_pre` columns) before it. It is the place to look if you suspect
+crosstalk is distorting a plate.
 
 ## Naming the wells in output
 

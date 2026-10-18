@@ -12,6 +12,7 @@ my_experiment/
   data/                   <-- you create this; put your CSVs here
     DFM1_0.csv
     DFM2_0.csv
+    Messages.csv          <-- optional: what the MCU logged while it recorded
     Program.txt           <-- optogenetic recordings: the program the MCU exported
 ```
 
@@ -27,17 +28,27 @@ QC needs to judge the light fully. A recording from DFM firmware 4.0.0 names eac
 but not its type, so without its `Program.txt` pyflic warns loudly. See
 [Optogenetic experiments](concepts-optogenetics.md#programtxt).
 
+Copy the `Messages.csv` PyMCU writes beside the data into `data/` as well. It is optional
+too: the integrity report checks the lost records and restarts it logs against the data,
+and the QC Viewer lists it under each DFM's integrity report.
+
 ## What pyflic adds
 
 ```
 my_experiment/
   flic_config.yaml
+  experiment_type.yaml    <-- only for a type your lab built: its copy, kept with the data
   data/
   remove_chambers.csv     <-- optional; chamber exclusions you declare
-  qc/                     <-- quality-control output; qc/opto/ for optogenetic experiments
+  qc/                     <-- quality-control output; qc/opto/ and qc/program/ for optogenetic experiments
   analysis/               <-- summaries, CSV exports, plots, the experiment report
   .pyflic_cache/          <-- cached feeding summaries; safe to delete
 ```
+
+`experiment_type.yaml` is written when you save a config whose `experiment_type` is one your
+lab built, so the recording analyses the same on a machine without your lab's library. Inside
+a Project it sits beside `project.yaml` instead. See
+[Experiment types](concepts-experiment-types.md#where-types-live).
 
 Results always go to `analysis/` and `qc/`, whatever time range you analysed. Time windows
 within a recording are [Facets](concepts-facets.md) — a column in the output, not a separate

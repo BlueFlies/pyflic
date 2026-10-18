@@ -7,8 +7,14 @@ Batch by containing Projects and stops being one by not.
 A **Batch Run** executes one designated Project Script in every checked Project.
 
 ```bash
-pyflic batch my_study/
+pyflic batch my_study/                    # each Project's designated script
+pyflic batch my_study/ "Report Pipeline"  # or the one you name
 ```
+
+From the command line there is no review window: every Project found runs, and an
+exclusion sheet at the batch folder is applied. The command exits with an error status when
+any Project fails. In the Hub, the [Batch panel](app-hub.md#batch-panel) lists the
+Projects and runs them.
 
 ## What a Batch is not
 
@@ -37,8 +43,8 @@ That has three consequences worth knowing:
 A folder that looks like it was meant to be a Project but is not — a `project.yaml` with no
 member directory, an unreadable folder, a symlink — is skipped and **reported in the
 Output tab**, so a forgotten file shows up at the top of the run rather than as a quietly
-short project list. If the folder you picked is enormous, the scan stops early and says so
-rather than hanging.
+short project list. Hidden folders (a name starting with `.`) are never entered. If the
+folder you picked is enormous, the scan stops early and says so rather than hanging.
 
 The list is read once when you choose the folder. Press **Rescan** after changing things
 outside the app.
@@ -49,8 +55,8 @@ A **Blocked Member** is a folder inside a Project that a run cannot use as it st
 
 | What you see | What it means | Fix |
 |---|---|---|
-| `unfiled recording` | DFM CSVs sit at the folder's root, not in its `data/` | **File data…** |
-| `no config` | `data/` holds DFM CSVs but there is no `flic_config.yaml` | **Member configs…** |
+| `unfiled recording` | DFM CSVs sit at the folder's root, not in its `data/` | **File data…** in the review window, or **File unfiled recordings** on the Project panel |
+| `no config` | `data/` holds DFM CSVs but there is no `flic_config.yaml` | double-click it in the review window, or **Member configs…** on the Project panel |
 | `no recording` | there is a config but no DFM CSV the loader can find | by hand |
 | `ambiguous` | the same DFM id appears both loose and in `data/` | by hand — decide which copy is the experiment |
 | `unreadable` | the folder cannot be listed | by hand — permissions |
@@ -58,39 +64,77 @@ A **Blocked Member** is a folder inside a Project that a run cannot use as it st
 Blocked belongs to the **member**, never to the Project. A Project with four healthy
 members and one blocked one runs the four, and a run is **never refused** because of one —
 a stale folder must not stop ten Projects at 2am. A Project with *nothing* usable starts
-unchecked, because it can only produce a failure.
+unchecked, because it can only produce a failure; it is checked again the moment a repair
+in the review window makes it runnable.
 
 ## The review window
 
-**Run Batch** always opens a review window first. It lists every Project that was found,
-with its path, how many of its members the run can use, and each blocked member with the
-reason and the button that clears it. Uncheck any Project you do not want to run.
+**Run Batch** always opens a review window first, **Batch Run — review**. Right-clicking a
+row of the Batch panel's table and choosing **Fix blocked members in …** opens the same
+window on that Project. It is shown even when nothing is wrong: with a recursive scan, the
+folder you picked no longer tells you what will run, and this list is the only place that
+does.
 
-It is shown even when nothing is wrong: with a recursive scan, the folder you picked no
-longer tells you what will run, and this list is the only place that does.
+Nothing in it is a gate. Repair what you like, uncheck what you like, then **Run batch** or
+**Cancel**.
 
-Nothing in it is a gate. Repair what you like, uncheck what you like, then Run or Cancel.
+### The project list
+
+The line at the top says how many Projects and members will run, and how many members are
+blocked. Below it, one row per Project found:
+
+- **Project** — its path inside the batch folder, with a checkbox. The checks start as the
+  Batch panel's; uncheck any Project you do not want to run.
+- **Members** — how many of its members the run can use, out of how many it has (`3/5`).
+- **Status** — `ok`, `no members`, or how many members are blocked. Each blocked member is
+  listed under its Project with its reason; hover it for the detail.
+
+### Repairing blocked members
+
+- **File data…** files the selected member's recording.
+- **File every unfiled recording** files every unfiled member, except in a Project you
+  unchecked. It asks first.
+- **Double-click** a blocked member to repair it: an unfiled one is filed, and one with no
+  config opens its Project's **Member configs…** window. The others have to be fixed by
+  hand, and the window says so.
+- **Rescan** walks the batch folder again, for changes made outside the app.
 
 **Filing** moves `DFM*.csv` into `data/` and every other loose file into `extra_files/`.
 Every `.yaml` file and any `remove_chambers.csv` stays exactly where it is — at a member
 root those are configuration and declaration, never data. Nothing is ever overwritten: a
 name that already exists is skipped and reported.
 
+### The exclusion sheet switch
+
+When the batch folder holds an exclusion sheet, **Apply the exclusion sheet before running**
+is ticked, with a line counting what its rows would do; hover the line for each row. Untick
+it to run without the sheet this time: the sheet and every member's own declarations are
+left as they are. A sheet that cannot be read is reported there, and the switch is off. See
+[Exclusion sheets](#exclusion-sheets).
+
 ## Which script runs
 
-Resolution order, per Project:
+The Batch panel's **Project Script** menu picks the designated script: each Project's own
+`batch` script (the default), one of the built-in pipelines, or one of `batch.yaml`'s
+`project_scripts:`. The choice is saved as `batch.yaml`'s `script:`.
 
-1. the Project's own script of that name, in its `project.yaml`
-2. the Batch's central `project_scripts:` section
+A designated name is resolved per Project, in this order:
+
+1. the Batch's central `project_scripts:` section, in `batch.yaml`
+2. the Project's own script of that name, in its `project.yaml`
 3. the built-in pipelines
 
-The Project's own copy wins, so a Project can specialise the designated run without the
-Batch knowing.
+The central copy wins, so every Project runs the same recipe; a Project's own script of
+that name is used only when `batch.yaml` has none. A Project where the name resolves
+nowhere is reported and skipped.
 
 With **no designation at all** — the default — each Project runs its **own** script named
-`batch`. Every new `project.yaml` is seeded with one, holding the Report Pipeline's steps,
-so zero authoring means "create a report on every Project". A Project whose `scripts:`
-section is empty is reported and skipped rather than having something substituted for it.
+`batch`, or, when it has none by that name, the first script in its `scripts:`. Every new
+`project.yaml` is seeded with a `batch` script that analyzes every member, builds the
+Combined Analysis, builds the Project Report and renders the figures (see
+[What a script is](scripts-overview.md#the-batch-script-every-project-starts-with)), so zero
+authoring means "analyze and report every Project". A Project whose `scripts:` section is
+empty is reported and skipped rather than having something substituted for it.
 
 Only the **selected** batch folder's `batch.yaml` governs. A grouping folder deeper in the
 tree may be a Batch in its own right and carry its own designation; it is ignored, and the
@@ -107,6 +151,7 @@ project_scripts:               # one recipe serving every Project, not copied
     steps:
       - action: run_in_experiments
         script: standard
+      - action: build_combined_analysis
       - action: project_report
 ```
 
@@ -115,19 +160,33 @@ Unlike a Project, a Batch has no authority to declare — there is no `design:` 
 ## Exclusion sheets
 
 If the batch folder holds a `remove_chambers.csv`, a Batch Run applies it before anything
-else — writing its rows into each member's own declaration. The review window previews
-exactly what it would do and lets you decline it for this run. See
+else — writing its rows into each member's own declaration. Only the rows for the checked
+Projects are written; the others are skipped and counted. The review window previews
+exactly what it would do and lets you decline it for this run. **Apply exclusion sheet…**
+on the Batch panel applies it now, to the checked Projects. See
 [Excluding chambers in bulk](concepts-exclusions.md).
 
 ## Errors
 
 Continue-on-error, with per-Project log prefixes. One bad Project never aborts an
-unattended overnight run.
+unattended overnight run. Within a Project, its Project Script stops at its first failing
+step, and the run moves on to the next Project.
 
-The summary at the end names every Project and how many of its members ran (`3/5`), so
-"succeeded" can never be read as "analysed everything". Warnings and failures are also
-copied to the **Errors** tab, which badges itself while unread — in a run of several
-thousand lines, the four that matter are otherwise unfindable.
+The run opens by listing every Project with how many of its members it can use
+(`3/5 members, 1 blocked`), so "succeeded" can never be read as "analysed everything". It
+ends with how many Projects succeeded and the first line of each failure. Warnings and
+failures are also copied to the **Errors** tab, which badges itself while unread — in a run
+of several thousand lines, the four that matter are otherwise unfindable.
+
+## AI narrative of the batch
+
+Tick **AI narrative of the batch** on the Batch panel, and after the run an AI provider
+writes `batch_ai_narrative.md` at the batch folder: one synthesis of the Projects that
+succeeded — where they agree and disagree, design problems, and Projects that lost many
+chambers. It reads the narrative each Project already has (`analysis/ai_summary.txt`, which
+the `generate_ai_narrative` step writes), so a Project with none is left out. The provider
+is the one picked in the AI panel, checked before the run starts: with no API key, the run
+does not start. A narrative that fails does not fail the run. See [AI summary](concepts-ai-summary.md).
 
 ## Too many tabs
 

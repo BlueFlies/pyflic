@@ -5,6 +5,11 @@ A two-well operant assay. The paired fly's feeding at the sucrose well switches 
 the paired fly keep working as the requirement rose, and, where the design has yoked
 controls, did it work for the light more than a control that got the same light for free?
 
+Everything here applies to any Experiment Type that includes the **Progressive Ratio**
+Analysis Module: the shipped `ProgressiveRatio`, or a type your lab builds with it (see
+[Analysis Modules](concepts-experiment-types.md#analysis-modules)). "The type" below means
+any of them.
+
 This topic covers what is special about the type. The two-well basics it builds on —
 `pi_direction`, the preference index, dual-feeding correction — are in
 [Two-well choice and the preference index](concepts-two-well-pi.md). What the light did,
@@ -72,8 +77,8 @@ and a trigger well that is well B is flagged too, because the Sucrose Well is al
   factor; the role comes from the groups and appears as the `Role` column.
 
 In the [Config Editor](app-config-editor.md) each DFM tab has a **Groups** choice — Pairs,
-Single chambers or From Program.txt — and, for pairs, three pickers, shown only for this
-type. See also [Optogenetic experiments](concepts-optogenetics.md#progressive-ratio). Paired
+Single chambers or From Program.txt — and, for pairs, three pickers, shown only for a type
+with the Progressive Ratio module. See also [Optogenetic experiments](concepts-optogenetics.md#progressive-ratio). Paired
 and Yoked are also [Roles](concepts-optogenetics.md#roles) in any optogenetic design; this
 type keeps its own `paired` and `yoked`, read from its groups.
 
@@ -144,6 +149,14 @@ nothing to disagree about. The notes speak of Phase instead:
   after the DFM restarts on its own, when the note adds *after the DFM restarted at minute
   m*.
 
+**A ClosedLoop interval needs a lab type.** The shipped `ProgressiveRatio` expects only the
+ProgressiveRatio and FixedRatio Paradigms, with OpenLoop and dark intervals beside them, so
+a program with a lit ClosedLoop interval (before the ratio Paradigm or after it) does not
+load under it. For such a program, build a type in the
+[Experiment Type Editor](app-type-editor.md) that expects ClosedLoop as well and includes
+the Progressive Ratio module (see
+[The light a type expects](concepts-experiment-types.md#the-light-a-type-expects)).
+
 A group whose paired fly never finishes training has `TrainingComplete = false` and no
 `TrainingMinutes` on every chamber of the group. With the default
 `require_training_complete: true`, they leave the analysis through auto-removal.
@@ -165,8 +178,9 @@ all. Such a DFM is analysed, not removed:
 
 This type's [Facets](concepts-facets.md) are `Training` and `Test`, split at each
 group's own training end rather than at a fixed minute, so the config never states
-`facet_cutoffs` or `facet_source`; the Design dialog shows its cutoff and phase-name fields
-as derived and read-only. Every table and plot that reads the `Facet` column works
+`facet_cutoffs` or `facet_source`; the Project design dialog shows its Facet source,
+cutoff and phase-name fields as derived and read-only, and the Config Editor its Facet
+source. Every table and plot that reads the `Facet` column works
 unchanged; `StartMin` and `EndMin` simply vary from group to group. A DFM with no training
 information has the one Facet `Recording`.
 
@@ -306,7 +320,7 @@ less time.
 
 On a generation-3 recording the Test window ends where the ratio Paradigm's run ends, not at
 the end of the recording. Only the first ratio run is the Test. A ClosedLoop interval after
-it is no part of the Test, and a later ratio run is noted (*a ratio Paradigm ran again from
+it (under a lab type that expects ClosedLoop) is no part of the Test, and a later ratio run is noted (*a ratio Paradigm ran again from
 Program Interval k, after the Test window*) and left to
 [Program Facets](concepts-facets.md#program-facets).
 
@@ -325,9 +339,9 @@ default, and censoring is judged against the capped window. `TestMinutes` in
 ### Choosing the gap
 
 The rule does not know the time of day: a long pause at night ends a count like any other.
-The number moves with the gap, so `summary.txt` and the log of the Analyze panel's
-**Breaking point** always tabulate every group's breaking point at 60, 120 and 240 minutes beside the configured
-value. Read that table before settling on a gap, and set it once, in the Project's design,
+The number moves with the gap, so `summary.txt`, and the log of **Run analysis** with
+*Breaking point* ticked, always tabulate every group's breaking point at 60, 120 and 240
+minutes beside the configured value. Read that table before settling on a gap, and set it once, in the Project's design,
 so every member is analysed under one rule.
 
 ## Sucrose persistence
@@ -363,6 +377,10 @@ keep one-minute bins whatever the Bin size.
 | `pr_still_responding.png` | — | the still-responding curve |
 | `pr_*_dfm<id>.png` | DFM | QC figures: training-aligned traces, licks per light event, sucrose well resting level, a panel per group, three to a row |
 | `summary.txt` | — | adds the training table, the training notes, the light QC and the breaking point with its sensitivity to the gap, and any DFM restart that ended a Test window |
+
+**Generate plots** adds `breaking_point_dfm<id>.png` while *Breaking-point plots* is
+ticked: per DFM, one panel per chamber, its licks per light event against minutes since
+training end, with the group's breaking point marked. Basic analysis does not write it.
 
 `LightOn_sec` is the seconds the chamber's light was on. On generation 3 it is exact, from
 the larger of its two wells' `OnMs` record by record; before, it counts the lit `OptoCol1`

@@ -1,6 +1,22 @@
 # AI summary
 
-An optional, AI-written narrative of a Project's Combined Analysis, up to about a page.
+An optional, AI-written narrative of a Project's Combined Analysis, up to about a page
+(at most 400 words).
+
+## Making one
+
+Build the Combined Analysis first (the Project panel's **Combine**), then use any of:
+
+- the AI panel's **Generate narrative**, with the **Provider** and **Model** chosen there;
+- **AI narrative…** on the Project panel's Analysis card, which needs only a Project open;
+- a Project Script's `generate_ai_narrative` step.
+
+It is saved as `ai_summary.txt` in the Project's `analysis/` folder, and the Project Report
+includes it, under a warning to check every claim, for as long as that file exists.
+
+A Batch Run with **AI narrative of the batch** ticked also writes `batch_ai_narrative.md`
+at the batch folder: a synthesis of the Projects' own saved narratives, saying where they
+agree and where they do not. A Project with no narrative is skipped.
 
 ## What it is given
 
@@ -31,8 +47,8 @@ ANTHROPIC_API_KEY=...
 OPENAI_API_KEY=...
 ```
 
-in your environment or a `.env` file, either beside your project or in
-`~/.config/pyflic/.env`. Real environment variables always win.
+in your environment or a `.env` file: `~/.config/pyflic/.env`, or a `.env` in the folder
+pyflic was started from or one above it. Real environment variables always win.
 
 Presence of a key is all that is checked — validity is only discovered when you actually
 ask for a summary. A failed generation never blocks a report; you get an error message

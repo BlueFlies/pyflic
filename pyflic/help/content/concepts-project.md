@@ -12,6 +12,8 @@ pyflic has three structural levels, each recognised by a marker file:
 my_study/                     ← a Batch
   drug_trial/                 ← a Project
     project.yaml
+    experiment_type.yaml      ← the copy of a lab type, when the design names one
+    remove_chambers.csv       ← an exclusion sheet, optional
     analysis/                 ← the Combined Analysis
     figures/                  ← publication figures
     plot_specs.yaml
@@ -24,9 +26,9 @@ my_study/                     ← a Batch
     rep2/
 ```
 
-A Project's members may sit at any depth *below the batch folder*, because grouping
-folders like `Sept2026/` are transparent to the scan — but a Project's own members are its
-immediate children and nothing deeper. See
+Projects may sit at any depth *below the batch folder*, because grouping folders like
+`Sept2026/` are transparent to the scan — but a Project's own members are its immediate
+children and nothing deeper. See
 [Running many projects at once](scripts-batch.md).
 
 An **Experiment Directory** is one FLIC recording. A **Member** is an Experiment
@@ -49,10 +51,14 @@ in another, and the members themselves are different experiments.
 ## The design is an authority
 
 The `design:` section of `project.yaml` owns **every** key under a member's `global:` —
-the experiment type, the detection parameters, `well_names`, `transform_licks`, the
-`constants:` cutoffs, the design factors, and the facet cutoffs.
+the experiment type and chamber layout, the detection parameters, `well_names`,
+`transform_licks`, the `constants:` cutoffs, the design factors, the Facets
+(`facet_cutoffs`, `facet_labels`, `facet_source`), `optogenetics`, the `exclusion_group`,
+the `control_level`, and the Selection (`omit:`) that the QC, Analyze and Plots panels'
+ticks write (see [The ticks are configuration](app-hub.md#the-ticks-are-configuration)).
 
-A member that contradicts any of them **fails to load**. This is stricter than it might
+A member that contradicts any of them, or states a `global:` key the design does not own,
+**fails to load**. This is stricter than it might
 seem necessary, and deliberately so: if `well_names` says well A is S5 in one member and
 S5Y5 in another, a pooled licks figure is not noisy, it is *wrong*, and nothing in the
 output would show it.
@@ -93,6 +99,40 @@ Opening the editor on a folder that is not a Project yet reads the design off th
 member it finds, which is the migration path — a folder of standalone experiments becomes a
 Project without retyping what they already agree on.
 
+Saving writes `project.yaml`. When the design's type is one of your lab's, saving also
+writes its copy, `experiment_type.yaml`, beside it, and a new Project starts its
+`plot_specs.yaml` with the type's own Plot Specs; choosing a shipped type removes the copy
+(see [Where types live](concepts-experiment-types.md#where-types-live)).
+
+### The Project design dialog
+
+One dialog, titled *New Project*, *Edit Project design* or *Initialize existing directory*
+by what it is doing, with three cards:
+
+- **Project** — the **Directory** (its **Browse…** can make a new folder), the **Project
+  name** (the folder's name by default, and fixed when initializing in place) and
+  **Notes**, shown near the top of the Project Report.
+- **Design** — what every member inherits: the **Experiment type**, with **New type…** to
+  build one in the [Experiment Type Editor](app-type-editor.md) and, when the Project's copy
+  of a lab type differs from the library's, **Update the copy from the library**; the
+  **Chamber layout** (fixed by a type that owns it); **Well A** and **Well B**; **Transform
+  licks**; **Optogenetics** (auto, yes or no); the **Facet source**, **Facet cutoffs** and
+  **Phase names** ([Facets](concepts-facets.md)); the **Exclusion group** every member's
+  `remove_chambers.csv` is read under; the **Control level**, for a type with a
+  [Treatment control](concepts-experiment-types.md#control-comparisons); and the **Design
+  factors**.
+- **Detection parameters** — the [detection parameters](reference-parameters.md), one rule
+  for every member; the **Auto-filter thresholds**, each with a **Use** box (unticked turns
+  that filter off; ticked and blank takes the type's default); for a type with the
+  Progressive Ratio module, the **Progressive ratio light QC** and **Progressive ratio
+  breaking point** groups ([Light QC](concepts-progressive-ratio.md#light-qc),
+  [Breaking point](concepts-progressive-ratio.md#breaking-point)); and, unless
+  Optogenetics is *no*, the **Optogenetic light QC** thresholds
+  ([Thresholds](concepts-optogenetics.md#thresholds)).
+
+Pointed at an Experiment Directory, *Initialize existing directory* offers to initialize
+its parent instead, so the experiment becomes one of its members.
+
 When you save a design, any member carrying a `global:` block of its own is listed and you
 are offered the one repair there is: **delete those blocks so the members inherit**. Their
 `dfms:` and `scripts:` are left untouched. A member that merely duplicates the design is
@@ -125,7 +165,9 @@ editing it. A standalone experiment, governed by nothing, keeps every field edit
 
 ## What stays free
 
-- the whole `dfms:` block — DFM count, chamber → treatment assignment
+- the whole `dfms:` block — DFM count, chamber → treatment assignment, and a DFM's own
+  keys such as `paired_chambers`, `chamber_groups` and `optogenetics` (whether that DFM's
+  lid was lit is a fact about the recording)
 - per-DFM `params:` overrides, but **only** the physical keys `pi_direction` and
   `chamber_sets`
 
@@ -140,22 +182,29 @@ A folder inside a Project can hold a perfectly good recording and still be unusa
 loader reads `experiment_dir/data` and nothing else, so DFM CSVs sitting at the folder's
 root are invisible — not broken, not warned about, simply absent from the Project.
 
-The Project panel now lists these as **blocked members**, in red, with the reason in the
-tooltip:
+The Project panel lists these as **blocked members**, in red, with the reason in the
+tooltip, and the Batch panel counts them for each Project:
 
 | Reason | Fix |
 |---|---|
 | `unfiled recording` — DFM CSVs at the root, not in `data/` | **File unfiled recordings** |
-| `no config` — `data/` holds DFM CSVs but there is no `flic_config.yaml` | **Member configs…** |
-| `no recording` — a config, but no DFM CSV the loader can find | by hand |
-| `ambiguous` — the same DFM id both loose and in `data/` | by hand: decide which copy is the experiment |
+| `no config` — `data/` holds DFM CSVs but there is no `flic_config.yaml` | **Member configs…** or **Initialize existing directory…** |
+| `no recording` — a config, but no DFM CSV the loader can find (a CSV whose name is spelled in the wrong case is named) | by hand |
+| `ambiguous` — the same DFM id both loose and in `data/`, or a `data` that is a file | by hand: decide which copy is the experiment |
+| `unreadable` — the folder cannot be listed (permissions?) | by hand |
+
+Double-click a blocked row for its repair in place. In the Batch panel, right-click a
+Project for **Fix blocked members in …**, which opens the
+[review window](scripts-batch.md#the-review-window) on it.
 
 Blocked belongs to the **member**, never to the Project: a Project with four healthy
 members and one blocked one analyses the four.
 
 **Filing** moves `DFM*.csv` into `data/` and every other loose file into `extra_files/`.
 Every `.yaml` file and any `remove_chambers.csv` stays exactly where it is — at a member
-root those are configuration and declaration, never data. Nothing is ever overwritten.
+root those are configuration and declaration, never data. Nothing is ever overwritten. A
+loose `Program.txt` goes to `extra_files/` with the rest, and pyflic reads the program only
+from `data/`: move it into `data/` yourself.
 
 ## Adding a member
 
@@ -190,3 +239,19 @@ An existing config is never overwritten.
 If the folder's DFM CSVs are still loose at its root, file them first — scaffolding
 reconciles against what is in `data/`, and doing it beforehand would write a config
 reconciled against nothing.
+
+### The Member configs dialog
+
+**Member configs…** lists every folder of the Project that holds a recording or a config,
+with whether it has a `flic_config.yaml`; a blocked one is red, with its reason in the
+tooltip.
+
+- **Create config** scaffolds the selected folder's config as described above, filing a
+  loose recording first.
+- **Create n missing config(s)** does the same for every folder that has none.
+- **Edit config…** opens a configured folder's config in the Config Editor.
+
+Double-clicking a row does whichever applies. Every note the scaffolding makes — a DFM
+added with chambers unassigned, one kept and flagged — goes to the Hub's log, because each
+is something to finish by hand. The Batch Run's review window hands a member whose reason
+is `no config` to the same dialog.

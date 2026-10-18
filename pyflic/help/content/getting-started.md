@@ -9,6 +9,8 @@ summary statistics, and draws publication-ready plots.
 
 - **Python 3.13 or newer**, with pyflic installed — see [Installing pyflic](install.md).
 - **Raw CSV files** from your FLIC rig, one or more per DFM.
+- Optionally, the **`Messages.csv`** the MCU wrote beside them and, for an optogenetic
+  recording, its **`Program.txt`**.
 - Nothing else. pyflic does not need a network connection, a database, or a server.
 
 ## The three things pyflic works with
@@ -50,8 +52,9 @@ plots from badly chosen detection parameters, so understanding what a *lick* and
 - In the Hub, the **`?`** at the right-hand end of the output area — beside **Clear
   Errors** — opens this window at the start, whatever panel is open. **Help** on the Tools
   panel does the same.
-- Press **F1** in the Hub, the QC Viewer, the Config Editor, the Script Editor or the Plot
-  Editor to open help for the screen you are on.
+- Press **F1** in any pyflic window or dialog — the Hub, the QC Viewer, the editors, the
+  Project design dialog — to open help for the screen you are on. In the QC Viewer it opens
+  the topic for the tab you are on.
 - Run `pyflic help` from a terminal to open this window without launching an app.
 - Search, at the top of this window, looks through every topic; **Guides** in the topic
   list are reading paths through a whole subject.

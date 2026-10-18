@@ -44,13 +44,16 @@ statistic that reads Facets works unchanged. See
 
 For every other type, those names apply **only** while the cutoffs are the type's default. Move a cutoff and you
 get plain minute-range labels instead — "Training" would be a lie once you have moved the
-boundary that defined it. Set `facet_labels` to name them yourself:
+boundary that defined it. Set `facet_labels` to name them yourself, one name per window:
 
 ```yaml
 global:
   facet_cutoffs: [15]
   facet_labels: [Early, Late]
 ```
+
+A list whose length does not match the windows is not used: the Facets keep the type's
+names or the minute ranges.
 
 ## Program Facets
 

@@ -24,8 +24,9 @@ Three consequences follow, and all three surprise people:
 
 - A `Licks` value of `6.2` in `feeding_summary.csv` is **not 6.2 licks** — it is
   `6.2⁴ ≈ 1478` licks. Raise it to the fourth power to recover the count.
-- `summary.txt` reports **untransformed** licks, so the two output files legitimately
-  disagree. Neither is wrong; they are on different scales.
+- The auto-removal cutoff `min_untransformed_licks_cutoff` works on **untransformed**
+  licks, and so do the lick counts `summary.txt` quotes when it says why a chamber was
+  removed. They are on a different scale from the CSV's; neither is wrong.
 - **The preference index is unaffected.** PI and event PI are computed from raw counts
   before the transform is applied, so turning the transform on or off never changes a PI.
 
@@ -34,12 +35,15 @@ raw.
 
 ## Metrics for every experiment
 
+Each row names its `DFM`, `Chamber` and `Treatment`, and carries a column per design factor
+when the experiment has any. Only chambers assigned to a treatment have a row.
+
 | Column | Meaning |
 |---|---|
 | `Licks` | Number of lick samples (transformed by default — see above) |
 | `Events` | Number of feeding events (bouts) |
 | `MeanDuration`, `MedDuration` | Mean and median event duration, in **seconds** |
-| `MeanTimeBtw`, `MedTimeBtw` | Mean and median interval between consecutive events, in seconds |
+| `MeanTimeBtw`, `MedTimeBtw` | Mean and median length, in seconds, of the stretches without feeding: the gaps between events, and also the stretch before the first event and after the last |
 | `MeanInt`, `MedianInt`, `MinInt`, `MaxInt` | Intensity of the baselined signal within events |
 | `OptoOn_sec` | Seconds the light was on for that well |
 | `StartMin`, `EndMin` | The time range this row was computed over |
@@ -67,6 +71,20 @@ Two-well chambers report per-well values, suffixed `A` and `B` according to
 | `MeanIntA/B`, `MedianIntA/B`, `MinIntA/B`, `MaxIntA/B` | Intensities per well |
 | `OptoOn_sec_A`, `OptoOn_sec_B` | Light-on seconds per well |
 
+## Additional columns for optogenetic experiments
+
+Every row of an optogenetic experiment also says what the chamber's light did:
+
+- `Role`, after `Chamber` — what the chamber was to the light: Paired, Yoked, Mutual, Self,
+  Open or Unlit. See [Roles](concepts-optogenetics.md#roles).
+- `LitSec`, after the `OptoOn_sec` columns — seconds the chamber's own light was on,
+  counted once however many of its wells were lit.
+- `Activations` — the on-periods its wells' own Paradigms started. Blank before firmware
+  4.0.0, which is the first to record them.
+
+They are the [light table](concepts-optogenetics.md#the-light-table)'s columns of the same
+name. A DFM the light QC does not cover leaves them blank.
+
 ## Additional columns for Progressive Ratio experiments
 
 Every per-chamber row also says where the chamber sits in its chamber group and how the
@@ -77,7 +95,7 @@ group fared. See [Progressive Ratio experiments](concepts-progressive-ratio.md).
 | `Group` | The chamber group, numbered in chamber order: 1–3 for pairs (chambers 1+2, 3+4, 5+6, or as `Program.txt` links them), 1–6 for single chambers |
 | `Role` | `paired` or `yoked`; every chamber of a design without yoked controls is `paired` |
 | `TrainingMinutes` | The group's training end, in minutes — the same on both chambers of a pair; blank if training never completed |
-| `TrainingComplete` | Whether the paired fly finished training |
+| `TrainingComplete` | Whether the paired fly finished training; `NA` when the recording has no Training at all |
 | `LightOn_sec` | Seconds the group's light was on |
 | `LightQC` | The group's light QC flags; empty when clean |
 | `LickFreeLightEvents` | Test light events the group's paired fly was credited no sucrose lick for |
@@ -103,11 +121,14 @@ This is what the binned time-course plots are drawn from — see
 
 ## Empty chambers
 
-A chamber that recorded no events has no duration or interval to report, and those columns
-are `NaN` rather than `0`. A chamber with no licks at all has an undefined PI, also `NaN`.
-This distinction is deliberate: a fly that never fed is not a fly that fed with zero
-duration, and treating the two as equal will bias any average you compute. Exclude
-inactive chambers rather than letting them through — see
+A chamber that recorded no events has no duration or intensity to report, and those
+columns are `NaN` rather than `0`. A chamber with no licks at all has an undefined PI, also
+`NaN`. This distinction is deliberate: a fly that never fed is not a fly that fed with zero
+duration, and treating the two as equal will bias any average you compute. Its
+`MeanTimeBtw` and `MedTimeBtw` are not `NaN`, and mean nothing: the whole recording is one
+stretch without feeding, counted in the window where it begins, so they read as its length
+there and `0` in the windows after. Exclude inactive
+chambers rather than letting them through — see
 [exclusions](config-dfms-chambers.md#excluding-chambers).
 
 ---

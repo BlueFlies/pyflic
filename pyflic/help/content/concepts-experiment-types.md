@@ -41,7 +41,7 @@ global:
 
 A config with no `experiment_type` key **is** a Custom Experiment. A lab type that leaves
 the layout open (`chamber_layout: either`) states it the same way, beside its
-`experiment_type`.
+`experiment_type`. A config of either kind that states no layout is `two_well`.
 
 ## The shipped types
 
@@ -51,6 +51,12 @@ the layout open (`chamber_layout: either`) states it the same way, beside its
 | `Hedonic` | `two_well` | none | A two-well hedonic design, where bout duration matters, recorded without light |
 | `ProgressiveRatio` | `two_well` | ProgressiveRatio or FixedRatio | A ratio program, with or without yoked controls: a light earned by feeding, and a breaking point |
 
+Custom includes the Paired and yoked and the Light and dark modules, Hedonic the Hedonic
+module, and ProgressiveRatio the Progressive Ratio and Light and dark modules (see
+[Analysis Modules](#analysis-modules)). Hedonic and ProgressiveRatio also set default
+quality cutoffs: `min_untransformed_licks_cutoff: 20`, `max_med_duration_cutoff: 13` and
+`max_events_cutoff: 150000`.
+
 They are read-only. To change one, build a type of your own starting from it (*New from…*
 in the editor).
 
@@ -59,8 +65,10 @@ in the editor).
 A lab type is a definition you build once and reuse in every Project that runs the assay.
 It states:
 
-- its **name** — what `experiment_type:` holds, so letters, digits and underscores, and
-  never a shipped type's name — and a display name and a sentence for the report cover;
+- its **name** — what `experiment_type:` holds, so letters, digits and underscores,
+  starting with a letter, and never a shipped type's name (names that differ only in case,
+  spaces, hyphens or underscores count as the same) — and a display name and a sentence for
+  the report cover;
 - its **chamber layout**: `single_well`, `two_well` or `either`;
 - the **light it expects**: none, any, or a list of Paradigm types (OpenLoop, ClosedLoop,
   FixedInterval, NonFeeding, ProgressiveRatio, FixedRatio);
@@ -68,9 +76,12 @@ It states:
   declares — a Design may add factors of its own, and it always supplies the levels;
 - its **Analysis Modules** (below);
 - its **control comparisons** (below);
-- the **plots** its report shows, picked from the built-in Plot Specs, and Plot Specs of
-  its own, imported from a Project's Plot Editor settings;
-- default facet cutoffs and names, and default quality cutoffs.
+- the **plots** its report shows after its modules' own, picked from the built-in Plot
+  Specs, and Plot Specs of its own, imported from a Project's `plot_specs.yaml`; a new
+  Project of the type starts with them;
+- default facet cutoffs and their names, and whether a config may change them (a module
+  whose Facets come from the data, Progressive Ratio, overrides them);
+- default `constants:`, such as the quality cutoffs; a config's own value wins.
 
 A type combines analyses pyflic provides; it never creates one. A new kind of analysis
 needs code, and then appears in the editor for every type.
@@ -79,10 +90,14 @@ needs code, and then appears in the editor for every type.
 
 | Module | What it adds | What it needs |
 |---|---|---|
-| **Progressive Ratio** (`ratio`) | Chamber groups, Training and Test split at each group's training end, the paired fly's light QC, the paired − yoked difference, the breaking point and sucrose persistence | two wells, and a ProgressiveRatio or FixedRatio Paradigm among the light the type expects |
-| **Hedonic** (`hedonic`) | The weighted duration summary and the hedonic feeding plot | two wells |
-| **Paired and yoked** (`yoked`) | Per yoked linkage group, the paired chamber's feeding minus its yoked chambers' | light; not beside Progressive Ratio, which keeps its own |
-| **Light and dark** (`light_dark`) | Under open-loop light, each chamber's licks per minute lit and dark, in the reports | light |
+| **Progressive Ratio** (`ratio`) | Chamber groups, Training and Test split at each group's training end, the paired fly's light QC, the paired − yoked difference, the breaking point and sucrose persistence | two wells, both named, and a ProgressiveRatio or FixedRatio Paradigm among the light the type expects |
+| **Hedonic** (`hedonic`) | Median bout duration at each well, plain and weighted by each chamber's events (the weighted duration summary), and the hedonic feeding plot | two wells, both named |
+| **Paired and yoked** (`yoked`) | Per yoked linkage group, the paired chamber's feeding, its yoked chambers' mean and the difference, tested against zero (`yoked_comparison.csv`) | light; not beside Progressive Ratio, which keeps its own |
+| **Light and dark** (`light_dark`) | Under open-loop light, each chamber's licks per minute lit and dark and its light feeding index, in the reports | light |
+
+The Paired and yoked comparison is described in
+[Paired and yoked designs](concepts-optogenetics.md#paired-and-yoked-designs), and the lit
+and dark columns in [the light table](concepts-optogenetics.md#the-light-table).
 
 The editor refuses a combination that cannot run — Progressive Ratio on one well, say, or
 the Paired and yoked module on a type that expects no light — and a type may include only
@@ -117,15 +132,21 @@ module: its Training then includes the ClosedLoop interval, as before.
 
 ## Control comparisons
 
-A type may name what its reports lead with, before the general results:
+A type may name what its reports lead with, before the general results. It may name both;
+the Role comparison then comes first.
 
-- a **Role comparison** — two Roles from the program's linkage, such as Paired against
-  Yoked, or Self against Unlit. Paired against Yoked needs the Paired and yoked module (or
-  Progressive Ratio, whose own paired − yoked difference it then is);
+- a **Role comparison** — two [Roles](concepts-optogenetics.md#roles) from the program's
+  linkage, such as Paired against Yoked, or Self against Unlit. A Role comes from the light,
+  so the type must expect some. Paired against Yoked is the paired − yoked comparison moved
+  to the front: it needs the Paired and yoked module (or Progressive Ratio, whose own
+  paired − yoked difference it then is). Any other pair compares the two Roles' chambers
+  within each treatment and window, with Welch's t-test;
 - a **Treatment control** — one of the type's factors. The Design names the control level
   with `control_level:`, one of that factor's levels, and every other level is compared
-  with it. The Project design editor and the Config Editor show a **Control level** field
-  for such a type.
+  with it by Dunnett's test, the other factors held at the same levels. The Project design
+  editor and the Config Editor show a **Control level** field for such a type. A Design of
+  the type that names no control level fails to load, and so does a `control_level` under
+  a type with no Treatment control.
 
 ```yaml
 global:
@@ -205,22 +226,24 @@ with something it finds more rewarding sustains longer feeding bouts, even when 
 counts are similar. The shipped `Hedonic` type is this design without light; the Hedonic
 module brings the same analysis to a lab's own type under any light.
 
-Its distinctive output is the **weighted duration summary**, which computes, per treatment
-and per well:
+Its distinctive output is the **weighted duration summary**, `analysis/treatment_means.csv`,
+with one row per treatment and these columns for each well (ending in `A` or `B`):
 
-- `WeightedMeanDurationA` / `WeightedMeanDurationB` — the mean of each chamber's
-  `MedDuration`, **weighted by that chamber's event count**
-- `WeightedStdDurationA` / `WeightedStdDurationB` — the corresponding weighted standard
-  deviations
-- `N` — the number of chambers that contributed
+- `MeanDuration` and `SemDuration` — the plain mean of the chambers' `MedDuration`, and
+  its standard error
+- `WeightedMeanDuration` and `WeightedSemDuration` — the mean of the chambers'
+  `MedDuration` **weighted by each chamber's event count** at that well, and its weighted
+  standard error
+- `SampleSize` — the number of chambers that contributed: those with events at that well
 
 The weighting is the point. A chamber whose median bout duration rests on 3 events is much
 weaker evidence than one resting on 300, and an unweighted mean across chambers would
 treat them as equal. Weighting by event count gives each chamber influence proportional to
 how much it actually observed.
 
-Hedonic experiments also get a dedicated plot contrasting Well A and Well B median
-durations, faceted by treatment.
+Hedonic experiments also get the **hedonic feeding plot**, `hedonic_feeding_plot.png`:
+Well A's median bout durations beside Well B's, one point per chamber sized by its events,
+with the mean and standard error, and each treatment in a panel of its own.
 
 ### Progressive Ratio
 
@@ -235,7 +258,8 @@ ProgressiveRatio and FixedRatio. Other optogenetic designs — open loop, closed
 interval, non-feeding — are analysed as a Custom experiment or under a lab type that
 expects their light, with the [light table](concepts-optogenetics.md#the-light-table) beside
 the feeding results. A yoked design among them gets a paired − yoked comparison of feeding
-too, in the report's *Paired and yoked* results, under a type with that module.
+too, in the report's *Paired and yoked* results, under a type with the Paired and yoked
+module, as Custom has.
 
 What the Progressive Ratio module adds:
 
