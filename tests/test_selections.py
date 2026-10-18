@@ -695,7 +695,7 @@ def test_analyze_all_keeps_basic_analysis_and_does_not_read_the_selection(
 #: The script actions before this stream; every one stays.
 EXISTING_ACTIONS = {
     "load", "write_summary", "remove_chambers", "basic_analysis", "run_qc", "feeding_csv",
-    "binned_csv", "weighted_duration", "tidy_export", "bootstrap", "compare",
+    "facet_csv", "binned_csv", "weighted_duration", "tidy_export", "bootstrap", "compare",
     "light_phase_summary", "param_sensitivity", "transition_matrix", "pdf_report",
     "plot_feeding_summary", "plot_binned", "plot_dot", "plot_moving_window",
     "plot_moving_median_chambers", "plot_moving_median_treatment", "plot_well_comparison",
