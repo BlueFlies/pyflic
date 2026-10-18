@@ -1040,6 +1040,40 @@ Where the build departed from the plan, stream by stream.
   The simulator reproduces PyMCU's export exactly, so a real recording of
   such a program would be the same.
 
+**S3** (14a8050):
+- **Acclimation gets its own subsection.** A Paradigm with Acclimation has
+  two rule subsections: its Acclimation, under closed loop, and its Main,
+  under its own family. Wells set `On` get an open-loop subsection.
+  Subsections then appear exactly when their family is in the program.
+- **Fixed-length figures show the length.** They have a second plot: lit
+  time, dashed at `ActivationMs`. NonFeeding has one when `MaxOnMs` is set.
+  Without them, *wrong activation length* and *max on exceeded* could not
+  be seen. The relight-delay histogram has no red, because S1 makes no
+  verdict on single Activations.
+- **Per-Paradigm values are recomputed with S1's functions**, some of them
+  private, because `opto_light_qc.csv` sums a group over its Paradigms. A
+  test pins the per-group sums to the QC table. Making those helpers public
+  is left as a follow-up.
+- **Headings are level 2**, since `report_layout` has two levels.
+- **The open-loop subsection's lowest lit fraction** reads
+  `opto_light_intervals.csv` (whole windows). S1 trims each window's start,
+  so the two can differ by a row or two.
+- **Light behaviour rows by family**: by `ParadigmType`; mixed rows by
+  their DFM's program; Open-Role rows in open loop only; Acclimation as its
+  own subsection.
+- **Generation 3 only.** On and Off shading and restart bands show on
+  generation 3 only.
+- **A failure stays contained.** If a rule subsection or the yoked
+  comparison fails, it becomes one red box rather than costing the report.
+- **Found and fixed: the Progressive Ratio Project report's two red
+  boxes.** `project_report._pooled_figure` fed the breaking-point scatter
+  figures rows from `faceted_data`, not `breaking_point_data`.
+
+**The open-loop rates** (b60400f): the light and dark rates counted the
+baseline lead-in as dark. So a chamber lit for the whole program had a
+dark rate of 0 and an index of 1. Only rows under a Program Interval count
+now, and a phase shorter than `MIN_LIGHT_PHASE_MIN` (1 minute) has no rate.
+
 **Joining the streams** (144ddb2): the Progressive Ratio light QC calls
 `rule_checks.requirement_series_mismatches`. The light table reads the
 tolerance through `OptoQCSettings`.

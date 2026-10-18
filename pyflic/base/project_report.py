@@ -539,10 +539,11 @@ def _light_family_blocks(project, specs, family, rows: pd.DataFrame,
                                       "is the treatment mean.  The light feeding index is "
                                       "(lit − dark) / (lit + dark) of the two."))
     if compare and metrics:
-        comparisons = project._compare_frames(project._facet_frames(rows, facet_rows), metrics)
-        blocks += rc.stats_table(comparisons, caption=f"Light behaviour, {family.title}: "
-                                                      f"treatment comparisons, per chamber",
-                                 show_phase=True)
+        blocks += rc.light_comparison_blocks(
+            metrics, rows,
+            lambda keep: project._compare_frames(project._facet_frames(rows, facet_rows), keep),
+            caption=f"Light behaviour, {family.title}: treatment comparisons, per chamber",
+            show_phase=True)
     return blocks
 
 

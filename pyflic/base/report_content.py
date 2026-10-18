@@ -8,7 +8,7 @@ report hooks, all of which build from these.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Iterable, Sequence
+from typing import Any, Callable, Iterable, Sequence
 
 import numpy as np
 import pandas as pd
@@ -77,6 +77,30 @@ def single_treatment_note(treatment: str) -> Any:
     return rl.Paragraph(f"One treatment, {treatment}, so nothing is compared between "
                         f"treatments: the figures describe it alone.",
                         color=rl.MUTED, italic=True)
+
+
+def light_comparison_blocks(metrics: Sequence[str], rows: pd.DataFrame,
+                            compare: Callable[[list[str]], Sequence[dict]],
+                            **table_kw: Any) -> list[Any]:
+    """The treatment comparisons of a *Light behaviour* subsection, member
+    or Project.  A metric with the same value in every chamber has nothing
+    to compare (an open-loop chamber's lit time, when its light was on for
+    the whole program): it is named once, rather than leaving
+    :func:`stats_table` to say that two treatments are needed, which they
+    were not.  *compare* takes the metrics that vary and returns their
+    comparison rows; *table_kw* goes to :func:`stats_table`."""
+    varying = [m for m in metrics
+               if pd.to_numeric(rows[m], errors="coerce").dropna().nunique() > 1]
+    constant = [m for m in metrics if m not in varying]
+    blocks: list[Any] = []
+    if constant:
+        names = ", ".join(metric_label(m) for m in constant)
+        blocks.append(rl.Paragraph(
+            f"{names} {'is' if len(constant) == 1 else 'are'} the same in every chamber, "
+            f"so not compared between treatments.", color=rl.MUTED, italic=True))
+    if varying:
+        blocks += stats_table(compare(varying), **table_kw)
+    return blocks
 
 
 def stats_table(rows: Sequence[dict], *, caption: str | None = None,

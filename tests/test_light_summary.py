@@ -1246,3 +1246,27 @@ def test_main_activations_are_pymcus(analysed):  # noqa: F811 - the imported fix
     assert merged["MainActivations"].tolist() == merged["MainActivations_truth"].astype(float).tolist()
     ## Some flies never finish Acclimation on seed 1; most earn Main ones.
     assert (merged["MainActivations"] > 0).sum() >= 8
+
+
+def test_a_light_metric_the_same_in_every_chamber_is_named_not_compared():
+    """An open-loop chamber lit for the whole program has the same lit time
+    as every other: the comparison names it once instead of saying two
+    treatments are needed, which they were."""
+    from pyflic.base import report_content as rc
+
+    rows = pd.DataFrame({"Treatment": ["Ctrl"] * 3 + ["Exp"] * 3,
+                         "LitSec": [475.0] * 6, "Activations": [3, 4, 5, 9, 10, 12]})
+    asked: list = []
+
+    def compare(keep):
+        asked.append(list(keep))
+        return []
+
+    blocks = rc.light_comparison_blocks(["LitSec", "Activations"], rows, compare)
+    texts = [b.text for b in blocks if isinstance(b, rl.Paragraph)]
+    assert asked == [["Activations"]]
+    assert texts[0] == "Lit time (s) is the same in every chamber, so not compared between treatments."
+    ## Nothing varies: no table at all, only the note.
+    asked.clear()
+    blocks = rc.light_comparison_blocks(["LitSec"], rows, compare)
+    assert asked == [] and len(blocks) == 1
