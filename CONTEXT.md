@@ -100,20 +100,48 @@ _Avoid_: defaults, template (a Design is enforced, not inherited-and-
 overridable).
 
 **Experiment Type**:
-A named bundle that selects one Chamber Layout and constrains the rest of an
-experiment — the required `well_names`, the facet cutoffs and phase labels,
-the default `constants:`, the set of analyses that run, the plot set, and the
-report produced. It is the top-level thing a scientist chooses; everything
-else is derived or constrained from it. A composed strategy object, not an
-`Experiment` subclass.
-_Avoid_: assay, assay type, protocol, template.
+A named, reusable definition of an assay's shape — its Chamber Layout, the
+light it expects, its **Control Comparisons**, the Experimental Design Factor
+names, its **Analysis Modules**, the Plot Specs it brings, the default
+`constants:`, the facets and the report produced — that a Design or a
+standalone config names with `experiment_type:`. It combines analyses pyflic
+provides and never creates one, and it is complete in itself, never built on
+another type. pyflic ships some, read-only (Custom, Hedonic,
+ProgressiveRatio); a lab builds the rest in the **Experiment Type Editor**,
+and the data that uses one carries its own copy. What changes from study to
+study (factor levels, `well_names`, detection `params:`) stays in the Design.
+The Opto Program is checked against the light the type expects; how that
+light is judged follows the Paradigms present, never the type. It is the
+top-level thing a scientist chooses; everything else is derived or
+constrained from it.
+_Avoid_: assay, assay type, protocol, template, program type (Program.txt's
+Linear / Repeating / Circadian / Constant).
 
 **Custom Experiment**:
-The absence of a chosen Experiment Type — the permissive freeform mode, where
-the config is driven directly by `chamber_layout:` with no constraints. A
+The Experiment Type that accepts any light or none: the permissive freeform
+mode, where the config is driven directly by `chamber_layout:` with no
+constraints. It is the type for a recording with no optogenetics, and it
+takes any light it does find from the Opto Program without constraint. A
 config with no `experiment_type` key IS a Custom Experiment. Selectable
 explicitly too.
 _Avoid_: generic, freeform, none.
+
+**Analysis Module**:
+One analysis pyflic provides that an Experiment Type may include — the
+Hedonic durations, the Ratio analysis (Training and Test, breaking point,
+Sucrose Persistence), the paired−yoked difference, feeding in light and
+dark — bringing its items to the QC, Analysis and Plot Sets. Each states what
+it needs (a layout, a light), and a type that cannot meet that cannot include
+it. Adding a module takes code; including one does not.
+_Avoid_: plugin, component, feature.
+
+**Control Comparison**:
+A comparison an Experiment Type's report leads with: a **Role comparison**
+(a pair of Roles from the Opto Program, such as Paired vs Yoked or lit vs
+Unlit), a **Treatment control** (one of the type's factors, whose control
+level the Design names), or both, the Role comparison first. Both are
+optional.
+_Avoid_: control (alone — any Role or level can be one), baseline.
 
 **Chamber Layout**:
 How many wells a chamber has — `single_well` or `two_well` — and therefore
@@ -255,6 +283,13 @@ The Project-level app that opens a Project, renders a live preview of the
 pooled figures from the same Spec+Style that saving uses, and writes the
 vector Publication Figures. Presentation only — it never alters a
 `flic_config.yaml`.
+
+**Experiment Type Editor**:
+The app that builds and edits Experiment Types, opened from the Hub and from
+*New type…* wherever a type is chosen (the Design editor, the Config Editor).
+It saves a type to the lab's library; a shipped type opens read-only, and
+*New from…* copies any type as a starting point.
+_Avoid_: type builder, type wizard.
 
 **Analysis Hub**:
 The main app: a horizontal **tile strip** across the top (Batch · Project ·
@@ -670,7 +705,10 @@ Paradigm applies to all Wells of a DFM during a Program Interval; a
 Generation-3 row names the one in force. PyMCU's word, adopted as it defines
 it.
 _Avoid_: mode, schedule, inferring the paradigm from which settings are zero
-(the pre-4.0.0 export's way, which pyflic keeps only for Generation 1).
+(the pre-4.0.0 export's way, which pyflic keeps only for Generation 1);
+program type for the Paradigm type (Program.txt's `Program Type` is how the
+Program Intervals are laid out in time: Linear, Repeating, Circadian or
+Constant); NoFeeding (the type is NonFeeding).
 
 **Paradigm Family**:
 The Paradigm types pyflic checks and summarises with the same code, because
@@ -687,8 +725,8 @@ the firmware lights them by the same mechanism. There are four:
 
 A Well's family follows its Phase, so a FixedInterval Well in Acclimation is
 closed loop until its Acclimation ends.
-_Avoid_: paradigm group, rule class, Experiment Type (which describes the
-feeding design, not the light).
+_Avoid_: paradigm group, rule class, Experiment Type (which states the light
+it expects, not how that light is judged).
 
 **Program Interval**:
 One timed step of a DFM's Opto Program: its Paradigm, its dark setting and a
@@ -810,10 +848,19 @@ _Avoid_: manual, documentation, the docs, USAGE.
 - A **Project**'s **Design** is the authority for every `global:` key in its
   Members; the `dfms:` block stays free, as do per-DFM overrides of the
   physical keys. A Member normally omits `global:` entirely and inherits.
-- An **Experiment Type** selects exactly one **Chamber Layout**, fixes the
+- An **Experiment Type** states the light it expects — none, any, or a set of
+  **Paradigm types** — and the **Opto Program** is checked against it;
+  OpenLoop light (a whole DFM, or Wells set `On`) and dark Program Intervals
+  may run beside it as controls. A **Design** names one Experiment Type and
+  supplies the factor levels the type leaves open.
+- An **Experiment Type** is paired with exactly one **Chamber Layout**, which
+  a type may fix; it fixes the
   **Facet** cutoffs, and declares the report set. Script actions are gated on
   both: `plot_well_comparison` needs a Chamber Layout, `plot_breaking_point`
-  needs an Experiment Type.
+  needs the Ratio **Analysis Module**.
+- An **Experiment Type** decides what the **QC**, **Analysis** and **Plot
+  Sets** offer: its Analysis Modules' items, the built-in plots it picks and
+  its own Plot Specs. The **Selection** decides which of those a run includes.
 - An **Experiment Directory** holds one or more **DFMs**; a **DFM** holds
   **Chambers** whose count the **Chamber Layout** derives (12 single-well, 6
   two-well); each **Chamber** carries at most one **Treatment**. A DFM is
@@ -935,6 +982,13 @@ _Avoid_: manual, documentation, the docs, USAGE.
   language, still live in the GUI long after the loader moved on. Resolved: the
   editor names **Chamber Layout**, the Experiment Type owns it, and `(auto)` is
   spelled **Custom Experiment** because that is what it is.
+- "experiment type" was then read as the light: open loop, closed loop and
+  NonFeeding asked for as types, with Hedonic a kind of closed loop and the
+  ratio types a kind of fixed schedule. A class tree on that reading needed a
+  Hedonic per light and a class per control and layout. Resolved (ADR-0019):
+  an **Experiment Type** is a definition a lab builds from **Analysis
+  Modules**, stating the light it *expects*; the light is still judged by the
+  **Paradigms** present (ADR-0017), whatever the type.
 - "the docs" was ambiguous between `doc/` (user prose) and `docs/` (ADRs).
   Resolved: user-facing prose is now **help topics**, which live with the
   shipped code; `docs/` holds decision records for developers and nothing
