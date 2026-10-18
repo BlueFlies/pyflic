@@ -404,8 +404,9 @@ def test_the_report_compares_the_paired_chambers_activations(loaded):
 
     e = loaded("two_dfms")
     doc = build_experiment_report(e, metrics=())
+    ## Light behaviour by family (stream S3): the design runs closed loop.
     table = next(b for b in doc.blocks if isinstance(b, rl.Table)
-                 and b.caption == "Treatment comparisons: light behaviour").frame
+                 and b.caption == "Treatment comparisons: light behaviour, closed loop").frame
     n = dict(zip(table["Measure"], table["n"]))
     ## Ctrl has Paired chambers 1 and 3 of each DFM, Exp chamber 2; each has
     ## six chambers in all.

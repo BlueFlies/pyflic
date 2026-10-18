@@ -10,14 +10,19 @@ One figure per DFM (:func:`plot_dfm`), in matplotlib:
   (:mod:`pyflic.base.opto_roles`).
 
 Generation 3 reads the firmware's own record (``dfm.paradigm``): the band is
-``ParadigmState.interval_runs`` and the light is ``OnMs``.  Generations 1 and
-2 have no such record; with a ``Program.txt`` section the band is the
-program's clock schedule laid over the recording (approximate, as the light
-QC uses it) and the lanes show ``OptoCol1`` only.  Without either there is
-nothing to draw, and :func:`plot_dfm` returns a placeholder figure.
+``ParadigmState.interval_runs`` and the light is ``OnMs``; each Well's lane
+also shades the Program Intervals in which ``Program.txt`` sets it ``On``
+(hatched) or ``Off`` (grey), and each restart of the DFM is a marked band
+across the figure (decision 15 of ``docs/paradigm-analyses-plan.md``).
+Generations 1 and 2 have no such record; with a ``Program.txt`` section the
+band is the program's clock schedule laid over the recording (approximate,
+as the light QC uses it) and the lanes show ``OptoCol1`` only.  Without
+either there is nothing to draw, and :func:`plot_dfm` returns a placeholder
+figure.
 
 :func:`well_table` is the same DFM as a table at the end of the loaded range,
-for the QC Viewer's Program sub-tab; :func:`write` saves the figures to
+and :func:`activations_table` its Activations, for the QC Viewer's Program
+sub-tab; :func:`write` saves the figures to
 ``qc/program/program_timeline_dfm<id>.png``.  Terms are ``CONTEXT.md``'s.
 """
 
@@ -60,6 +65,17 @@ _ACCLIMATION_COLOR = "#F2C879"
 _TICK_COLOR = "#222222"
 _HEAT_CMAP = "Blues"
 _REPEATING = ("repeating", "circadian")
+#: A Well's ``On`` and ``Off`` thresholds in its lane (generation 3): On
+#: hatched in the OpenLoop band colour, as it is lit regardless; Off grey.
+_ON_COLOR = TYPE_COLORS["OpenLoop"]
+_OFF_COLOR = "#DADADA"
+#: A DFM restart's band (decision 15).
+_RESTART_COLOR = "#B42318"
+#: The QC Viewer's *Activations* table: the ledger's rows of
+#: ``opto_light_events.csv`` for one DFM (:func:`activations_table`).
+ACTIVATION_TABLE_COLUMNS: tuple[str, ...] = (
+    "Well", "OnsetMin", "Family", "Phase", "K", "LitMs", "EndedBy", "RequirementMet",
+    "Overlap")
 
 
 @dataclass(frozen=True)
@@ -192,6 +208,59 @@ def _schedule_runs(dfm, program: op.OptoProgram, section: op.DFMProgram) -> list
 # The lanes
 # ---------------------------------------------------------------------------
 
+def _well_states(dfm, section: op.DFMProgram | None, minutes: np.ndarray,
+                 period: float) -> list[tuple[int, float, float, str]]:
+    """``[(well, start, end, "On" | "Off")]`` on a generation-3 recording:
+    each run of rows under a Program Interval, joined to its printed line
+    in ``Program.txt``, gives each Well set ``On`` or ``Off`` there a stretch.
+    A run beyond the printed lines (their thresholds unknown) gives none."""
+    state = dfm.paradigm
+    n = len(state)
+    if section is None or not n:
+        return []
+    out: list[tuple[int, float, float, str]] = []
+    for run in state.interval_runs():
+        if run.kind != "program" or run.program_interval is None:
+            continue
+        k = int(run.program_interval)
+        if not 1 <= k <= len(section.intervals):
+            continue
+        line = section.intervals[k - 1]
+        a = float(minutes[run.i0])
+        b = float(minutes[run.i1]) if run.i1 < n else float(minutes[-1]) + period
+        for w in range(1, op.N_WELLS + 1):
+            threshold = line.threshold(w)
+            if threshold == op.ON:
+                out.append((w, a, b, "On"))
+            elif threshold == op.OFF:
+                out.append((w, a, b, "Off"))
+    return out
+
+
+def _restart_spans(dfm, minutes: np.ndarray, period: float) -> list[tuple[float, float]]:
+    """``[(start, end)]`` in recording minutes of each restart the rows show
+    (:meth:`DFM.restarts <pyflic.base.dfm.DFM.restarts>`, decision 15): from
+    the end of the last record before the gap to the first row under the
+    instruction again.  A restart only ``Messages.csv`` names has no rows to
+    place it by and is left out."""
+    try:
+        found = dfm.restarts() or []
+    except Exception:  # noqa: BLE001 - a figure must not fail on a message file
+        return []
+    n = minutes.size
+    out: list[tuple[float, float]] = []
+    for restart in found:
+        row, resume = restart.get("Row"), restart.get("ResumeRow")
+        if row is None or not 0 <= int(row) < n:
+            continue
+        row = int(row)
+        a = float(minutes[row - 1]) + period if row > 0 else float(minutes[row])
+        b = (float(minutes[int(resume)]) if resume is not None and int(resume) < n
+             else float(minutes[-1]) + period)
+        out.append((a, max(b, a + period)))
+    return out
+
+
 def _bin_edges(minutes: np.ndarray, binsize_min: float, period: float) -> np.ndarray:
     binsize = max(float(binsize_min), period)
     lo = float(np.floor(np.nanmin(minutes) / binsize) * binsize)
@@ -291,6 +360,10 @@ def plot_dfm(exp, dfm_id: int, *, binsize_min: float = 10.0):
     edges = _bin_edges(minutes, binsize_min, period)
     share = _lit_share(minutes, lit, record, edges)
     chamber_of, roles = _roles(dfm, section)
+    ## Generation 3 only (generations 1 and 2 keep their figure): each Well's
+    ## On and Off stretches, and the DFM's restarts.
+    states = _well_states(dfm, section, minutes, period) if state is not None else []
+    restarts = _restart_spans(dfm, minutes, period) if state is not None else []
 
     x0, x1 = float(edges[0]), float(edges[-1])
     fig = Figure(figsize=(11.0, 6.4), layout="constrained")
@@ -324,6 +397,17 @@ def plot_dfm(exp, dfm_id: int, *, binsize_min: float = 10.0):
     ## The lanes, Well 1 at the top.
     norm = Normalize(vmin=0.0, vmax=1.0)
     labels, ticks = [], []
+    for well, a, b, kind in states:
+        a, b = max(a, x0), min(b, x1)
+        if b <= a:
+            continue
+        y = 12 - well
+        if kind == "On":
+            lane_ax.add_patch(Rectangle((a, y + 0.02), b - a, 0.40, facecolor="white",
+                                        edgecolor=_ON_COLOR, hatch="////", linewidth=0.4))
+        else:
+            lane_ax.add_patch(Rectangle((a, y + 0.02), b - a, 0.40, facecolor=_OFF_COLOR,
+                                        edgecolor="none"))
     for w in range(1, 13):
         y = 12 - w
         ticks.append(y)
@@ -362,6 +446,16 @@ def plot_dfm(exp, dfm_id: int, *, binsize_min: float = 10.0):
     bar.set_label(f"share of each {float(binsize_min):g}-min bin lit", fontsize=8)
     bar.ax.tick_params(labelsize=7)
 
+    ## Each restart: a band over the Intervals and the lanes, at least a
+    ## line wide, labelled in the band (decision 15).
+    for a, b in restarts:
+        b = max(b, a + 0.004 * span)
+        for ax in (band_ax, lane_ax):
+            ax.axvspan(a, b, facecolor=_RESTART_COLOR, alpha=0.22, edgecolor=_RESTART_COLOR,
+                       linewidth=0.8, zorder=3)
+        band_ax.text(b, 1.0, " restart", ha="left", va="bottom", fontsize=7.5,
+                     color=_RESTART_COLOR, clip_on=False)
+
     handles: list[Any] = [Patch(facecolor=TYPE_COLORS.get(k) or _KIND_COLORS[k],
                                 edgecolor="#999999", linewidth=0.5,
                                 hatch="//" if k == _UNKNOWN_INSTRUCTION else None, label=k)
@@ -369,6 +463,13 @@ def plot_dfm(exp, dfm_id: int, *, binsize_min: float = 10.0):
     if state is not None:
         handles += [Patch(facecolor=_ACCLIMATION_COLOR, label="Phase A (Acclimation)"),
                     Line2D([], [], color=_TICK_COLOR, linewidth=1.0, label="Activation")]
+        if any(kind == "On" for _w, _a, _b, kind in states):
+            handles.append(Patch(facecolor="white", edgecolor=_ON_COLOR, hatch="////",
+                                 linewidth=0.4, label="Well On"))
+        if any(kind == "Off" for _w, _a, _b, kind in states):
+            handles.append(Patch(facecolor=_OFF_COLOR, label="Well Off"))
+        if restarts:
+            handles.append(Patch(facecolor=_RESTART_COLOR, alpha=0.4, label="DFM restart"))
     if handles:
         fig.legend(handles=handles, loc="outside lower center", ncols=min(len(handles), 6),
                    fontsize=8, frameon=False)
@@ -434,6 +535,31 @@ def well_table(exp, dfm_id: int) -> pd.DataFrame:
     for column in ("Chamber", "Activations", "Requirement", "Progress"):
         frame[column] = pd.array(frame[column].tolist(), dtype="Int64")
     return frame
+
+
+def activations_table(exp, dfm_id: int) -> pd.DataFrame:
+    """Every Activation of *dfm_id*'s Trigger Wells, one row each: the
+    ledger's rows of the light QC's ``opto_light_events.csv``
+    (:data:`ACTIVATION_TABLE_COLUMNS`: its Well, onset minute, Paradigm
+    Family, Phase, Main number K, lit time, what ended it, the Requirement it
+    met and whether other light merged with it), for the QC Viewer's Program
+    sub-tab.  Empty for a DFM the light QC does not cover or that records no
+    Paradigm state (generations 1 and 2)."""
+    dfm_id = int(dfm_id)
+    empty = pd.DataFrame(columns=list(ACTIVATION_TABLE_COLUMNS))
+    opto = getattr(exp, "opto", None)
+    dfm = exp.dfms[dfm_id]
+    if opto is None or getattr(dfm, "generation", None) != GENERATION_PARADIGM \
+            or dfm_id not in opto.dfm_ids():
+        return empty
+    from .opto_qc import EVENT_SOURCE_ACTIVATIONS
+
+    events = opto.events_table()
+    rows = events[(events["DFM"] == dfm_id) & (events["Source"] == EVENT_SOURCE_ACTIVATIONS)]
+    if rows.empty:
+        return empty
+    return rows.sort_values(["OnsetMin", "Well"], kind="stable")[
+        list(ACTIVATION_TABLE_COLUMNS)].reset_index(drop=True)
 
 
 # ---------------------------------------------------------------------------

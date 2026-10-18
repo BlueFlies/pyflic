@@ -11,6 +11,7 @@ single-well, all-Canton-S run) showed the report doing wrong.
 from __future__ import annotations
 
 import os
+import shutil
 from datetime import datetime
 from pathlib import Path
 
@@ -168,6 +169,79 @@ def test_the_program_timeline_is_for_optogenetic_experiments(quiet):
     exp = _load(quiet)
     assert exp.dfms[1].paradigm is not None          # generation 3
     assert program_timeline.timeline_dfms(exp) == []
+
+
+# ---------------------------------------------------------------------------
+# The quiet run's reports as a Project, and the real bench recording
+# (stream S3 of docs/paradigm-analyses-plan.md)
+# ---------------------------------------------------------------------------
+
+#: The real quiet bench run (PyMCU 4.0.0, ***ALL DFM***, every well Off), in
+#: the checkout's git-ignored ``test_data`` (or ``PYFLIC_BENCH_DIR``'s; a
+#: worktree has none, so the main checkout's is tried last).
+BENCH_NAME = "FLICMCU_10_17_2026_00_17"
+_BENCH_ROOTS = (os.environ.get("PYFLIC_BENCH_DIR"),
+                Path(__file__).resolve().parents[1] / "test_data",
+                "C:/Users/scott/Desktop/GithubLocal/pyflic/test_data")
+BENCH = next((Path(r) / BENCH_NAME for r in _BENCH_ROOTS
+              if r and (Path(r) / BENCH_NAME).is_dir()), None)
+
+
+def _quiet_project(root: Path, data: Path, **design):
+    """A one-member Project of twelve single-well Canton-S chambers over a
+    copy of *data*, as test_data/CantonS is."""
+    from pyflic.base.project import Project
+
+    member = root / "quiet"
+    shutil.copytree(data, member / "data")
+    (member / "flic_config.yaml").write_text(yaml.safe_dump(
+        {"dfms": [{"id": 1, "chambers": {c: "Canton-S" for c in range(1, 13)}}]},
+        sort_keys=False))
+    glob = {"chamber_layout": "single_well",
+            "params": {"feeding_threshold": 20, "feeding_minimum": 10,
+                       "samples_per_second": 5},
+            "experimental_design_factors": {"Genotype": ["Canton-S"]}, **design}
+    (root / "project.yaml").write_text(yaml.safe_dump(
+        {"name": root.name, "design": {"global": glob}}, sort_keys=False))
+    return Project(root)
+
+
+def _both_reports(project) -> tuple[str, str]:
+    from contextlib import redirect_stdout
+    from io import StringIO
+
+    from pyflic.base.pdf_report import build_experiment_report
+    from pyflic.base.project_report import build_project_report
+
+    with redirect_stdout(StringIO()):
+        exp = project.load_member("quiet", parallel=False, use_disk_cache=False)
+        exp.execute_basic_analysis(skip_qc=False)
+        member = " ".join(_texts(build_experiment_report(
+            exp, metrics=("Licks", "Events", "MedDuration"))))
+        project.build_combined_analysis()
+        pooled = " ".join(_texts(build_project_report(project)))
+    return member, pooled
+
+
+def test_the_quiet_runs_project_report_has_no_error(quiet, tmp_path):
+    member, pooled = _both_reports(_quiet_project(tmp_path / "proj", quiet / "data"))
+    for text in (member, pooled):
+        assert "could not be drawn" not in text and "Could not evaluate" not in text
+    assert pooled.count("One treatment, Canton-S, so nothing is compared") == 1
+
+
+@pytest.mark.slow
+def test_the_real_bench_runs_reports_have_no_error(tmp_path):
+    """The real recording, judged as optogenetic (``optogenetics: yes``) so
+    that the light QC and the light table run on its every-well-Off
+    program: no red box in the member's report or the Project's."""
+    if BENCH is None:
+        pytest.skip(f"the bench recording {BENCH_NAME} is not here (git-ignored test_data)")
+    member, pooled = _both_reports(_quiet_project(tmp_path / "bench", BENCH,
+                                                  optogenetics="yes"))
+    for text in (member, pooled):
+        assert "could not be drawn" not in text and "Could not evaluate" not in text
+    assert "Optogenetic light QC" in member and "Rule check:" not in member
 
 
 # ---------------------------------------------------------------------------

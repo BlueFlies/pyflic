@@ -1161,7 +1161,14 @@ def test_the_headline_metrics_follow_the_families(each, tmp_path):
     start = next(i for i, b in enumerate(blocks)
                  if isinstance(b, rl.Heading) and b.text == "Light behaviour")
     titles = [p.title for b in blocks[start:] if isinstance(b, rl.PlotRow) for p in b.plots]
-    assert titles == [rc.metric_label(m) for m in headline]
+    ## Stream S3: one subsection per family, each with its own headline set,
+    ## fixed length by its branch and the Acclimation apart; together they
+    ## are the headline metrics.
+    families = rc.light_families([(e.opto_program, e.opto.dfm_ids())])
+    assert [f.key for f in families] == ["open loop", "closed loop", "interval", "ratio",
+                                         "non-feeding", "acclimation"]
+    assert titles == [rc.metric_label(m) for f in families for m in f.metrics]
+    assert list(dict.fromkeys(m for f in families for m in f.metrics)) == headline
     assert ls.experiment_headline_metrics(_load(make_opto_dir(tmp_path / "g1"))) == \
         list(ls.HEADLINE_METRICS)
     assert ls.program_headline_metrics([]) == list(ls.HEADLINE_METRICS)

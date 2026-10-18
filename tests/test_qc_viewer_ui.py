@@ -330,6 +330,24 @@ def test_a_generation_3_member_gets_the_program_sub_tab(v4_window):
     assert panel.table is not None and panel.table is not table
 
 
+def test_the_program_sub_tab_lists_the_dfms_activations(v4_window):
+    """Stream S3: beside the wells, the DFM's Activations, the ledger's rows
+    of opto_light_events.csv."""
+    from pyflic.base.program_timeline import ACTIVATION_TABLE_COLUMNS, activations_table
+
+    win = v4_window
+    panel = win._dfm_tab_widgets[1]._program_panel
+    win.show()
+    win._tabs.setCurrentWidget(win._dfm_tab_widgets[1])
+    win._dfm_tab_widgets[1]._tabs.setCurrentWidget(panel)
+    QApplication.processEvents()
+    table = panel.activations
+    expected = activations_table(panel._exp, 1)
+    assert table is not None and table.rowCount() == len(expected) > 0
+    assert [table.horizontalHeaderItem(c).text() for c in range(table.columnCount())] == \
+        list(ACTIVATION_TABLE_COLUMNS)
+
+
 def test_a_generation_3_group_keeps_the_firmwares_columns(v4_window):
     tab = v4_window._opto_tab
     assert {"ProgramInterval", "Cycle", "Paradigm"} <= set(_detail_headers(tab, "Intervals"))
