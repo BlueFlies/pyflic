@@ -1,10 +1,13 @@
 """The Progressive Ratio Experiment Type.
 
-A two-well operant assay.  Each DFM's six chambers form three **Chamber
-Groups** (1+2, 3+4, 5+6) that share one light circuit and one Treatment; in
-each group one chamber is **Paired** (light contingent on its own feeding at
-the sucrose well, well A) and the other **Yoked** (lit at the same moments,
-regardless of its own behaviour).  The recording opens with a closed-loop
+A two-well operant assay.  A DFM's six chambers form **Chamber Groups** that
+share one light circuit and one Treatment.  In a paired design each group is
+two chambers: one **Paired** (light contingent on its own feeding at the
+sucrose well, well A) and the other **Yoked** (lit at the same moments,
+regardless of its own behaviour).  A **solo** group is one chamber, Paired,
+with no yoked control: PyMCU's reference design, where each chamber's light
+answers to its own fly alone (decision 13 of
+``docs/paradigm-analyses-plan.md``).  The recording opens with a closed-loop
 **Training** phase whose end the firmware marks per well in the data (a flag
 in the signal before firmware 4.0.0, the Sucrose Well's Phase from it), and
 differs for every group — which is why this type's Facets are data-derived
@@ -12,20 +15,31 @@ differs for every group — which is why this type's Facets are data-derived
 Paradigms of firmware 4.0.0, ProgressiveRatio and FixedRatio (decision 6 of
 ``docs/v4-data-plan.md``).
 
-The config states the design with one key per DFM::
+Where the groups come from (:func:`resolve_chamber_groups`):
 
-    dfms:
-    - id: 1
-      params: {pi_direction: left}     # side of the sucrose well (well A)
-      paired_chambers: [1, 4, 5]       # exactly one chamber from each group
-      chambers: {1: Ctrl, 2: Ctrl, 3: Exp, 4: Exp, 5: Exp, 6: Exp}
+* ``paired_chambers`` in the DFM's entry: the paired layout, chambers 1+2,
+  3+4 and 5+6, with exactly one Paired chamber from each::
 
-Yoked is the other chamber of the group and is never written.
+      dfms:
+      - id: 1
+        params: {pi_direction: left}     # side of the sucrose well (well A)
+        paired_chambers: [1, 4, 5]       # exactly one chamber from each group
+        chambers: {1: Ctrl, 2: Ctrl, 3: Exp, 4: Exp, 5: Exp, 6: Exp}
+
+  Yoked is the other chamber of the group and is never written.
+* ``chamber_groups: single`` in the DFM's entry: six solo groups.
+* Neither, with ``Program.txt``: its Linkage.  A Linkage Group lighting two
+  chambers is a pair whose chamber holding the Trigger Well is Paired; one
+  lighting one chamber is a solo group.
+* Neither, without ``Program.txt`` (or ``chamber_groups: paired``): the
+  paired layout, whose ``paired_chambers`` is then required.
 """
 
 from __future__ import annotations
 
-from typing import Any, Mapping
+from collections import Counter
+from dataclasses import dataclass
+from typing import Any, Mapping, Sequence
 
 from ..constant_fields import ConstantField
 from ..constant_fields import constant_problems as _constant_problems
@@ -33,11 +47,66 @@ from ..pr_breaking_point import DEFAULT_CONSTANTS as BREAK_CONSTANTS
 from ..pr_light_qc import DEFAULT_CONSTANTS as LIGHT_QC_CONSTANTS
 from .base import ExperimentType
 
-#: Chamber Group -> its two chambers (two-well layout, chambers 1..6).
+#: The paired layout's Chamber Groups -> their two chambers (two-well layout,
+#: chambers 1..6): what ``paired_chambers`` and ``chamber_groups: paired``
+#: name.  Program.txt's Linkage may group chambers otherwise
+#: (:func:`groups_from_program`).
 CHAMBER_GROUPS: dict[int, tuple[int, int]] = {1: (1, 2), 2: (3, 4), 3: (5, 6)}
 ROLE_PAIRED = "paired"
 ROLE_YOKED = "yoked"
 PAIRED_KEY = "paired_chambers"
+#: The DFM entry's ``chamber_groups``: the layout when Program.txt does not
+#: give the groups, ``paired`` (the default) or ``single``.
+GROUPS_KEY = "chamber_groups"
+GROUPS_PAIRED, GROUPS_SINGLE = "paired", "single"
+GROUP_LAYOUTS: tuple[str, ...] = (GROUPS_PAIRED, GROUPS_SINGLE)
+#: Where :meth:`ProgressiveRatioExperimentType.complete_dfm_node` leaves the
+#: groups Program.txt gave, in the resolved DFM entry the loader keeps (never
+#: in a file): ``[[paired, yoked or None], ...]`` in group order.
+RESOLVED_GROUPS_KEY = "_chamber_groups"
+#: The two-well layout's chambers.
+N_CHAMBERS = 6
+
+
+@dataclass(frozen=True, slots=True)
+class ChamberGroup:
+    """One Chamber Group of a DFM: its number (groups are numbered in
+    chamber order), its Paired chamber and its Yoked chamber, ``None`` for a
+    solo group."""
+
+    number: int
+    paired: int
+    yoked: int | None = None
+
+    @property
+    def chambers(self) -> tuple[int, ...]:
+        """The group's chambers, in order."""
+        return tuple(sorted(c for c in (self.paired, self.yoked) if c is not None))
+
+    @property
+    def solo(self) -> bool:
+        """A group of one chamber, with no yoked control."""
+        return self.yoked is None
+
+
+def paired_layout(paired: Sequence[int]) -> tuple[ChamberGroup, ...]:
+    """The paired layout's groups with *paired* (one chamber of each of
+    :data:`CHAMBER_GROUPS`, as :func:`parse_paired_chambers` accepts) as
+    their Paired chambers."""
+    by_group = {group_of(c): int(c) for c in paired}
+    return tuple(ChamberGroup(g, by_group[g], partner_of(by_group[g]))
+                 for g in sorted(CHAMBER_GROUPS))
+
+
+def single_layout(n_chambers: int = N_CHAMBERS) -> tuple[ChamberGroup, ...]:
+    """Every chamber its own solo group, numbered as the chambers are."""
+    return tuple(ChamberGroup(c, c, None) for c in range(1, int(n_chambers) + 1))
+
+
+def describe_groups(groups: Sequence[ChamberGroup]) -> str:
+    """``1 (paired 1, yoked 4), 2 (chamber 2)``: what each group holds."""
+    return ", ".join(f"{g.number} (chamber {g.paired})" if g.solo else
+                     f"{g.number} (paired {g.paired}, yoked {g.yoked})" for g in groups)
 
 
 def group_of(chamber: int) -> int:
@@ -126,6 +195,24 @@ def break_requirement_view(frame) -> Any:
     return pd.DataFrame(rows)
 
 
+def pooled_yoked_controls(project) -> bool:
+    """Whether a Project's pooled Progressive Ratio light QC
+    (``<project>_LightQC.csv``, ``Source`` PR) has a group with a Yoked
+    chamber; ``True`` when it cannot tell (no such table), so nothing is
+    said of a design whose groups are unknown.  A solo group's
+    ``YokedChamber`` is NA (decision 13)."""
+    import pandas as pd
+
+    frame = getattr(project, "combined_light_qc_frame", lambda: None)()
+    if frame is None or frame.empty or "YokedChamber" not in frame.columns:
+        return True
+    if "Source" in frame.columns:
+        frame = frame[frame["Source"].astype(str) == "PR"]
+    if frame.empty:
+        return True
+    return bool(pd.to_numeric(frame["YokedChamber"], errors="coerce").notna().any())
+
+
 def all_fixed_ratio(frame) -> bool:
     """Whether every row of a stacked ``pr_breaking_point.csv`` ran a
     FixedRatio Test Paradigm (``ParadigmType``), so its count is the
@@ -183,6 +270,16 @@ def paired_from_program(dfm_program, chamber_sets=None, pi_direction: str = "lef
                             f"({wells_label(own)})")
     if problems:
         return None, problems, notes
+    return paired, problems, _well_b_notes(paired, sets, chamber_of, triggers, pi_direction)
+
+
+def _well_b_notes(paired: Sequence[int], sets, chamber_of: Mapping[int, int],
+                  triggers, pi_direction: str) -> list[str]:
+    """A note for each Paired chamber whose Trigger Well is not its well A,
+    the Sucrose Well, under *pi_direction*."""
+    from ..opto_program import wells_label
+
+    notes: list[str] = []
     for chamber in paired:
         if chamber > len(sets):
             continue
@@ -193,7 +290,182 @@ def paired_from_program(dfm_program, chamber_sets=None, pi_direction: str = "lef
             notes.append(f"the trigger well of paired chamber {chamber} is "
                          f"{wells_label(own)}, which is well B under pi_direction "
                          f"{pi_direction}; the Sucrose Well is well A")
-    return paired, problems, notes
+    return notes
+
+
+def groups_from_program(dfm_program, chamber_sets=None, pi_direction: str = "left"
+                        ) -> tuple[tuple[ChamberGroup, ...] | None, list[str], list[str]]:
+    """``(groups, problems, notes)``: the Chamber Groups one DFM section of
+    the Opto Program's Linkage makes (decision 13 of
+    ``docs/paradigm-analyses-plan.md``).
+
+    A Linkage Group with a Trigger Well lights the chambers its wells sit
+    in: two chambers are a pair, the one holding the Trigger Well Paired and
+    the other Yoked; one chamber is a solo group, Paired.  A Linkage Group
+    with no Trigger Well lights nothing of its own.  *problems* say why the
+    Linkage makes no groups — a Linkage Group over more than two chambers,
+    Trigger Wells in both chambers of one, a chamber no Trigger Well lights,
+    or one in two lit groups; *notes* flag a Trigger Well that is well B
+    (:func:`paired_from_program`'s note).  Groups are numbered in chamber
+    order.
+    """
+    from ..opto_roles import chamber_map, linkage_view
+
+    sets = [tuple(int(w) for w in row)
+            for row in (chamber_sets if chamber_sets is not None else _DEFAULT_CHAMBER_SETS)]
+    chamber_of = chamber_map(sets)
+    view = linkage_view(dfm_program, None, None)
+    triggers = set(view.trigger_wells)
+    ## A trigger well no Linkage Group lists lights only itself, as the
+    ## Roles read it (opto_roles.chamber_roles).
+    grouped = {w for wells in view.groups.values() for w in wells}
+    alone = sorted(triggers - grouped)
+    found: list[tuple[int, int | None]] = []
+    problems: list[str] = []
+    for wells in (*view.groups.values(), *((w,) for w in alone)):
+        members = sorted({chamber_of[w] for w in wells if w in chamber_of})
+        lit_by = sorted({chamber_of[w] for w in wells if w in chamber_of and w in triggers})
+        if not members or not lit_by:
+            continue
+        if len(members) > 2:
+            problems.append(f"Program.txt links chambers {members} into one light circuit; "
+                            f"a chamber group is one chamber or two")
+        elif len(lit_by) > 1:
+            problems.append(f"Program.txt has trigger wells in both linked chambers "
+                            f"{members[0]} and {members[1]}")
+        else:
+            paired = lit_by[0]
+            found.append((paired, next((c for c in members if c != paired), None)))
+    count = Counter(c for pair in found for c in pair if c is not None)
+    for chamber in sorted(set(chamber_of.values())):
+        if not count[chamber]:
+            problems.append(f"Program.txt lights chamber {chamber} from no trigger well")
+        elif count[chamber] > 1:
+            problems.append(f"Program.txt puts chamber {chamber} in more than one lit "
+                            f"linkage group")
+    if problems:
+        return None, problems, []
+    found.sort(key=lambda pair: min(c for c in pair if c is not None))
+    groups = tuple(ChamberGroup(k, p, y) for k, (p, y) in enumerate(found, start=1))
+    notes = _well_b_notes([g.paired for g in groups], sets, chamber_of, triggers, pi_direction)
+    return groups, [], notes
+
+
+def parse_layout(raw: Any) -> tuple[str | None, list[str]]:
+    """``(layout, problems)`` for a DFM entry's ``chamber_groups``: ``paired``,
+    ``single`` or ``None`` when it is not stated."""
+    if raw is None:
+        return None, []
+    text = str(raw).strip().lower()
+    if text in GROUP_LAYOUTS:
+        return text, []
+    return None, [f"'{GROUPS_KEY}' must be one of {', '.join(GROUP_LAYOUTS)}, got {raw!r}"]
+
+
+@dataclass(frozen=True, slots=True)
+class GroupResolution:
+    """What :func:`resolve_chamber_groups` decided for one DFM: its groups
+    (``None`` when *problems* leave none), what says so (``"config"`` or
+    ``"program"``), and notes for the loader to print."""
+
+    groups: tuple[ChamberGroup, ...] | None
+    source: str
+    problems: tuple[str, ...] = ()
+    notes: tuple[str, ...] = ()
+
+
+def _stored_groups(raw: Any) -> tuple[ChamberGroup, ...]:
+    return tuple(ChamberGroup(k, int(p), None if y is None else int(y))
+                 for k, (p, y) in enumerate(raw, start=1))
+
+
+def resolve_chamber_groups(node: Mapping[str, Any] | None, dfm_program=None, *,
+                           chamber_sets=None, pi_direction: str = "left",
+                           dfm_id: int | None = None) -> GroupResolution:
+    """One DFM's Chamber Groups, from its ``dfms:`` entry and its Opto Program
+    section (decision 13 of ``docs/paradigm-analyses-plan.md``).
+
+    What the config states wins, as ``paired_chambers`` always has:
+
+    * ``paired_chambers``: the paired layout with those Paired chambers; a
+      section whose Trigger Wells make others is noted;
+    * ``chamber_groups: single``: six solo groups; a section whose Linkage
+      makes pairs is noted;
+    * neither, with a section: its Linkage (:func:`groups_from_program`), or,
+      when the Linkage makes no groups, the paired layout with the section's
+      trigger chambers as the Paired ones (:func:`paired_from_program`, as
+      before solo groups);
+    * otherwise (no section, or ``chamber_groups: paired`` and a section
+      that names no Paired chambers): ``paired_chambers`` is required.
+
+    A node the loader has completed carries the groups the section gave
+    (:data:`RESOLVED_GROUPS_KEY`), so the result is the same without it.
+    Never raises.
+    """
+    from ..opto_program import wells_label
+
+    node = node or {}
+    where = f"DFM {dfm_id}: " if dfm_id is not None else ""
+    if node.get(RESOLVED_GROUPS_KEY) is not None:
+        return GroupResolution(_stored_groups(node[RESOLVED_GROUPS_KEY]), "program")
+    layout, problems = parse_layout(node.get(GROUPS_KEY))
+    stated = node.get(PAIRED_KEY)
+    if problems:
+        return GroupResolution(None, "config", tuple(problems))
+    notes: list[str] = []
+    if stated is not None:
+        if layout == GROUPS_SINGLE:
+            return GroupResolution(None, "config", (
+                f"'{PAIRED_KEY}' cannot be stated with '{GROUPS_KEY}: single', where "
+                f"every chamber is its own group and Paired (remove one)",))
+        given, problems = parse_paired_chambers(stated)
+        if dfm_program is not None:
+            derived, _problems, derived_notes = paired_from_program(dfm_program, chamber_sets,
+                                                                    pi_direction)
+            notes.extend(f"{where}{note}" for note in derived_notes)
+            if derived is not None and not problems and sorted(given) != sorted(derived):
+                notes.append(f"{where}paired_chambers {sorted(given)} disagrees with "
+                             f"Program.txt, whose trigger wells make chambers {derived} "
+                             f"paired; the config's are used")
+        if problems:
+            return GroupResolution(None, "config", tuple(problems), tuple(notes))
+        return GroupResolution(paired_layout(given), "config", (), tuple(notes))
+    if layout == GROUPS_SINGLE:
+        if dfm_program is not None:
+            linked, _problems, _notes = groups_from_program(dfm_program, chamber_sets,
+                                                            pi_direction)
+            if linked is not None and not all(g.solo for g in linked):
+                notes.append(f"{where}chamber_groups single disagrees with Program.txt, "
+                             f"whose linkage makes chamber groups {describe_groups(linked)}; "
+                             f"the config's are used")
+        return GroupResolution(single_layout(), "config", (), tuple(notes))
+    if dfm_program is not None:
+        linked, linked_problems, linked_notes = (
+            groups_from_program(dfm_program, chamber_sets, pi_direction)
+            if layout is None else (None, [], []))
+        derived, derived_problems, derived_notes = paired_from_program(
+            dfm_program, chamber_sets, pi_direction)
+        if derived is not None and (linked is None or linked == paired_layout(derived)):
+            ## The paired layout, as before solo groups, in the same words.
+            return GroupResolution(paired_layout(derived), "program", (), tuple(
+                [f"{where}paired_chambers {derived} taken from Program.txt (trigger wells "
+                 f"{wells_label(dfm_program.trigger_wells())})",
+                 *(f"{where}{note}" for note in derived_notes)]))
+        if linked is not None:
+            kind = ("each a single chamber, with no yoked control"
+                    if all(g.solo for g in linked) else describe_groups(linked))
+            return GroupResolution(linked, "program", (), tuple(
+                [f"{where}chamber groups taken from Program.txt's linkage: "
+                 + (f"{len(linked)} groups, {kind}" if all(g.solo for g in linked) else kind),
+                 *(f"{where}{note}" for note in linked_notes)]))
+        notes.extend(f"{where}paired_chambers cannot be taken from Program.txt: {p}"
+                     for p in derived_problems)
+        notes.extend(f"{where}chamber groups cannot be taken from Program.txt's linkage: {p}"
+                     for p in linked_problems)
+    _given, problems = parse_paired_chambers(None)
+    problems = [f"{p}; or {GROUPS_KEY}: single, for a design without yoked controls"
+                for p in problems]
+    return GroupResolution(None, "config", tuple(problems), tuple(notes))
 
 
 #: Every Progressive Ratio constant beyond the three auto-filter cutoffs, in
@@ -310,42 +582,38 @@ class ProgressiveRatioExperimentType(ExperimentType):
 
     def complete_dfm_node(self, dfm_id: int, node: dict, *, params=None,
                           dfm_program=None) -> tuple[dict, list[str]]:
-        """Derive ``paired_chambers`` from the Opto Program when the entry
-        leaves it out; when both exist and disagree, say so and keep the
-        config's (:func:`paired_from_program`)."""
+        """The Chamber Groups the Opto Program gives when the entry leaves
+        them out (:func:`resolve_chamber_groups`): ``paired_chambers`` for the
+        paired layout, as before solo groups, and the groups themselves
+        (:data:`RESOLVED_GROUPS_KEY`) whenever the program decided them.
+        When the config states them and the program disagrees, say so and
+        keep the config's."""
         if dfm_program is None:
             return node, []
-        from ..opto_program import wells_label
-
-        derived, problems, notes = paired_from_program(
-            dfm_program, getattr(params, "chamber_sets", None),
-            getattr(params, "pi_direction", "left"))
-        out = [f"DFM {dfm_id}: {note}" for note in notes]
-        stated = node.get(PAIRED_KEY)
-        if stated is None:
-            if derived is not None:
-                node = {**node, PAIRED_KEY: list(derived)}
-                out.insert(0, f"DFM {dfm_id}: paired_chambers {derived} taken from "
-                              f"Program.txt (trigger wells "
-                              f"{wells_label(dfm_program.trigger_wells())})")
-            else:
-                out.extend(f"DFM {dfm_id}: paired_chambers cannot be taken from "
-                           f"Program.txt: {p}" for p in problems)
-        else:
-            given, given_problems = parse_paired_chambers(stated)
-            if derived is not None and not given_problems and sorted(given) != sorted(derived):
-                out.append(f"DFM {dfm_id}: paired_chambers {sorted(given)} disagrees with "
-                           f"Program.txt, whose trigger wells make chambers {derived} "
-                           f"paired; the config's are used")
-        return node, out
+        result = resolve_chamber_groups(
+            node, dfm_program, chamber_sets=getattr(params, "chamber_sets", None),
+            pi_direction=getattr(params, "pi_direction", "left"), dfm_id=dfm_id)
+        if result.source == "program" and result.groups is not None:
+            node = {**node, RESOLVED_GROUPS_KEY: [[g.paired, g.yoked] for g in result.groups]}
+            if sorted(g.chambers for g in result.groups) == sorted(CHAMBER_GROUPS.values()):
+                ## The paired layout: written as the config would state it.
+                node[PAIRED_KEY] = sorted(g.paired for g in result.groups)
+        return node, list(result.notes)
 
     def validate_dfm(self, dfm_id: int, node: dict | None,
                      chamber_assignments: dict | None) -> list[str]:
-        node = node or {}
-        paired, problems = parse_paired_chambers(node.get(PAIRED_KEY))
-        out = [f"DFM {dfm_id}: {p}" for p in problems]
+        result = resolve_chamber_groups(node, dfm_id=dfm_id)
+        out = [f"DFM {dfm_id}: {p}" for p in result.problems]
         assignments = {int(k): str(v) for k, v in (chamber_assignments or {}).items()}
-        for g, (a, b) in CHAMBER_GROUPS.items():
+        ## Both chambers of a pair share a treatment; the paired layout's
+        ## pairs are checked even when paired_chambers is wrong or missing.
+        groups = (result.groups if result.groups is not None
+                  else paired_layout([a for a, _b in CHAMBER_GROUPS.values()])
+                  if parse_layout((node or {}).get(GROUPS_KEY))[0] != GROUPS_SINGLE else ())
+        for g in groups:
+            if g.solo:
+                continue
+            a, b = g.chambers
             ta, tb = assignments.get(a), assignments.get(b)
             if ta is not None and tb is not None and ta != tb:
                 out.append(
@@ -357,13 +625,15 @@ class ProgressiveRatioExperimentType(ExperimentType):
         return ["Test"]
 
     def report_intro(self) -> str:
+        ## Said of pairs and solo groups alike (decision 13): whether this
+        ## design has yoked controls, the results say once.
         return ("A progressive-ratio assay: in each chamber group the paired fly "
                 "earns light-driven stimulation by feeding at the sucrose well "
-                "(well A) while its yoked partner is lit at the same moments "
-                "regardless of behaviour. Training is closed-loop and ends at a "
-                "time the data defines per group; the Test phase follows. The "
-                "headline result is the paired-minus-yoked difference within "
-                "each group.")
+                "(well A); in a paired group its yoked partner is lit at the same "
+                "moments regardless of behaviour. Training is closed-loop and ends "
+                "at a time the data defines per group; the Test phase follows. The "
+                "headline results are the breaking point and, where groups have a "
+                "yoked control, the paired-minus-yoked difference within each group.")
 
     def report_set(self, chamber_layout: str) -> list[str]:
         return ["timecourse_pr_diff", "scatter_pr_breaking_point",
@@ -437,6 +707,12 @@ class ProgressiveRatioExperimentType(ExperimentType):
 
         test = (diff[diff["Facet"].astype(str) == "Test"]
                 if diff is not None and not diff.empty else None)
+        if (test is None or test.empty) and not pooled_yoked_controls(project):
+            ## Decision 13: said once, where the difference would have been.
+            blocks += [rl.Heading("Paired − yoked difference", level=2),
+                       rl.Paragraph("The design has no yoked controls: every chamber "
+                                    "group is one chamber, lit by its own fly alone, so "
+                                    "there is no paired − yoked difference.")]
         if test is not None and not test.empty:
             blocks += [
                 rl.Heading("Paired − yoked difference, Test phase", level=2),

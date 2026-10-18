@@ -562,6 +562,11 @@ class _WestTabBar(QTabBar):
 _TAB_EXPERIMENT = "Experiment"
 _TAB_DFMS = "DFMs && Chambers"
 
+#: A Progressive Ratio DFM's Chamber Groups, as its tab picks them: pairs
+#: (``paired_chambers``), single chambers (``chamber_groups: single``), or
+#: Program.txt's Linkage (neither key written).
+PR_GROUPS_PAIRED, PR_GROUPS_SINGLE, PR_GROUPS_PROGRAM = "paired", "single", "program"
+
 
 def _fit_chamber_table(table: QTableWidget) -> None:
     """Make *table* exactly tall enough for every row it holds.
@@ -720,7 +725,9 @@ class DFMWidget(QWidget):
         # -- Progressive Ratio: paired chamber per chamber group -----------
         ## Shown only for that type.  The other chamber of each group is
         ## yoked and never written; well A is the sucrose well and the
-        ## pi_direction override above says which side it is on.
+        ## pi_direction override above says which side it is on.  The groups
+        ## themselves are pairs, single chambers (chamber_groups: single), or
+        ## whatever Program.txt's Linkage makes (neither key written).
         from .experiment_types.progressive_ratio import CHAMBER_GROUPS
         self._pr_enabled = False
         self._pr_card = Card(
@@ -737,6 +744,17 @@ class DFMWidget(QWidget):
             pass
         pr_row = QHBoxLayout()
         pr_row.setContentsMargins(0, 0, 0, 0)
+        self._groups_combo = QComboBox()
+        for label, value in (("Pairs", PR_GROUPS_PAIRED), ("Single chambers", PR_GROUPS_SINGLE),
+                             ("From Program.txt", PR_GROUPS_PROGRAM)):
+            self._groups_combo.addItem(label, value)
+        self._groups_combo.setToolTip(
+            "Pairs: chambers 1+2, 3+4, 5+6, one paired and one yoked (paired_chambers).  "
+            "Single chambers: each chamber its own group, with no yoked control "
+            "(chamber_groups: single).  From Program.txt: the groups its linkage makes.")
+        self._groups_combo.currentIndexChanged.connect(self._sync_groups_mode)
+        pr_row.addWidget(QLabel("Groups:"))
+        pr_row.addWidget(self._groups_combo)
         self._paired_combos: list[QComboBox] = []
         for g, (a, b) in CHAMBER_GROUPS.items():
             pr_row.addWidget(QLabel(f"Group {g} ({a}+{b}):"))
@@ -777,11 +795,27 @@ class DFMWidget(QWidget):
         return [int(c.currentData()) for c in self._paired_combos]
 
     def set_paired_chambers(self, chambers) -> None:
+        self.set_groups_mode(PR_GROUPS_PAIRED)
         for combo in self._paired_combos:
             for i in range(combo.count()):
                 if int(combo.itemData(i)) in {int(c) for c in (chambers or [])}:
                     combo.setCurrentIndex(i)
                     break
+
+    def groups_mode(self) -> str:
+        """``paired``, ``single`` or ``program``: what the Chamber Groups are."""
+        return str(self._groups_combo.currentData())
+
+    def set_groups_mode(self, mode: str) -> None:
+        index = self._groups_combo.findData(mode)
+        if index >= 0:
+            self._groups_combo.setCurrentIndex(index)
+        self._sync_groups_mode()
+
+    def _sync_groups_mode(self, *_args) -> None:
+        """The paired-chamber pickers mean something only for pairs."""
+        for combo in self._paired_combos:
+            combo.setEnabled(self.groups_mode() == PR_GROUPS_PAIRED)
 
     def set_override_restriction(self, allowed: set[str] | None, *,
                                  reason: str = "") -> None:
@@ -909,8 +943,11 @@ class DFMWidget(QWidget):
         """Human-readable problems with this DFM's chamber assignments."""
         dfm_id = self._id_spin.value()
         out: list[str] = []
-        if self._pr_enabled and self._chamber_table.rowCount() >= 6:
-            ## Both chambers of a chamber group share one treatment.
+        if (self._pr_enabled and self._chamber_table.rowCount() >= 6
+                and self.groups_mode() == PR_GROUPS_PAIRED):
+            ## Both chambers of a chamber group share one treatment.  Single
+            ## chambers share nothing, and Program.txt's pairs are checked
+            ## against it at load.
             from .experiment_types.progressive_ratio import CHAMBER_GROUPS
             for g, (a, b) in CHAMBER_GROUPS.items():
                 ta = ", ".join(p for p in self._row_levels(a - 1) if p)
@@ -1071,8 +1108,10 @@ class DFMWidget(QWidget):
                     val = ", ".join(parts)
             if val:
                 chambers[i + 1] = val
-        if self._pr_enabled:
+        if self._pr_enabled and self.groups_mode() == PR_GROUPS_PAIRED:
             result["paired_chambers"] = self.paired_chambers()
+        elif self._pr_enabled and self.groups_mode() == PR_GROUPS_SINGLE:
+            result["chamber_groups"] = PR_GROUPS_SINGLE
         if chambers:
             result["chambers"] = chambers
 
@@ -1084,6 +1123,12 @@ class DFMWidget(QWidget):
                                                      inherit=True))
         if data.get("paired_chambers") is not None:
             self.set_paired_chambers(data.get("paired_chambers"))
+        elif str(data.get("chamber_groups") or "").strip().lower() == PR_GROUPS_SINGLE:
+            self.set_groups_mode(PR_GROUPS_SINGLE)
+        else:
+            ## Neither key: the groups are Program.txt's (as the loader takes
+            ## them), so saving must not write the pickers' defaults.
+            self.set_groups_mode(PR_GROUPS_PROGRAM)
 
         params_raw = data.get("params", data.get("parameters", {})) or {}
         self._params_form.load_values(dict(params_raw), chamber_size)
@@ -1957,7 +2002,7 @@ class FLICConfigEditor(QMainWindow):
         w = DFMWidget(dfm_id=dfm_id, chamber_size=chamber_size)
         w.update_factors(factors)
         w.set_progressive_ratio(self._current_type().name == "ProgressiveRatio")
-        for combo in w._paired_combos:
+        for combo in (*w._paired_combos, w._groups_combo):
             combo.currentIndexChanged.connect(self._refresh_badges)
         w._id_spin.valueChanged.connect(lambda val, _w=w: self._on_dfm_id_changed(_w, val))
         w._chamber_table.itemChanged.connect(self._refresh_badges)

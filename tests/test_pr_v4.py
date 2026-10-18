@@ -42,16 +42,20 @@ from pyflic.base.yaml_config import load_experiment_yaml
 
 from pr_fixtures import pr_config
 from v4_fixtures import (
+    CHOICE_LINKAGE,
     CHOICE_PR_CASES,
     CHOICE_THRESHOLDS,
+    OFF,
     PR10,
     IntervalSpec,
     choice_pr_spec,
+    family_specs,
     fixed_ratio_spec,
     program_text,
     simulate,
     write_gen2_recording,
     write_v4_recording,
+    yoked_controls_spec,
 )
 
 RECORD_MIN = 0.2 / 60.0
@@ -578,3 +582,419 @@ def test_a_mixed_experiment_has_the_union_of_the_facets(tmp_path):
     assert set(facet.loc[facet.DFM == 2, "Facet"]) == {"Recording"}
     assert {"Training", "Test"} <= set(facet.loc[facet.DFM == 1, "Facet"])
     assert set(e.breaking_point_summary()["DFM"]) == {1}
+
+
+# ===========================================================================
+# Paradigm analyses, stream S4 (docs/paradigm-analyses-plan.md): solo Chamber
+# Groups (decision 13), the Fixed Ratio wording (decision 14), restart
+# censoring (decision 15) and the place of the requirement series check.
+# ===========================================================================
+
+#: Every chamber its own treatment pattern: legal for solo groups only.
+ALTERNATING = {1: "Ctrl", 2: "Exp", 3: "Ctrl", 4: "Exp", 5: "Ctrl", 6: "Exp"}
+
+
+def unpaired_dir(root: Path, spec, results, *, chamber_groups: str | None = None,
+                 chambers: dict | None = None, program: bool = True, **kw) -> Path:
+    """A Progressive Ratio recording whose config states no
+    ``paired_chambers``: the Chamber Groups come from Program.txt's Linkage,
+    or from ``chamber_groups`` without it."""
+    root.mkdir(parents=True, exist_ok=True)
+    write_v4_recording(root / "data", spec, results=results, program=program, **kw)
+    cfg = pr_config([{"id": int(d.dfm_id), "paired_chambers": [1, 3, 5],
+                      "chambers": dict(chambers or ALTERNATING)} for d in spec.dfms])
+    for node in cfg["dfms"]:
+        node.pop("paired_chambers")
+        if chamber_groups is not None:
+            node["chamber_groups"] = chamber_groups
+    (root / "flic_config.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False))
+    return root
+
+
+@pytest.fixture(scope="module")
+def solo(tmp_path_factory):
+    """The choice recording without ``paired_chambers``: CHOICE_LINKAGE links
+    each chamber's two wells alone, and every A well triggers, so Program.txt
+    makes twelve solo groups."""
+    spec, results = choice()
+    return load(unpaired_dir(tmp_path_factory.mktemp("solo"), spec, results)), results
+
+
+def _text(blocks) -> str:
+    out = []
+    for b in blocks:
+        if isinstance(b, rl.Table):
+            out += [str(b.caption), " ".join(map(str, b.frame.columns))]
+        elif isinstance(b, rl.Plot):
+            out.append(f"{b.title} {b.caption}")
+        elif isinstance(b, rl.PlotRow):
+            out += [f"{p.title} {p.caption}" for p in b.plots]
+        elif isinstance(b, rl.Bullets):
+            out += list(b.items)
+        else:
+            out.append(str(getattr(b, "text", "")))
+    return "\n".join(out)
+
+
+# ---------------------------------------------------------------------------
+# Solo Chamber Groups (decision 13)
+# ---------------------------------------------------------------------------
+
+def test_program_linkage_makes_a_solo_group_of_each_chamber(solo):
+    e, _results = solo
+    for dfm_id in PAIRED:
+        assert [(g.number, g.paired, g.yoked, g.solo) for g in e.chamber_groups(dfm_id)] == \
+            [(c, c, None, True) for c in range(1, 7)]
+    assert any("chamber groups taken from Program.txt's linkage: 6 groups, each a single "
+               "chamber, with no yoked control" in n for n in e.program_notes)
+    roles = e.roles_table()
+    assert (roles["Role"] == "paired").all() and roles["Partner"].isna().all()
+    assert e.paired_chambers_by_dfm() == {1: [1, 2, 3, 4, 5, 6], 2: [1, 2, 3, 4, 5, 6]}
+    ## The group columns keep their names; YokedChamber is NA.
+    training = e.training_table()
+    assert training["YokedChamber"].isna().all() and len(training) == 12
+    assert (training["PairedChamber"] == training["Group"]).all()
+    assert e.light_qc_table()["YokedChamber"].isna().all()
+    ## Each chamber keeps its own treatment: no pair to share one with.
+    assert e.light_qc_table().set_index(["DFM", "Group"]).loc[(1, 2), "Treatment"] == "Exp"
+
+
+def test_solo_groups_have_a_breaking_point_and_no_paired_yoked_difference(solo):
+    e, results = solo
+    assert e.paired_yoked_diff().empty and e.cumulative_diff_data().empty
+    assert not e.has_yoked_controls() and len(e.solo_groups()) == 12
+    summary = e.breaking_point_summary().set_index(["DFM", "Group"])
+    ## Every group whose fly finished Acclimation has a breaking point.
+    trained = {(d, g.number) for d in PAIRED for g in e.chamber_groups(d)
+               if e.group_training(d, g.number).complete}
+    assert set(summary.index) == trained
+    for (dfm_id, group), row in summary.iterrows():
+        assert row["PairedChamber"] == group
+        assert row["Treatment"] == ALTERNATING[group]
+    ## Healthy chambers 1, 2 and 6 earn PR10's series, 1, 11, 21, ...
+    for chamber in (1, 2, 6):
+        n = int(summary.loc[(1, chamber), "BreakingPoint"])
+        assert summary.loc[(1, chamber), "BreakRequirement"] == 1 + 10 * (n - 1)
+    ## The facet summary has one paired row per chamber and Facet.
+    facet = e.feeding_summary_facet()
+    assert set(facet["Role"]) == {"paired"}
+    assert not facet.duplicated(["Facet", "DFM", "Chamber"]).any()
+
+
+def test_the_report_says_once_that_the_design_has_no_yoked_controls(solo):
+    from pyflic.base.progressive_ratio_experiment import NO_YOKED_CONTROLS
+
+    e, _results = solo
+    results_text = _text(e.report_results_blocks([], SimpleNamespace(include_comparison=True)))
+    assert results_text.count(NO_YOKED_CONTROLS.capitalize()) == 1
+    assert "Cumulative difference curve" not in results_text
+    assert "Paired − yoked difference, Test phase" not in results_text
+    assert "The yoked fly has no breaking point" not in results_text
+    assert "Breaking point" in results_text
+    qc_text = _text(e.report_qc_blocks())
+    assert "Yoked chamber" not in qc_text            # a column of NA says nothing
+    assert NO_YOKED_CONTROLS.capitalize() not in qc_text
+    glance = _text(e.report_glance_blocks())
+    assert "the chamber of each was excluded" in glance          # never-training, dead LED
+    assert "both chambers" not in glance
+
+
+def test_solo_groups_in_a_figure_wrap_three_to_a_row(solo):
+    from pyflic.base.progressive_ratio_experiment import _panel_figsize
+
+    e, _results = solo
+    ## Three groups keep the paired layout's one row; six take two.
+    assert _panel_figsize(3) == (12.0, 5.0) and _panel_figsize(6) == (12.0, 10.0)
+    for figure in (e.plot_light_events_dfm(1), e.plot_cumulative_licks_dfm(1),
+                   e.plot_resting_level_dfm(1), e.plot_breaking_point_dfm(1),
+                   e.plot_cumulative_diff()):
+        figure.draw()
+    assert "no yoked controls" in str(getattr(e.plot_cumulative_diff().labels, "title", ""))
+
+
+def test_chamber_groups_single_without_a_program(tmp_path):
+    from pyflic.base.yaml_lint import lint_flic_config
+
+    spec, results = fixed()
+    root = unpaired_dir(tmp_path / "single", spec, results, chamber_groups="single",
+                        program=False)
+    issues = [i.message for i in lint_flic_config(root / "flic_config.yaml")]
+    assert not [m for m in issues if "paired_chambers" in m or "chamber_groups" in m]
+    e = load(root)
+    assert [(g.paired, g.yoked) for g in e.chamber_groups(1)] == [(c, None) for c in range(1, 7)]
+    assert len(e.breaking_point_summary()) == 6
+    ## Without either key and without Program.txt, a pair cannot be resolved.
+    bare = unpaired_dir(tmp_path / "bare", spec, results, program=False)
+    errors = [i.message for i in lint_flic_config(bare / "flic_config.yaml")
+              if i.severity == "error"]
+    assert any("'paired_chambers' is required" in m and "chamber_groups: single" in m
+               for m in errors)
+    with pytest.raises(ValueError, match="paired_chambers"):
+        load(bare)
+
+
+def test_paired_chambers_and_single_cannot_both_be_stated():
+    from pyflic.base import experiment_types as et
+
+    pr = et.get_experiment_type("ProgressiveRatio")
+    problems = pr.validate_dfm(1, {"paired_chambers": [1, 3, 5], "chamber_groups": "single"},
+                               {1: "Ctrl", 2: "Exp"})
+    assert len(problems) == 1 and "cannot be stated with 'chamber_groups: single'" in problems[0]
+    problems = pr.validate_dfm(1, {"chamber_groups": "triples"}, {})
+    assert any("'chamber_groups' must be one of paired, single" in p for p in problems)
+    ## Single chambers share nothing: split treatments are fine.
+    assert pr.validate_dfm(1, {"chamber_groups": "single"}, dict(ALTERNATING)) == []
+
+
+def test_program_pairs_need_not_be_adjacent(tmp_path):
+    """YOKED_LINKAGE links chamber c with chamber c + 3; chambers 1-3 trigger.
+    The groups are those pairs, and a pair still shares one treatment."""
+    from pyflic.base.experiment_types.progressive_ratio import (
+        groups_from_program,
+        paired_from_program,
+    )
+
+    spec = yoked_controls_spec()
+    section = op.parse_program(program_text(spec)).section(1)
+    groups, problems, _notes = groups_from_program(section)
+    assert problems == []
+    assert [(g.number, g.paired, g.yoked) for g in groups] == [(1, 1, 4), (2, 2, 5), (3, 3, 6)]
+    ## The paired layout's reading of the same section fails, as before.
+    assert paired_from_program(section)[0] is None
+    shared = {1: "Ctrl", 2: "Exp", 3: "Third", 4: "Ctrl", 5: "Exp", 6: "Third"}
+    e = load(unpaired_dir(tmp_path / "yoked", spec, simulate(spec), chambers=shared))
+    assert [(g.paired, g.yoked) for g in e.chamber_groups(1)] == [(1, 4), (2, 5), (3, 6)]
+    assert e.role_of(1, 4).role == "yoked" and e.role_of(1, 4).partner == 1
+    diff = e.paired_yoked_diff()
+    assert sorted(zip(diff["PairedChamber"], diff["YokedChamber"])) == [(1, 4), (2, 5), (3, 6)]
+    with pytest.raises(ValueError, match="chambers 1 and 4 form one chamber group"):
+        load(unpaired_dir(tmp_path / "split", spec, simulate(spec), chambers=ALTERNATING))
+
+
+def test_a_linkage_can_mix_pairs_and_solo_groups():
+    from pyflic.base.experiment_types.progressive_ratio import groups_from_program
+
+    spec, _results = choice()
+    thresholds = (20, OFF, OFF, OFF) + (20, OFF) * 4          # chamber 2 does not trigger
+    dfm = replace(spec.dfms[0], linkage=(1, 1, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5),
+                  intervals=(IntervalSpec("PR10", True, thresholds, 30.0),))
+    mixed = replace(spec, dfms=(dfm,))
+    groups, problems, _notes = groups_from_program(op.parse_program(program_text(mixed)).section(1))
+    assert problems == []
+    assert [(g.number, g.paired, g.yoked) for g in groups] == \
+        [(1, 1, 2), (2, 3, None), (3, 4, None), (4, 5, None), (5, 6, None)]
+    ## Three chambers on one light circuit, or a chamber nothing lights, make none.
+    wide = replace(dfm, linkage=(1,) * 6 + (2, 2, 3, 3, 4, 4))
+    groups, problems, _notes = groups_from_program(
+        op.parse_program(program_text(replace(spec, dfms=(wide,)))).section(1))
+    assert groups is None and any("one light circuit" in p for p in problems)
+    dark = replace(dfm, linkage=CHOICE_LINKAGE)
+    groups, problems, _notes = groups_from_program(
+        op.parse_program(program_text(replace(spec, dfms=(dark,)))).section(1))
+    assert groups is None and "Program.txt lights chamber 2 from no trigger well" in problems
+
+
+def test_single_disagreeing_with_program_pairs_is_noted(tmp_path):
+    from pyflic.base.yaml_lint import lint_flic_config
+
+    spec = yoked_controls_spec()
+    root = unpaired_dir(tmp_path / "exp", spec, simulate(spec), chamber_groups="single")
+    e = load(root)
+    assert all(g.solo for g in e.chamber_groups(1))
+    note = ("DFM 1: chamber_groups single disagrees with Program.txt, whose linkage makes "
+            "chamber groups 1 (paired 1, yoked 4), 2 (paired 2, yoked 5), 3 (paired 3, yoked 6); "
+            "the config's are used")
+    assert note in e.program_notes
+    warnings = [i.message for i in lint_flic_config(root / "flic_config.yaml")
+                if i.severity == "warning"]
+    assert note in warnings
+
+
+def test_a_solo_group_drops_alone_and_a_pair_needs_both_chambers(solo, tmp_path):
+    spec, results = choice()
+    e = load(unpaired_dir(tmp_path / "solo", spec, results))
+    before = set(e.breaking_point_summary().set_index(["DFM", "Group"]).index)
+    e._remove_chambers_from_design({(1, 2)})
+    after = set(e.breaking_point_summary().set_index(["DFM", "Group"]).index)
+    assert before - after == {(1, 2)}
+    ## A pair: removing its yoked chamber takes the group out.
+    paired = load(pr_dir(tmp_path / "paired", spec, results))
+    assert (1, 1) in set(paired.breaking_point_summary().set_index(["DFM", "Group"]).index)
+    paired._remove_chambers_from_design({(1, 2)})
+    left = set(paired.breaking_point_summary().set_index(["DFM", "Group"]).index)
+    assert (1, 1) not in left and paired.paired_yoked_diff().query("Group == 1 and DFM == 1").empty
+
+
+def test_the_project_report_says_there_are_no_yoked_controls(solo):
+    from pyflic.base.experiment_types import get_experiment_type
+    from pyflic.base.experiment_types.progressive_ratio import pooled_yoked_controls
+
+    e, _results = solo
+    etype = get_experiment_type("ProgressiveRatio")
+    light_qc = e.light_qc_table().assign(Source="PR")
+
+    def project(qc, diff):
+        return SimpleNamespace(combined_diff_frame=lambda: diff,
+                               combined_breaking_point_frame=e.breaking_point_summary,
+                               combined_light_qc_frame=lambda: qc,
+                               design_global={}, _mixed_p=None)
+
+    solo_project = project(light_qc, e.paired_yoked_diff())
+    assert not pooled_yoked_controls(solo_project)
+    text = _text(etype.project_results_blocks(solo_project))
+    assert text.count("The design has no yoked controls") == 1
+    ## A pooled design with any pair, or none known, says nothing of it.
+    paired = light_qc.assign(YokedChamber=2)
+    assert pooled_yoked_controls(project(paired, None))
+    assert pooled_yoked_controls(SimpleNamespace())
+    assert "no yoked controls" not in _text(etype.project_results_blocks(project(paired, None)))
+
+
+def test_the_config_editor_writes_the_chamber_groups(tmp_path):
+    pytest.importorskip("PyQt6")
+    import os
+
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtWidgets import QApplication
+
+    from pyflic.base.config_editor import FLICConfigEditor
+
+    _app = QApplication.instance() or QApplication([])
+    cfg = pr_config([{"id": 1, "paired_chambers": [1, 3, 5], "chambers": dict(ALTERNATING)},
+                     {"id": 2, "paired_chambers": [1, 3, 5], "chambers": dict(ALTERNATING)}])
+    del cfg["dfms"][0]["paired_chambers"]
+    cfg["dfms"][0]["chamber_groups"] = "single"
+    del cfg["dfms"][1]["paired_chambers"]
+    (tmp_path / "flic_config.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False))
+    win = FLICConfigEditor(initial_path=tmp_path)
+    try:
+        single, program = win._dfm_widgets
+        assert single.groups_mode() == "single" and program.groups_mode() == "program"
+        out = win._collect_yaml()["dfms"]
+        assert out[0]["chamber_groups"] == "single" and "paired_chambers" not in out[0]
+        ## Program.txt's groups: neither key, so saving keeps the program's.
+        assert "chamber_groups" not in out[1] and "paired_chambers" not in out[1]
+        ## No pair, so no shared treatment to ask for.
+        assert not any("must share a treatment" in p for p in single.chamber_problems())
+        single.set_paired_chambers([2, 3, 6])
+        assert single.groups_mode() == "paired"
+        assert win._collect_yaml()["dfms"][0]["paired_chambers"] == [2, 3, 6]
+        assert any("must share a treatment" in p for p in single.chamber_problems())
+    finally:
+        win.close()
+
+
+# ---------------------------------------------------------------------------
+# The Fixed Ratio wording (decision 14)
+# ---------------------------------------------------------------------------
+
+#: Text that belongs to a progressive ratio only.
+PROGRESSIVE_ONLY = ("estimated requirement", "requirement increment",
+                    "progressive ratio climbs")
+
+
+def test_a_fixed_ratio_report_has_none_of_the_progressive_only_text(fr, gen3):
+    def every_text(e) -> str:
+        figure = e.plot_light_events_dfm(1)
+        return "\n".join([
+            e.summary_text(include_qc=False),
+            _text(e.report_qc_blocks()),
+            _text(e.report_results_blocks([], SimpleNamespace(include_comparison=False))),
+            str(getattr(figure.labels, "caption", "") or ""),
+        ]).lower()
+
+    fixed_ratio = every_text(fr[0])
+    assert not [t for t in PROGRESSIVE_ONLY if t.lower() in fixed_ratio]
+    assert "under a fixed ratio" in fixed_ratio
+    assert fr[0].estimated_increment() is None and fr[0].progressive_groups() == []
+    ## A progressive one keeps every word.
+    progressive = every_text(gen3[0])
+    assert all(t.lower() in progressive for t in PROGRESSIVE_ONLY)
+
+
+# ---------------------------------------------------------------------------
+# Restart censoring (decision 15)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="module")
+def restarted(tmp_path_factory):
+    """``family_specs()['restart']``: DFM 1 FR3 (Acclimation 2) restarting
+    halfway through, in Main; DFM 2 ClosedLoop.  CHOICE_LINKAGE, so each
+    chamber is a solo group."""
+    spec = family_specs()["restart"]
+    results = simulate(spec)
+    chambers = {c: "Ctrl" for c in range(1, 7)}
+    return load(unpaired_dir(tmp_path_factory.mktemp("restart"), spec, results,
+                             chambers=chambers)), results
+
+
+def test_the_fixed_ratio_groups_are_censored_at_the_restart(restarted):
+    e, results = restarted
+    state = e.dfms[1].paradigm
+    (span,) = state.restarts()
+    down_ms, _resume_ms, _missing = results[1].truth.restarts_ms[0]
+    summary = e.breaking_point_summary().set_index(["DFM", "Group"])
+    assert sorted(summary.index) == [(1, g) for g in range(1, 7)]   # DFM 2 never ran a ratio
+    for group in range(1, 7):
+        assert e.test_restart(1, group) == span
+        gt = e.group_training(1, group)
+        row = summary.loc[(1, group)]
+        assert row["ParadigmType"] == "FixedRatio" and row["BreakRequirement"] == 3
+        ## The window ends at the last row before the restart, and the count
+        ## still running there is censored.
+        assert row["TestMinutes"] == pytest.approx(float(state.minutes[span.row - 1])
+                                                   - gt.training_end)
+        assert row["Censored"]
+        ledger = e.light_events_ledger()
+        mine = ledger[(ledger["DFM"] == 1) & (ledger["Group"] == group)]
+        after = mine["Minutes"] > row["TestMinutes"]
+        assert after.any() and not mine.loc[after, "Counted"].any()
+        assert int(mine["Counted"].sum()) == row["BreakingPoint"]
+        ## The light events counted all started before the DFM went down.
+        onsets = truth_onsets_ms(results[1].truth, gt.sucrose_well)
+        assert sum(t < down_ms for t in onsets) >= row["BreakingPoint"]
+
+
+def test_the_restart_is_named_where_the_breaking_point_is_read(restarted):
+    e, _results = restarted
+    qc = e.light_qc_table().set_index(["DFM", "Group"])
+    lines = "\n".join(e.breaking_point_lines())
+    for group in range(1, 7):
+        assert "the DFM restarted at minute 10.1" in qc.loc[(1, group), "Notes"]
+        assert f"DFM 1 group {group}: the DFM restarted at minute 10.1" in lines
+        assert any("after the DFM restarted at minute 10.1 (after the Test window, which "
+                   "ends at the restart)" in n for n in e.group_training(1, group).notes)
+    assert "Test window ends at the restart" in _text(
+        e.report_results_blocks([], SimpleNamespace(include_comparison=False)))
+    ## The ClosedLoop DFM's restart is outside any Test window.
+    assert all(e.test_restart(2, g.number) is None for g in e.chamber_groups(2))
+
+
+# ---------------------------------------------------------------------------
+# Requirement series wrong: the place for stream S1's check
+# ---------------------------------------------------------------------------
+
+def test_the_series_check_fails_a_group_and_waits_for_s1(gen3):
+    e, _results = gen3
+    assert lqc.SERIES_WRONG in lqc.FAILING_FLAGS
+    failed = _judge(series_mismatches=2)
+    assert lqc.SERIES_WRONG in failed.flags and failed.failed
+    for quiet in (None, 0):
+        assert lqc.SERIES_WRONG not in _judge(series_mismatches=quiet).flags
+    ## The rows S1's check will read: the Test window's Main Activations of
+    ## the Paired Sucrose Well, numbered from 1 and meeting PR10's series.
+    for dfm_id, group in groups_of("healthy"):
+        rows = e._test_ledger_rows(dfm_id, group)
+        assert len(rows) >= 3 and (rows["Phase"] == "M").all()
+        assert rows["K"].tolist() == list(range(1, len(rows) + 1))
+        paradigm = e.test_paradigm(dfm_id, group)[1]
+        assert rows["RequirementMet"].tolist() == [paradigm.requirement_for(k) for k in rows["K"]]
+        ## Until S1 is merged the check does not run.
+        assert lqc.requirement_series_mismatches(rows, paradigm) is None
+    assert not e.light_qc_table()["Flags"].str.contains(lqc.SERIES_WRONG).any()
+    ## Off generation 3 there are no rows to read.
+    assert e._test_ledger_rows(1, 3).empty                  # never-training: no Test
+
+
+def truth_onsets_ms(truth, well: int) -> list[int]:
+    return list(truth.activation_onset_ms[int(well)])

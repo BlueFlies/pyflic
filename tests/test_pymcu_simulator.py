@@ -331,6 +331,77 @@ def test_the_ledger_is_the_truths_activations(simulated: Simulated, analysed: An
 # ---------------------------------------------------------------------------
 # S4: the same recording as Progressive Ratio
 # ---------------------------------------------------------------------------
-# S4 adds its one test here: ``build_project`` over ``simulated.recording``
-# with a ProgressiveRatio Design and no ``paired_chambers`` loads (decision
-# 13), and every breaking point and ``BreakRequirement`` matches the truth.
+# ``build_project`` over ``simulated.recording`` with a ProgressiveRatio Design
+# and no ``paired_chambers`` loads (decision 13), and every breaking point and
+# ``BreakRequirement`` matches the truth.
+
+#: The Design S4 analyses the recording under: no ``paired_chambers``, so the
+#: Chamber Groups come from Program.txt's Linkage, one chamber each.
+PR_DESIGN = {"experiment_type": "ProgressiveRatio", "optogenetics": True, "transform_licks": False,
+             "well_names": {"A": "Sucrose", "B": "Yeast"}}
+
+
+def test_the_recording_loads_as_progressive_ratio_in_twelve_solo_groups(
+        simulated: Simulated, tmp_path_factory: pytest.TempPathFactory) -> None:
+    from pyflic.base.pdf_report import build_experiment_report
+    from pyflic.base.progressive_ratio_experiment import (
+        NO_YOKED_CONTROLS,
+        ProgressiveRatioExperiment,
+    )
+
+    root = tmp_path_factory.mktemp("progressive") / "pymcu_sim"
+    project = build_project(root, simulated.recording, PR_DESIGN)
+    exp = project.load_member(simulated.recording.name, parallel=False, use_disk_cache=False)
+    assert isinstance(exp, ProgressiveRatioExperiment)
+    ## Twelve solo groups: every chamber its own group, Paired, with no Yoked.
+    groups = {d: [(g.number, g.paired, g.yoked) for g in gs]
+              for d, gs in exp.chamber_groups_by_dfm().items()}
+    assert groups == {d: [(c, c, None) for c in range(1, 7)] for d in DFM_IDS}
+    assert exp.training_table()["YokedChamber"].isna().all()
+    assert exp.paired_yoked_diff().empty
+
+    truth = pd.read_csv(simulated.truth / "Activations.csv")
+    summary = pd.read_csv(simulated.truth / "Summary.csv").set_index(["DFM", "Well"])
+    breaking = exp.breaking_point_summary().set_index(["DFM", "Group"])
+    ledger = exp.light_events_ledger()
+    nonfeeders = []
+    for dfm_id in DFM_IDS:
+        origin = truth_origin_minutes(exp, dfm_id)
+        for group in exp.chamber_groups(dfm_id):
+            gt = exp.group_training(dfm_id, group.number)
+            assert gt.sucrose_well == 2 * group.paired - 1          # the chamber's A well
+            fly = summary.loc[(dfm_id, gt.sucrose_well)]
+            events = exp.light_events_table(dfm_id, group.number)
+            test = events[events["Facet"] == "Test"]
+            main = truth[(truth["DFM"] == dfm_id) & (truth["Well"] == gt.sucrose_well)
+                         & (truth["Kind"] == "Main")].sort_values("StartMs", kind="stable")
+            ## Count, onset and Requirement met.  The onset is the stamp of the
+            ## record the Activation started in, on pyflic's time base.
+            assert len(test) == len(main), (dfm_id, group.number)
+            onset = origin + (np.floor(main["StartMs"].to_numpy() / RECORD_MS) + 1) * RECORD_MS / 60000.0
+            np.testing.assert_allclose(test["RecordingMinute"].to_numpy(dtype=float), onset,
+                                       rtol=0, atol=1e-6)
+            assert [int(v) for v in test["Requirement"]] == [int(v) for v in main["RequirementMet"]]
+            if fly["Kind"] == "nonfeeder":
+                ## Never out of Acclimation: no Test phase, no breaking point.
+                assert gt.training_complete is False
+                assert (dfm_id, group.number) not in breaking.index
+                nonfeeders.append((dfm_id, group.number))
+                continue
+            row = breaking.loc[(dfm_id, group.number)]
+            counted = ledger[(ledger["DFM"] == dfm_id) & (ledger["Group"] == group.number)
+                             & ledger["Counted"]]
+            assert row["BreakRequirement"] == int(counted["Requirement"].iloc[-1])
+            if row["Censored"]:
+                assert row["BreakRequirement"] == int(fly["Breakpoint"])
+    assert nonfeeders == [(1, 5), (2, 4)]
+    assert breaking["Censored"].all()                         # 2 h of Test, gap 120 min
+
+    ## The report builds with no red box, says once that there are no yoked
+    ## controls, and names the two flies that never finished training.
+    doc = build_experiment_report(exp, metrics=("Licks", "Events", "MedDuration"))
+    texts = " ".join(t.get_text() for fig in doc._render_pages() for t in fig.texts)
+    assert "could not be drawn" not in texts
+    assert texts.count(NO_YOKED_CONTROLS.capitalize()) == 1
+    assert "Training never completed in DFM 1 group 5; DFM 2 group 4; the chamber of each " \
+           "was excluded." in texts
