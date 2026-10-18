@@ -50,6 +50,21 @@
 - **Dot plots no longer move values up and down.** The report's dot plots and the feeding-summary grid jittered points vertically as well as across the treatment (plotnine's default), so chambers that all scored zero were drawn between −0.4 and +0.1. Points now spread across the treatment only, as the publication figures already did.
 - **A "Write PDF report" script step drew one figure per letter.** The Script Editor saved an unedited list parameter as its default text, `Licks, Events, MedDuration`, and the runner read it letter by letter: 26 figures titled "L over time", "i over time" and so on. The runner now splits a comma-separated value (also for `param_sensitivity` values and `compare` factors), and the Script Editor saves the default as a list.
 - **Creating a Project Report no longer floods the console with "findfont: Font family 'Liberation Sans' not found".** The publication figures asked matplotlib for a fallback font list that included faces this machine does not have; matplotlib logs one warning per missing face per text. Only installed faces are listed now.
+- **`pyflic config` no longer overwrites the example config in the pyflic folder.**
+  - The example `flic_config.yaml` sat at the repository root, so `pyflic config` run there opened it, and saving overwrote it. The repository root also looked like an Experiment Directory. The example is now `examples/flic_config.yaml`.
+  - With no folder named, the editor opens the working directory's config only when there is one; otherwise it starts blank, and Save asks where to save.
+  - A named folder that does not exist no longer falls back to the working directory's config.
+- **`pyflic lint` resolves the chamber layout as the loader does.** It reported "chamber_size must be set" on every config whose layout comes from `chamber_layout:`, its Experiment Type or its Project design, which the loader accepts. It now reports an unknown layout or type, which the loader refuses, and warns when a stated `chamber_size` disagrees with the layout.
+- **Filing a loose recording puts its `Program.txt` and `Messages.csv` into `data/`**, where pyflic reads them. They went to `extra_files/`, so the Opto Program was silently lost.
+- **The Script Editor edits Project Scripts with the project actions.** On a `project.yaml` its palette and inspector offered only the experiment actions, so project steps could not be added or edited. The editor also offers `facet_csv`, which scripts could run but its catalogue lacked.
+- **Clear cache with only a Project open clears its members' caches**, and says how many files it removed from which members. Before, it cleared nothing.
+- **Smaller corrections:**
+  - The Hedonic type names the files it writes: `treatment_means.csv` and `hedonic_feeding_plot.png`.
+  - `bootstrap` defaults to PI on two-well layouts and Licks otherwise, since a single-well layout has no PI. Its mode menu no longer offers `mean_ab`, which it rejects.
+  - A `***ALL DFM***` Program.txt no longer reports its own warning line as a skipped line.
+  - Generation 2's "no training information" note has one wording everywhere.
+  - `pyflic --help` lists every command and entry point, `pyflic-types` included.
+  - The *Baselined signal plots* checkbox's caption names the thresholds it draws.
 
 ### Changed
 
