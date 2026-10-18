@@ -45,7 +45,9 @@ The member is already loaded when a script starts, so `load` reads nothing, and 
 
 **`tidy_export`** — the Analyze panel's **Event statistics** — takes `kind: feeding` (default) or `tasting`, and writes one row per event with its `StartMin`, `Duration`, `Licks`, `AvgIntensity` and `MaxIntensity`, labelled by chamber, well and treatment. The action key keeps its original spelling, so scripts already on disk are unaffected.
 
-**`bootstrap`** defaults to `metric: PI`, `n_boot: 2000`, `ci: 0.95`, `seed: 0`. The fixed
+**`bootstrap`** defaults to `metric: PI` on a two-well layout and `metric: Licks` on a
+single-well one, which has no PI, with `n_boot: 2000`, `ci: 0.95`, `seed: 0`. Its `mode` is
+`total`, `A`, `B` or `diff` (A − B); it has no `mean_ab`. The fixed
 seed means repeated runs give identical intervals — change it only if you want to confirm
 your result is not an artefact of one resampling draw.
 

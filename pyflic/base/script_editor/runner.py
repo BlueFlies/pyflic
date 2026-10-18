@@ -362,7 +362,10 @@ def run_experiment_script(
             ctx.log(f"Wrote: {out}  ({len(df)} bouts)")
 
         elif action == "bootstrap":
-            metric = str(step.get("metric", "PI"))
+            ## The catalogue's default (param_default): PI on a two-well
+            ## layout; a single-well one has no PI.
+            metric = str(step.get("metric")
+                         or ("PI" if isinstance(exp, TwoWellExperiment) else "Licks"))
             seed = step.get("seed", 0)
             res = analytics.bootstrap_metric(
                 exp, metric=metric, two_well_mode=str(step.get("mode", "total")),

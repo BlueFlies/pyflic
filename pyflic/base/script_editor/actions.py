@@ -117,6 +117,17 @@ class Param:
     inheritable: bool = False               # "inherit from UI / script" toggle
     derived_from: str | None = None         # default derived from another key
     required: bool = False                  # required for the step to be valid
+    two_well_default: Any = None            # the default on a two-well layout,
+                                            # where it differs (param_default)
+
+
+def param_default(p: Param, capabilities=None) -> Any:
+    """*p*'s default for an experiment with *capabilities*
+    (:func:`capabilities_for`): its ``two_well_default`` on a two-well
+    layout, else its ``default``, which every layout has."""
+    if p.two_well_default is not None and "two_well" in (capabilities or ()):
+        return p.two_well_default
+    return p.default
 
 
 @dataclass(frozen=True)
@@ -308,12 +319,17 @@ ACTIONS: list[Action] = [
         blurb="Non-parametric bootstrap confidence intervals for a metric.",
         icon="bootstrap", category=Category.ANALYZE, produces="csv",
         params=[
+            ## A single-well layout has no PI; the runner falls back the
+            ## same way when a step names no metric.
             Param(key="metric", label="Metric", type="string",
-                  note="Metric name (e.g. PI, MedDuration, Events).",
-                  default="PI", required=True),
+                  note="Metric name (e.g. PI, Licks, MedDuration, Events). "
+                       "PI by default on a two-well layout, Licks on a "
+                       "single-well one, which has no PI.",
+                  default="Licks", two_well_default="PI", required=True),
             Param(key="mode", label="Mode", type="choice",
-                  choices=["total", "A", "B", "mean_ab"],
-                  note="Which well/aggregation.",
+                  choices=["total", "A", "B", "diff"],
+                  note="Two-well only: which well, their sum (total) or A − B "
+                       "(diff), for a metric with an A and a B column.",
                   default="total"),
             Param(key="n_boot", label="Bootstrap iterations", type="int",
                   note="More = tighter CIs but slower.",

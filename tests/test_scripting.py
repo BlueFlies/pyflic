@@ -89,6 +89,41 @@ def test_the_load_steps_parallel_note_says_it_changes_nothing(tmp_path: Path):
     assert "Changes nothing" in note and "on by default" in note
 
 
+@pytest.mark.parametrize("layout, metric", [("single_well", "Licks"), ("two_well", "PI")])
+def test_bootstrap_defaults_to_a_metric_the_layout_has(tmp_path, monkeypatch, layout,
+                                                       metric):
+    """The default was PI everywhere, and a single-well layout has no PI."""
+    from types import SimpleNamespace
+
+    import pandas as pd
+
+    from pyflic.base import analytics
+    from pyflic.base.script_editor.actions import (capabilities_for, get_action,
+                                                   param_default)
+    from pyflic.base.script_editor.runner import run_experiment_script
+    from pyflic.base.yaml_config import load_experiment_yaml
+
+    root = tmp_path / "exp"
+    (root / "data").mkdir(parents=True)
+    columns = {"Sample": list(range(1, 601)), "Seconds": [i / 5 for i in range(600)],
+               **{f"W{w}": [0] * 600 for w in range(1, 13)}}
+    pd.DataFrame(columns).to_csv(root / "data" / "DFM1_0.csv", index=False)
+    (root / "flic_config.yaml").write_text(yaml.safe_dump(
+        {"global": {"chamber_layout": layout, "params": {"feeding_threshold": 10}},
+         "dfms": [{"id": 1, "chambers": {1: "Ctrl", 2: "Exp"}}]}), encoding="utf-8")
+    exp = load_experiment_yaml(root, parallel=False, use_disk_cache=False)
+    assert metric in exp.feeding_summary().columns
+
+    asked: list[str] = []
+    monkeypatch.setattr(analytics, "bootstrap_metric", lambda _e, **kw: (
+        asked.append(kw["metric"]) or SimpleNamespace(summary=pd.DataFrame())))
+    run_experiment_script(exp, {"steps": [{"action": "bootstrap"}]}, log=lambda _l: None)
+    assert asked == [metric]
+    param = next(p for p in get_action("bootstrap").params if p.key == "metric")
+    assert param_default(param, capabilities_for({"chamber_layout": layout})) == metric
+    assert param_default(param, None) == "Licks"
+
+
 def test_an_experiment_action_in_a_project_script_is_rejected_by_name(tmp_path: Path):
     project = _make_project(tmp_path)
     problems = validate_project_script(

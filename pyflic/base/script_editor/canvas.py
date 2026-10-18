@@ -33,7 +33,7 @@ from PyQt6.QtWidgets import (
 )
 
 from ..ui import Category, category_color, icon
-from .actions import describe_step, get_action, validation_issues
+from .actions import describe_step, get_action, param_default, validation_issues
 
 
 # ---------------------------------------------------------------------------
@@ -321,15 +321,16 @@ class Canvas(QWidget):
             return
         step: dict[str, Any] = {"action": action_name}
         for p in act.params:
-            if p.default is not None and not p.inheritable:
+            default = param_default(p, self._experiment_type)
+            if default is not None and not p.inheritable:
                 ## A list parameter's default is written as its text
                 ## ("Licks, Events, MedDuration"); save it as the list it is.
-                if p.type in ("list_str", "list_float") and isinstance(p.default, str):
-                    items = [x.strip() for x in p.default.split(",") if x.strip()]
+                if p.type in ("list_str", "list_float") and isinstance(default, str):
+                    items = [x.strip() for x in default.split(",") if x.strip()]
                     step[p.key] = ([float(x) for x in items] if p.type == "list_float"
                                    else items)
                 else:
-                    step[p.key] = p.default
+                    step[p.key] = default
         self._append_item(step)
         self._list.setCurrentRow(self._list.count() - 1)
         self._emit_changed()

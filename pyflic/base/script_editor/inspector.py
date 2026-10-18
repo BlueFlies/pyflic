@@ -28,7 +28,7 @@ from PyQt6.QtWidgets import (
 
 from ..ui import Category, category_color, icon
 from .actions import (Action, Param, default_mode_for_metric, get_action, metric_choices,
-                      unmet)
+                      param_default, unmet)
 
 
 class Inspector(QWidget):
@@ -256,7 +256,7 @@ class Inspector(QWidget):
 
     def _build_field(self, p: Param, step: dict[str, Any]):
         """Return (widget, getter, setter) for parameter *p*."""
-        value = step.get(p.key, p.default)
+        value = step.get(p.key, param_default(p, self._experiment_type))
 
         if p.type == "bool":
             w = QCheckBox()
