@@ -12,8 +12,10 @@ Project does with its members' QC. Section 10 is a checklist to work through
 for each recording, and section 11 a troubleshooting table.
 
 You do not need to read code to use it. For installing and starting pyflic,
-see [Getting Started](GETTING_STARTED.md). For the Progressive Ratio assay
-itself, see [Analysing a Progressive Ratio assay](progressive-ratio-user-guide.md).
+see [Getting Started](GETTING_STARTED.md); if you installed it that way, type
+the `pyflic …` commands below as `uv run pyflic …`, from the pyflic folder.
+For the Progressive Ratio assay itself, see
+[Analysing a Progressive Ratio assay](progressive-ratio-user-guide.md).
 The in-app help (`pyflic help`, or **F1** in any window) covers the same
 ground as a concise reference. Its reading path *Checking your data* starts
 from the QC Viewer.
@@ -53,16 +55,86 @@ Three rules run through everything:
 
 ## 2. Running QC
 
+### The QC panel
+
+In the Hub, load the member (double-click its row in the Project panel, or
+open a standalone experiment with `pyflic hub "path/to/my_experiment"`), then
+click the **QC** tile. Its panel has two cards.
+
+**The QC card** lists everything **Run QC** can write, one checkbox per item,
+in groups:
+
+- **QC reports**, for every member: *Data integrity*, *Data breaks*, *Raw
+  signal plots*, *Baselined signal plots* and *Cumulative licks plots*, and on
+  a two-well layout *Simultaneous feeding* and *Bleeding between wells*
+  (section 3);
+- **Optogenetics**, when the member is optogenetic: *Opto light QC tables*,
+  *Light explained by licks* and *Program timeline* (sections 6 and 7);
+- **Progressive Ratio**, when the member's Experiment Type includes the
+  Progressive Ratio module: *Light QC table*, *Licks per light event* and
+  *Sucrose Well resting level* (section 8).
+
+**Run QC** computes the QC once and writes each ticked item: the first two
+groups into `qc/`, the Progressive Ratio group into `analysis/`. Every box
+starts ticked, and with every box ticked Run QC writes the whole **QC
+bundle**: the integrity report, the data breaks, the three signal plots, the
+two-well crosstalk tables and, on an optogenetic member, the light QC and the
+Program timeline of each DFM that has one. A Progressive Ratio member's own
+light QC comes on top.
+
+- **A tick is saved at once**, so every later run leaves out the same items.
+  A standalone experiment keeps it in its `flic_config.yaml`, under
+  `global.omit.qc`. A member of a Project keeps it in the Project's
+  `project.yaml`, under `design.global.omit.qc`, so it applies to **every
+  member**: members are checked alike. A script's `run_qc` step reads the
+  same list.
+- **A missing box** is an item the member cannot have, such as a two-well
+  check on a single-well layout. One line under the groups names what is not
+  offered; hover over it for the reasons.
+- **A greyed box** is an item the data cannot answer: *Program timeline*
+  when no DFM has a `Program.txt` section or firmware 4.0.0 data. Its
+  tooltip gives the reason.
+- **The log states what a run left out**, and, apart from that, what did not
+  apply.
+- **No run removes a file.** An item you untick keeps whatever an earlier run
+  wrote, so a file in `qc/` can be older than the rest. Tick it and run again
+  before you rely on it.
+
+**The View card** runs nothing. It says when no QC has been written yet, and
+holds three buttons:
+
+- **Open QC Viewer** opens the QC Viewer on the member the Hub has loaded
+  (section 4).
+- **View QC plots** opens the saved signal plots, the *Light explained by
+  licks* figure and the Program timeline as tabs in the Hub's output area,
+  one per DFM and kind.
+- **Open qc folder** shows the member's `qc/` folder in the system file
+  browser.
+
 ### Where QC runs
 
-| How | What it writes |
-|---|---|
-| **Hub → QC → Run QC** | the **QC bundle**, into the member's `qc/` folder: the integrity report, the data breaks, the three signal plots, the two-well crosstalk tables, and when the member is optogenetic the light QC and the Program timeline of each DFM that has one; for a Progressive Ratio member, its own light QC into `analysis/`. Each is a checkbox on the QC panel, and Run QC writes the ticked ones; every box starts ticked |
-| **Hub → Analyze → Run analysis** | auto-removal, `summary.txt` (with the QC summary) and the feeding summaries, then the ticked analyses, among them the light table. It writes nothing into `qc/` |
-| **Hub → Project → Analyze all** | for every member, the QC bundle, Basic analysis (the optogenetic light QC, the light table, the Program timeline of each firmware 4.0.0 DFM of an optogenetic member, a Progressive Ratio experiment's own light QC) and the report, whatever the panels' ticks |
-| **QC Viewer** | loading a member on its **Load** tab writes the QC bundle. Opened from the Hub, the viewer starts on the member the Hub already loaded, and **Run QC** in its top bar writes the whole bundle, whatever the Hub's ticks |
-| **The experiment report** | nothing into `qc/`. The report computes its integrity and crosstalk tables from the loaded recording, never from an old `qc/` folder |
-| **Scripts** | `run_qc` writes the QC bundle minus the items the config leaves out (`global.omit.qc`), as on the Hub. `basic_analysis` skips it |
+- **Hub → QC → Run QC** writes the ticked items, as above.
+- **Hub → Analyze → Run analysis** writes auto-removal, `summary.txt` (with
+  the QC summary) and the feeding summaries, then the ticked analyses, among
+  them the light table. It writes nothing into `qc/`.
+- **Hub → Project → Analyze all** writes, for every member, the QC bundle,
+  Basic analysis (the optogenetic light QC, the light table, the Program
+  timeline of each firmware 4.0.0 DFM of an optogenetic member, a Progressive
+  Ratio experiment's own light QC) and the report, **whatever the panels'
+  ticks**. A Project Script's `run_all_analyses` step, in a Batch Run or
+  not, runs the same Basic analysis (the report only when the step asks for
+  it) and does not read the ticks either.
+- **The QC Viewer**: loading a member on its **Load** tab writes the QC
+  bundle. Opened from the Hub, the viewer starts on the member the Hub already
+  loaded without writing anything, and **Run QC** in its top bar writes the
+  whole bundle, whatever the Hub's ticks.
+- **The experiment report** writes nothing into `qc/`. It computes its
+  integrity and crosstalk tables from the loaded recording, never from an
+  old `qc/` folder.
+- **Scripts**: `run_qc` writes the ticked items, as the Hub's Run QC does.
+  `basic_analysis` leaves the QC bundle out, but still writes the
+  optogenetic light QC into `qc/opto/` and the Program timeline of each
+  firmware 4.0.0 DFM, as Basic analysis always does.
 
 From Python, `execute_basic_analysis()` writes the QC bundle too, unless you
 pass `skip_qc=True`.
@@ -102,9 +174,9 @@ auto-removal took out, and it has a light QC section for an optogenetic or
 Progressive Ratio experiment. Its *QC summary* of integrity, data
 breaks and crosstalk appears when the QC ran as part of the analysis: from
 Python by default, from the Project's **Analyze all**, and from the Hub's
-**Run analysis**, which computes it for `summary.txt`. A script's
-`basic_analysis` leaves that section out; the report and `qc/` hold the same
-information.
+**Run analysis** (and a script's `run_analysis`), which computes it for
+`summary.txt`. A script's `basic_analysis` leaves that section out; the
+report and `qc/` hold the same information.
 
 ---
 
@@ -323,8 +395,9 @@ removed automatically.
 
 ## 4. The QC Viewer
 
-The QC Viewer is where you check detection against the trace. Open it from
-the Hub's **QC** panel with **Open QC Viewer**, or from a terminal:
+The QC Viewer is where you check detection against the trace. Open it with
+**Open QC Viewer** on the **View** card of the Hub's **QC** panel, which hands
+it the member the Hub has loaded, or from a terminal:
 
 ```
 pyflic qc "path/to/my_experiment"
@@ -371,8 +444,9 @@ A recompute updates the Feeding Summary and the Opto Light QC tabs, and each
 DFM tab's Program sub-tab. The DFM tabs' other plots are the images saved in
 `qc/`, which do not change. **Run QC** after a
 recompute writes the QC bundle under the parameters you are trying, not the
-ones in your configuration. Write it again from the Hub once you have
-settled on a value.
+ones in your configuration. Once you have settled on a value and written it
+into the configuration, load the member in the Hub again (double-click its
+row) and **Run QC** there, so the QC bundle matches what the analysis uses.
 
 **Before you publish, sweep the parameter.** The Script Editor's *Parameter
 sensitivity sweep* (`param_sensitivity`) re-runs the analysis over a list of
@@ -431,9 +505,15 @@ to every two-well type that sets them:
 |---|---|---|---|
 | (always) | a well produced no usable lick count | yes | yes |
 | `min_untransformed_licks_cutoff` | a well has fewer licks than this over the recording, counted before any transform | off | 20 |
-| `max_med_duration_cutoff` | the median feeding-event duration at either well is above this, a sign of a stuck or bleeding signal | not applied | 13.0 |
-| `max_events_cutoff` | either well has more feeding events than this | not applied | 150000 |
+| `max_med_duration_cutoff` | the median feeding-event duration at either well is above this, a sign of a stuck or bleeding signal (two-well) | off | 13.0 |
+| `max_events_cutoff` | either well has more feeding events than this (two-well) | off | 150000 |
 | `exclude_failed_opto_chambers` | its linkage group failed the optogenetic light QC (sections 6 and 7) | off | off |
+
+*Off* means the cutoff runs only when the design sets a value. In the
+Config Editor and the Project Design dialog each cutoff has a **Use** box:
+ticked with a blank value, it keeps the type's default; ticked with a number,
+it uses that number; unticked, it turns the cutoff off even where the type
+sets one.
 
 A Progressive Ratio experiment adds its own group-level rules (section 8).
 Set the cutoffs in the Project's design so that every member is judged by
@@ -594,6 +674,15 @@ If the file cannot be read in part, the lines pyflic skipped are listed in
 no program. Two `Program.txt` files in `data/` stop the load: keep only the
 one the MCU exported for this recording.
 
+**The program is checked against the Experiment Type.** Each type states the
+light it expects: Hedonic none, ProgressiveRatio its two ratio Paradigms
+(with open-loop and dark intervals beside them), Custom anything, and a lab's
+own type what it says. A `Program.txt` that runs any other Paradigm type
+stops the load, naming the Paradigm type, the DFM and the Program Interval:
+choose a type that expects that light, or build one in the Experiment Type
+Editor. This check only says what should have run. How the light QC judges
+the light always follows the Paradigms that ran, whatever the type.
+
 ### 6.3 What it checks
 
 The unit of judgement is the **linkage group**, because its light is one
@@ -747,7 +836,8 @@ two instead.
 
 ### 6.6 Where to look
 
-Basic analysis and the Hub's **Run QC** both write the light QC into `qc/opto/`:
+Basic analysis and the Hub's **Run QC** (with *Opto light QC tables* and
+*Light explained by licks* ticked) both write the light QC into `qc/opto/`:
 
 | File | One row per | Holds |
 |---|---|---|
@@ -832,11 +922,14 @@ How to read a row:
 ### 6.8 Reading the Program timeline
 
 The **Program timeline** (`qc/program/program_timeline_dfm<n>.png`) shows,
-for one DFM, what its program ran and what each well did. Run QC draws it
-for every DFM with a `Program.txt` section or firmware 4.0.0 data, and basic
-analysis for every firmware 4.0.0 DFM, both in 10-minute bins. It is in the
-report's Quality control section, behind the QC panel's **Program timeline**
-box, and in the QC Viewer's **Program** sub-tab of each DFM.
+for one DFM, what its program ran and what each well did. Run QC, and the
+QC bundle of basic analysis, draw it for every DFM with a `Program.txt`
+section or firmware 4.0.0 data; basic analysis without its QC bundle (a
+script's `basic_analysis`) still draws it for every firmware 4.0.0 DFM. All
+of them draw it in 10-minute bins. It is in the report's Quality control
+section, behind the QC panel's **Program timeline** box, among the Hub's
+**View QC plots** tabs, and in the QC Viewer's **Program** sub-tab of each
+DFM.
 
 - **The band at the top** is the program: one block per Program Interval,
   coloured by Paradigm type and labelled with the Paradigm's name, and with
@@ -1451,9 +1544,13 @@ training end: the Test window ends at the restart, …*.
 | `analysis/pr_resting_level_dfm<n>.png` | **Sucrose Well resting level**: a well that creeps up is a sensor problem |
 | `analysis/pr_cumulative_licks_dfm<n>.png` | **Training-aligned traces**: light that keeps firing while the paired trace is flat is self-triggering |
 
-The Hub lists the checks in the QC panel's **Progressive Ratio** group,
-under the optogenetic ones, and **Run QC** writes the ticked ones; the
-training-aligned traces are a Plots panel figure.
+The Hub lists them in the QC panel's **Progressive Ratio** group, below the
+optogenetic ones, for any member whose Experiment Type includes the
+Progressive Ratio module: *Light QC table* (the two tables above, with every
+flagged group in the log), *Licks per light event* and *Sucrose Well
+resting level*. **Run QC** writes the ticked ones into `analysis/`. The
+training-aligned traces are a figure of the Plots panel's Progressive Ratio
+group.
 
 **The two light QCs can disagree, and both are right.** The PR check counts
 light *events*; the optogenetic check measures lit *time*. On the first real
@@ -1466,8 +1563,9 @@ them. Read both before deciding.
 
 ## 9. Projects
 
-A Project pools its members, and so it pools their QC. **Project panel →
-Build combined analysis** writes, into the Project's `analysis/` folder:
+A Project pools its members, and so it pools their QC. **Combine**, on the
+Project panel's Analysis card, writes the Combined Analysis into the
+Project's `analysis/` folder, among it:
 
 | File | Holds |
 |---|---|
@@ -1533,11 +1631,12 @@ For each recording, before you look at any result:
 12. **Exclusions**: declare them, click **Run analysis** again, and check
     `removed_chambers.csv` and the report's *Excluded chambers* table
     (section 5).
-13. **Write the report** and read its Quality control section and cover
-    before its results.
+13. **Write the report** (**Run analysis** with *Experiment report (PDF)*
+    ticked, or `pyflic report`) and read its Quality control section and
+    cover before its results.
 
-In a Project, finish with **Build combined analysis** and read the flagged
-groups and the exclusion counts per treatment (section 9).
+In a Project, finish with **Combine** and read the flagged groups and the
+exclusion counts per treatment (section 9).
 
 ---
 
@@ -1545,8 +1644,11 @@ groups and the exclusion counts per treatment (section 9).
 
 | You see | Likely cause | What to do |
 |---|---|---|
-| The QC Viewer's DFM tabs show no integrity files or plots | the QC bundle has not been written | **Run QC** in the viewer, or on the Hub's QC panel |
-| The baselined plot shows thresholds you changed | the QC bundle predates the change | write it again |
+| The QC Viewer's DFM tabs show no integrity files or plots | the QC bundle has not been written, or their boxes on the Hub's QC panel are unticked | **Run QC** in the viewer, or tick the boxes and **Run QC** on the Hub's QC panel |
+| The baselined plot shows thresholds you changed | the QC bundle predates the change, or *Baselined signal plots* is unticked, so Run QC left the old plot | tick it, load the member again and **Run QC** |
+| A QC check you expected has no box on the QC panel | the member cannot have it: a two-well check on a single-well layout, a light check without light, a Progressive Ratio check under a type without that module | read the line under the groups, and hover over it for the reasons |
+| A box on the QC panel is greyed | the data cannot answer it: *Program timeline* with no `Program.txt` section and no firmware 4.0.0 data | copy the MCU's `Program.txt` into `data/` if the recording had one, and load the member again |
+| A box unticked on one member is unticked on every member of the Project | a member's ticks are the Project's, kept in `project.yaml` | nothing is wrong: members are checked alike. Tick it again to bring it back for all |
 | An integrity **warning** | data breaks, error flags, lost records or a skipping index | read the integrity text for which; look at the signal plots around that time |
 | **Lost records** in the integrity report | the DFM lost records while the MCU was not reading it; `Messages.csv` says *Lost N records* (older PyMCU: *Skipped index*) | a short gap changes little; treat results across a long one with care, as for a data break |
 | A gap listed under *DFM restarts* | the DFM restarted on its own mid-recording (section 3.1) | check the DFM's power and cable; read *DFM restarted* below |
@@ -1556,10 +1658,11 @@ groups and the exclusion counts per treatment (section 9).
 | The simultaneous-feeding table's `Both` is zero everywhere | the dual-feeding correction is on, and `Both` is counted after it | read `Both_pre`, the count before it (section 3.4) |
 | A **bleeding** warning | one well's signal appears in another above `feeding_threshold` | look at the responding well's baselined trace while the signalling well is fed from |
 | Many chambers removed for too few licks | the flies fed little, or `min_untransformed_licks_cutoff` is high for this assay | check the cumulative licks; set the cutoff in the design, for every member |
-| The Hub says **re-run needed** | exclusions changed after the results were written | run the member's analysis again (**Run analysis**) |
+| The Hub says **re-run needed** | exclusions changed after the results were written | run the member's analysis again (**Run analysis**, or the Project's **Analyze all**) |
 | A linkage group failed for **unexplained light** | most of its lit time had no lick or touch behind it | open *Light explained by licks*: orange beside the red is a drifting well; no orange is a light the firmware had no reason to switch on |
 | Unexplained light only **warns**, never fails | no `Program.txt` in `data/` | copy the MCU's exported `Program.txt` into `data/` and run again |
 | "holds more than one Program.txt" | two program files in `data/` | keep only the one exported for this recording |
+| "does not satisfy experiment_type …: the Opto Program runs ClosedLoop" (or another Paradigm type) | the program runs light the Experiment Type does not expect (section 6.2) | check that `Program.txt` is this recording's; then choose a type that expects that light, or build one in the Experiment Type Editor |
 | **No light recorded** fails a DFM | `optogenetics: true`, and the DFM's light was never on | check the lid and the program; set the DFM's own `optogenetics: false` if it ran without a lid |
 | **Program mismatch** | the data's light settings or start time differ from the program, or a row names another Paradigm than the program's line | check that `Program.txt` is the one exported for this recording |
 | *firmware 4.0.0 recording without Program.txt* | the program was not copied into `data/` | copy the `Program.txt` PyMCU exported for this recording and run again |

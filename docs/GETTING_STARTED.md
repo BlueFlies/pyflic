@@ -217,8 +217,9 @@ Every pyflic command is typed as `uv run` followed by the command. For example:
 | What you want | Command |
 |---|---|
 | Open the analysis hub | `uv run pyflic` |
-| Open the hub on a specific folder | `uv run pyflic hub "path/to/my_project"` |
-| Open the config editor | `uv run pyflic config` |
+| Open the hub on a recording, a Project or a folder of Projects | `uv run pyflic hub "path/to/my_project"` |
+| Open the config editor on a recording | `uv run pyflic config "path/to/my_experiment"` |
+| Open the Experiment Type Editor | `uv run pyflic-types` |
 | Check a config for mistakes | `uv run pyflic lint "path/to/my_experiment"` |
 | Check a recording's quality in the QC viewer | `uv run pyflic qc "path/to/my_experiment"` |
 | Make a PDF report | `uv run pyflic report "path/to/my_project"` |
@@ -250,7 +251,8 @@ In outline:
 1. **Make a folder for the recording**, outside the pyflic folder, with a `data`
    folder inside it. Copy the DFM files from the rig into `data`. For an optogenetic
    recording, copy the `Program.txt` the MCU exported into `data` as well: pyflic uses it
-   to check that the light followed the flies. pyflic reads both kinds of `Program.txt`,
+   to check that the light followed the flies, and that the recording fits its Experiment
+   Type. pyflic reads both kinds of `Program.txt`,
    the one PyMCU 4.0.0 writes (with a `Paradigms:` block) and the older one. A recording
    from DFM firmware 4.0.0 needs it most: without it the kind of each light rule is
    unknown, and pyflic warns.
@@ -263,33 +265,85 @@ In outline:
        Program.txt        (optogenetic recordings)
    ```
 
-2. **Describe the experiment** in the config editor (`uv run pyflic config`). It saves
-   your answers as `flic_config.yaml` in the recording's folder. On its Experiment tab you
-   choose the **Experiment Type**; see [Which Experiment Type?](#which-experiment-type)
-   below.
-3. **Open the hub on the folder**, and on its **Analyze** panel click **Run analysis**.
-   Every box on the panel starts ticked; untick what you do not need, and the choice is
-   saved in the config.
-4. **Check the data before you believe any result.** On the hub's **QC** panel, click
-   **Run QC**, then **Open QC Viewer**.
+2. **Describe the experiment** in the config editor. Give it the recording's folder:
+
+   ```
+   uv run pyflic config "path/to/my_experiment"
+   ```
+
+   For a folder with no config yet, it finds the DFM files in `data/` and opens a tab for
+   each DFM, ready for you to assign its chambers. On the **Experiment** tab you choose the **Experiment Type** from
+   its menu; see [Which Experiment Type?](#which-experiment-type) below. **File → Save**
+   writes your answers as `flic_config.yaml` in the recording's folder.
+
+   Always name the folder. Started without one, the config editor opens the
+   `flic_config.yaml` of the folder the terminal is in, and the `pyflic` folder holds an
+   example of its own.
+3. **Open the hub on the folder:**
+
+   ```
+   uv run pyflic hub "path/to/my_experiment"
+   ```
+
+   The hub loads the recording, and the **Experiment** tile opens a second row of tiles:
+   **QC · Analyze · Plots · Scripts · AI**.
+4. **Check the data before you believe any result.** Click **QC**, then **Run QC**. It
+   writes the integrity report, the signal plots and the other checks into the `qc/`
+   folder. Then click **Open QC Viewer**, on the panel's **View** card, to look at them.
+5. **Analyse.** Click **Analyze**, then **Run analysis**. It always writes the feeding
+   summary and `summary.txt` into the `analysis/` folder, then each ticked analysis, and
+   the experiment report (`experiment_report.pdf`) last.
+6. **Draw the figures.** Click **Plots**, then **Generate plots**. Each ticked figure is
+   saved into `analysis/` and opens in a tab of its own.
+
+The QC, Analyze and Plots panels list what their button writes as checkboxes, in groups,
+and every box starts ticked. Untick what you do not need: the choice is saved at once, in
+the recording's `flic_config.yaml`, and the next run leaves out the same. A box that is
+missing does not apply to this recording (a two-well check on a single-well layout, say),
+and a greyed box is one the data cannot answer. One line under the groups names what is
+not offered; hover over it, or over a greyed box, for the reason.
+
+Several recordings that answer one question belong together in a **Project**, a folder
+whose `project.yaml` holds the design they share. The hub's **Project** panel sets one up
+(**Create project…**, or **Initialize existing directory…** for a folder of recordings you
+already have), and you load a member by double-clicking its row. In a Project the boxes are
+saved in `project.yaml` and apply to every member. The Project panel's **Analyze all** runs
+every member's QC, analysis and report in one go, whatever the boxes say.
 
 ### Which Experiment Type?
 
-The Experiment Type is the assay. It states the light the recording should have, and a
-recording whose `Program.txt` runs other light fails to load with the Paradigm named.
-Whatever the type, pyflic judges the light against each Paradigm's own rule and reports
-its own measures.
+The Experiment Type is the assay. It fixes the chamber layout where the assay needs one,
+names the wells that must be labelled, decides which analyses and figures the hub offers,
+and states the light the recording should have: a recording whose `Program.txt` runs
+other light fails to load, with the Paradigm named. Whatever the type, pyflic judges the
+light against each Paradigm's own rule and reports its own measures.
+
+pyflic ships three types. The config editor's menu names them as below, with the name
+`flic_config.yaml` stores in brackets:
 
 | Your experiment | Experiment Type |
 |---|---|
-| No light, or any light program you do not want to declare | **Custom**, with its chamber layout (single-well or two-well) |
-| A two-well hedonic design, where bout duration matters, without light | **Hedonic** |
-| A ratio program (ProgressiveRatio or FixedRatio Paradigms), with or without yoked controls | **ProgressiveRatio** |
-| Anything your lab runs again and again: a hedonic design under closed-loop light, ClosedLoop Training before a ratio, a genotype panel against its control | a **type of your own**, built once in the Experiment Type Editor (`uv run pyflic-types`, or *New type…* beside the type list) |
+| No light, or any light program you do not want to declare | **Custom Experiment** (`Custom`), with its chamber layout: single-well or two-well |
+| A two-well hedonic design, where bout duration matters, without light | **Hedonic Feeding** (`Hedonic`) |
+| A ratio program (ProgressiveRatio or FixedRatio Paradigms), with or without yoked controls, and no other light but open-loop intervals | **Progressive Ratio** (`ProgressiveRatio`) |
+| Anything your lab runs again and again: a hedonic design under closed-loop light, ClosedLoop Training before a ratio, a genotype panel against its control | a **type of your own**, built once in the Experiment Type Editor |
 
 A paired and yoked design under Custom, or under a type with the *Paired and yoked*
-module, gets its paired − yoked comparison. A type of your own travels with the data as
-`experiment_type.yaml`, so a colleague's machine analyses it the same way.
+module, gets its paired − yoked comparison.
+
+**The Experiment Type Editor** builds a type of your own. Open it with
+`uv run pyflic-types`, with **Experiment type editor** on the hub's **Tools** panel, or
+with **New type…** beside the Experiment Type menu. The three shipped types open
+read-only; **New from…** copies one under a name of your own, as a starting point. A type
+states its chamber layout, the light it expects, the wells and design factors it needs,
+its **Analysis Modules** (Progressive Ratio, Hedonic, Paired and yoked, Light and dark),
+and, if you want them, the **control comparisons** its reports lead with: two Roles
+compared, or every level of a factor against a control level. **Save to library** keeps it
+in your lab's type library (by default `~/.config/pyflic/experiment_types`; point it at a
+shared drive to share it), and the menu then lists it marked *(lab)*. Saving a config that
+names it writes a copy beside the config as `experiment_type.yaml`, so a colleague's
+machine analyses the recording the same way. The built-in help's *Experiment types and
+chamber layouts* and *Experiment Type Editor* topics cover the rest.
 
 Two more guides sit beside this one:
 
@@ -308,7 +362,11 @@ Once setup is done, each time you want to use pyflic:
 2. Go to the pyflic folder:
    - Windows: `cd ~\Documents\pyflic`
    - macOS / Linux: `cd ~/Documents/pyflic`
-3. Start pyflic: `uv run pyflic`
+3. Start pyflic: `uv run pyflic`, or open the hub straight on your work with
+   `uv run pyflic hub "path/to/my_project"`.
+4. In the hub, open your Project from the **Project** panel (**Open Project**) and
+   double-click a member to load it; then use its **QC**, **Analyze** and **Plots** tiles,
+   as in [Next steps](#next-steps-your-first-analysis).
 
 Keep your own experiment data **outside** the pyflic folder, for example in
 `Documents/FLIC data`. Then updating pyflic can never touch your data.
@@ -371,6 +429,34 @@ On Ubuntu / Debian: `sudo apt install libxcb-cursor0`. On Fedora:
 If macOS asks whether Terminal may access your Documents or Desktop folder, click
 **Allow**.
 
+**The config editor opened settings you did not enter**
+It was started without a folder, so it opened the example `flic_config.yaml` in the
+`pyflic` folder. Close it without saving, and start it on your recording:
+`uv run pyflic config "path/to/my_experiment"`.
+
+**The Experiment tile is greyed, and there is no QC, Analyze or Plots tile**
+No recording is loaded. Open it with `uv run pyflic hub "path/to/my_experiment"`, or, in a
+Project, double-click the member's row on the **Project** panel. Once the load finishes,
+the Experiment tile opens its row of tiles.
+
+**A checkbox you expected is missing or greyed**
+A missing box does not apply to this recording: a two-well check on a single-well layout,
+a light check on a recording without light, or an analysis the Experiment Type does not
+include. One line under the groups names what is not offered. A greyed box applies but the
+data cannot answer it, such as the Program timeline without a `Program.txt`. Hover over
+the line or the box for the reason.
+
+**A run left something out, or a file in `analysis/` or `qc/` is out of date**
+Its box was unticked, perhaps by someone else in the same Project. The log lists every item
+a run left out. Tick the box and run again. A run never removes a file, so the copy from
+an earlier run stays until a run writes it again.
+
+**Loading fails with "does not satisfy experiment_type"**
+The recording does not fit the Experiment Type its config names. When the message says
+*the Opto Program runs ClosedLoop* (or another Paradigm type), the `Program.txt` runs light
+that type does not expect: choose another type, or build one that expects that light in
+the Experiment Type Editor ([Which Experiment Type?](#which-experiment-type)).
+
 **Something else**
 Copy the full error text from the terminal and include it when you ask for help, or
 open an issue at <https://github.com/PletcherLab/pyflic/issues>.
@@ -393,3 +479,7 @@ open an issue at <https://github.com/PletcherLab/pyflic/issues>.
 | **Python** | The programming language pyflic is written in. uv installs it for you. |
 | **uv** | A tool that installs Python and pyflic's packages, and runs pyflic. |
 | **Package** | A piece of code that pyflic depends on (for example, for plotting). |
+| **Analysis Hub (hub)** | pyflic's main window, which `uv run pyflic` opens. |
+| **Experiment Directory** | One recording's folder: its `flic_config.yaml`, its `data/` folder of DFM files, and the `qc/` and `analysis/` folders pyflic writes. |
+| **Project** | A folder with a `project.yaml` whose Experiment Directories, its **members**, are different experiments addressing one question. The Project's design is shared by every member, and the Project pools their results. |
+| **Experiment Type** | The assay a recording is analysed as. pyflic ships Custom, Hedonic and ProgressiveRatio; a lab builds its own in the Experiment Type Editor. |
