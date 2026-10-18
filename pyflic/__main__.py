@@ -7,17 +7,19 @@ Run with no arguments to launch the analysis hub::
 
 Or dispatch to a subcommand::
 
-    pyflic config [dir]        -- launch the config editor GUI
-    pyflic qc <dir>            -- launch the QC viewer
-    pyflic hub [dir]           -- launch the analysis hub GUI
-    pyflic plots <project>     -- launch the Plot Editor (project level)
-    pyflic help [topic]        -- open the help window
-    pyflic lint <dir>          -- validate configs and report migrations
-    pyflic clear-cache <dir>   -- remove <dir>/.pyflic_cache
-    pyflic report <dir>        -- write a PDF report
-    pyflic batch <dir>         -- run the designated Project Script in
-                                  every Project under <dir>
-    pyflic version             -- print the installed version
+    pyflic hub [dir]              -- launch the analysis hub GUI
+    pyflic config [dir | file]    -- launch the config editor GUI (default:
+                                     the current folder's flic_config.yaml)
+    pyflic qc [dir]               -- launch the QC viewer (default: the
+                                     current folder)
+    pyflic plots [project]        -- launch the Plot Editor (project level)
+    pyflic help [topic]           -- open the help window
+    pyflic lint <dir | file>      -- validate configs and report migrations
+    pyflic clear-cache <dir>      -- remove <dir>/.pyflic_cache
+    pyflic report <dir>           -- write a PDF report
+    pyflic batch <dir> [script]   -- run the designated Project Script in
+                                     every Project under <dir>
+    pyflic version                -- print the installed version
 
 Commands taking a directory decide what to do from its marker file: a
 ``project.yaml`` means Project, a ``flic_config.yaml`` means Experiment
@@ -26,8 +28,15 @@ Directory. No command needs a level flag.
 Use ``pyflic --help`` (or ``-h``) for this list; ``pyflic help`` opens the
 graphical help.
 
-Existing entry points (``pyflic-config``, ``pyflic-qc``, ``pyflic-hub``)
-remain available.
+Every tool also has an entry point of its own::
+
+    pyflic-hub [dir]              -- the analysis hub (as pyflic hub)
+    pyflic-config [dir | file]    -- the config editor (as pyflic config)
+    pyflic-qc [dir]               -- the QC viewer (as pyflic qc)
+    pyflic-plots [project]        -- the Plot Editor (as pyflic plots)
+    pyflic-lint <dir | file>      -- the linter (as pyflic lint)
+    pyflic-types [type]           -- the Experiment Type Editor, which has
+                                     no pyflic subcommand
 """
 
 from __future__ import annotations
