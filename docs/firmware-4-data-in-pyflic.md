@@ -275,8 +275,13 @@ outputs are unchanged apart from the deliberate changes in `CHANGELOG.md`.
   simulated flies through PyMCU's real record parser and file writer, and
   writes a truth folder. On its two-hour Progressive Ratio recording,
   pyflic's light table matched the truth exactly for all twelve triggering
-  wells: Activations, Acclimation Activations and end, the last Requirement
-  met, Progress at the end and lit time.
+  wells on Activations, Acclimation Activations, the last Requirement met,
+  Progress at the end and lit time. The end of Acclimation agrees to within
+  one record once the two time origins are aligned. The truth counts
+  milliseconds from the start of record 1, and pyflic's `Minutes` count from
+  the first row's time stamp, which PyMCU sets at the record's end; on that
+  recording the two differ by 0.57 s. `tests/test_pymcu_simulator.py` checks
+  all of it on every run.
 
 Still to see on the bench: a DFM that restarts mid-recording (PyMCU 529b926
 keeps `Index` and the times continuous, writes `NA` Interval rows until it has
