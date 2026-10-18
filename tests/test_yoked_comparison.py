@@ -477,9 +477,10 @@ def test_acclimation_activations_are_the_truths(acclimation_wells, name):
     """Wherever Acclimation applies, Activations = AcclimationActivations +
     MainActivations, and AcclimationActivations is the truth's count of
     Phase-A Activations; AcclimationEndMin is the truth's first Acclimation
-    end to within one record.  On stress_spec the row's Phase undercounted
-    7 of its 20 wells: an Acclimation Activation shorter than a record can
-    start and end in a row that reads Main."""
+    end to within one record.  Counted from the rows' Phase, as before, it
+    missed the truth on 8 of stress_spec's 20 such wells, and the sum on 7:
+    an Acclimation Activation shorter than a record can start and end in a
+    row that reads Main, the first row of a state run among them."""
     wells, results = acclimation_wells(name)
     defined = 0
     for row in wells.itertuples(index=False):
