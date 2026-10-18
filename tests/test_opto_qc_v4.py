@@ -182,7 +182,8 @@ def test_activations_are_the_light_events_and_carry_their_requirement(choice):
         assert len(mine) == len(results[1].truth.activation_onset_ms[well])
         assert groups.loc[chamber, "LightEvents"] == len(mine)
         acclimation = mine[mine["Phase"] == "A"]
-        assert len(acclimation) == 10 and (acclimation["FirmwareEvents"] == 1).all()
+        ## Acclimation counts Activations, not Firmware Events.
+        assert len(acclimation) == 10 and acclimation["FirmwareEvents"].isna().all()
         main = mine[(mine["Phase"] == "M") & (mine["Mode"] == op.PROGRESSIVE_RATIO)]
         met = [m for m, p in zip(results[1].truth.requirement_met[well],
                                  results[1].truth.activation_phase[well])

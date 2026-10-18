@@ -116,8 +116,8 @@ def test_a_generation_3_recording_reports_lost_records_and_its_error_labels(tmp_
     assert "Lead-in rows (Interval 0, before the first instruction): 25" in text
     ## Messages.csv: the gap errors PyMCU logged, for this DFM.
     assert "## Messages.csv errors (DFM 1 and the MCU)" in text
-    assert "DFM 1, Index 1021: (1021) Skipped index: (1000)" in text
-    assert "DFM 1, Index 3008: (3008) Skipped index: (3000)" in text
+    assert "DFM 1, Index 1021: Lost 20 records (4.0 s): Index 1001 to 1020, from " in text
+    assert "DFM 1, Index 3008: Lost 7 records (1.4 s): Index 3001 to 3007, from 23:44:00." in text
 
 
 def test_unknown_instruction_rows_and_late_records(tmp_path):

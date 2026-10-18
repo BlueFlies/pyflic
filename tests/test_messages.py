@@ -1,6 +1,8 @@
 """PyMCU's ``Messages.csv`` (docs/v4-data-plan.md, stream 6).
 
-The file is unquoted: the message text can hold commas, ``Millisecond`` is an
+Two writers: PyMCU from 10/17/2026 quotes a message holding a comma and folds
+repeats into one line; earlier builds left every line unquoted, so the message
+text can hold commas. ``Millisecond`` is an
 unformatted float and ``Sample`` is the record ``Index``.  The reader splits
 off the first five fields and the last one and keeps the rest as the
 message; a missing file is an empty frame.
@@ -31,6 +33,31 @@ def test_a_message_with_commas_keeps_them():
     assert row["MsgType"] == "Error"
     assert row["DFM"] == 3 and row["Index"] == 1021
     assert row["Time"] == pd.Timestamp(datetime(2026, 10, 16, 23, 37, 24, 200000))
+
+
+def test_a_quoted_message_keeps_its_commas_and_loses_its_quotes():
+    """PyMCU from 10/17/2026 writes Messages.csv with the csv module."""
+    frame = messages.parse(HEADER + '1,10/17/2026,10:02:13,200.0,1234,'
+                           '"Lost 33 records (6.6 s): Index 1201 to 1233, from 10:02:13.",Error\n'
+                           '2,10/17/2026,10:02:14,0.0,9,"He said ""hi"", twice",Notice\n')
+    assert frame["Message"].tolist() == [
+        "Lost 33 records (6.6 s): Index 1201 to 1233, from 10:02:13.", 'He said "hi", twice']
+    assert frame["MsgType"].tolist() == ["Error", "Notice"]
+    assert frame["Index"].tolist() == [1234, 9]
+
+
+def test_folded_repeats_are_counted():
+    """A message that came again within 10 minutes is one line ending
+    "(repeated N more times, the last at HH:MM:SS)"."""
+    frame = messages.parse(HEADER
+                           + "1,10/17/2026,10:05:00,0.0,1500,DFM 1 error: No Ack "
+                             "(repeated 41 more times, the last at 10:14:59),Notice\n"
+                           + "1,10/17/2026,10:20:00,0.0,6000,DFM 1 error: No Ack "
+                             "(repeated 1 more time, the last at 10:20:01),Notice\n"
+                           + "0,10/17/2026,10:30:00,0.0,0,Recording ended,Unknown\n")
+    assert frame["Repeats"].tolist() == [41, 1, 0]
+    assert frame["Message"].iloc[0].endswith("(repeated 41 more times, the last at 10:14:59)")
+    assert messages.count(frame) == 45 and messages.count(messages.empty()) == 0
 
 
 def test_the_unformatted_millisecond_is_read_as_a_float():
@@ -70,7 +97,8 @@ def test_the_simulators_messages_read_back(tmp_path):
     ## PyMCU logs a gap on the first record after it.
     errors = messages.errors(frame)
     assert errors["Index"].tolist() == [505, 803, 1204]
-    assert errors["Message"].iloc[0] == "(505) Skipped index: (500)"
+    ## PyMCU's wording from 10/17/2026, quoted for its comma.
+    assert errors["Message"].iloc[0].startswith("Lost 4 records (0.8 s): Index 501 to 504, from ")
     ## A DFM's view keeps its own rows and the MCU's.
     mine = messages.for_dfm(frame, 2)
     assert mine["DFM"].tolist() == [0, 2, 2, 0]

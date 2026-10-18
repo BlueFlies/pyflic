@@ -46,6 +46,8 @@ record holding step ``t`` has ``Index`` ``t // 200 + 1``.
 
 from __future__ import annotations
 
+import csv
+import io
 import struct
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -316,8 +318,10 @@ def _requirement_for(ins: _Instruction, k: int) -> int:
         if s[1] == 1:
             f32 = np.float32
             scale = f32(s[2]) / f32(1000.0)
-            x = scale * np.exp((f32(s[3]) / f32(1000.0)) * f32(k)) - scale
-            value = cap if x >= f32(cap) else int(x + f32(0.5))
+            # As in the firmware: Scale 0 skips the exponential (0 * infinity would be NaN),
+            # and anything not below the cap, infinity included, gives the cap.
+            x = scale * np.exp((f32(s[3]) / f32(1000.0)) * f32(k)) - scale if scale > 0 else f32(0)
+            value = int(x + f32(0.5)) if x < f32(cap) else cap
         else:
             value = s[2] + s[3] * (k - 1)
         value = min(value, cap)
@@ -609,7 +613,9 @@ def _step(s: _Well, ins: _Instruction, contact: bool, t: int) -> bool:
         elif s.hold_left > 0:
             s.hold_left -= 1
             lit = True
-        if event_started:
+        # Each on-period is an Activation, as in ClosedLoop: a fly back within the Event
+        # gap after the hold has ended gets a new one, though not a new Event.
+        if lit and not s.was_lit:
             s.acclimation_done += 1
             s.count(t, None)
         if not lit and s.was_lit and s.acclimation_done >= ins.acclimation:
@@ -1067,23 +1073,31 @@ def program_text(spec: RecordingSpec) -> str:
 
 
 def _message(dfm_id: int, when: datetime, sample: int, text: str, label: str) -> str:
-    """Message.GetMessageStringForFile."""
-    return f"{dfm_id},{when.strftime('%m/%d/%Y,%H:%M:%S')},{when.microsecond / 1000},{sample},{text},{label}\n"
+    """Message.FileRow, written as MessagesList does: with the csv module, so
+    a message holding a comma is quoted."""
+    out = io.StringIO()
+    csv.writer(out, lineterminator="\n").writerow(
+        [dfm_id, when.strftime("%m/%d/%Y"), when.strftime("%H:%M:%S"), when.microsecond / 1000,
+         sample, text, label])
+    return out.getvalue()
 
 
 def messages_text(spec: RecordingSpec, *,
                   index_gaps: Mapping[int, Sequence[tuple[int, int]]] | None = None) -> str:
     """``Messages.csv``: the recording's start and end from DFM 0 and, for each
-    injected gap, the "Skipped index" error PyMCU logs on the first record
-    after it (``DFM._AddPacket``)."""
+    injected gap, the "Lost records" error PyMCU logs on the first record
+    after it, dated when the gap began (``DFM._ReportLostRecords``)."""
     P = _record_ms(spec)
     errors = []
     for dfm_id, gaps in (index_gaps or {}).items():
         for after, missing in gaps:
             index = after + missing + 1
-            when = spec.start + timedelta(milliseconds=index * P)
-            errors.append((when, dfm_id, _message(dfm_id, when, index,
-                                                  f"({index}) Skipped index: ({after}) ", "Error")))
+            when = spec.start + timedelta(milliseconds=(index - missing) * P)
+            first, last = after + 1, after + missing
+            span = f"Index {first}" if first == last else f"Index {first} to {last}"
+            text = (f"Lost {missing} record{'' if missing == 1 else 's'} ({missing * P / 1000:.1f} s): "
+                    f"{span}, from {when:%H:%M:%S}.")
+            errors.append((when, dfm_id, _message(dfm_id, when, index, text, "Error")))
     s = "DFM,Date,Time,Millisecond,Sample,Message,MsgType\n"
     s += _message(0, spec.start, 0, "Recording started", "Unknown")
     s += "".join(text for _, _, text in sorted(errors, key=lambda e: (e[0], e[1])))

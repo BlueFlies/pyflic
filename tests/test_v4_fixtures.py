@@ -520,7 +520,7 @@ def test_messages_text_has_pymcus_rows() -> None:
     text = messages_text(spec, index_gaps={1: [(100, 7)]})
     assert text == ("DFM,Date,Time,Millisecond,Sample,Message,MsgType\n"
                     "0,10/16/2026,23:34:00,0.0,0,Recording started,Unknown\n"
-                    "1,10/16/2026,23:34:21,600.0,108,(108) Skipped index: (100) ,Error\n"
+                    '1,10/16/2026,23:34:20,200.0,108,"Lost 7 records (1.4 s): Index 101 to 107, from 23:34:20.",Error\n'
                     "0,10/16/2026,23:36:00,0.0,0,Recording ended,Unknown\n")
 
 
@@ -575,7 +575,8 @@ def test_an_injected_gap_shows_in_index_not_sample_and_files_split(tmp_path: Pat
     expected["Sample"] = rows["Sample"]
     expected.loc[expected["Index"] == 50, "Error"] = 4
     pd.testing.assert_frame_equal(rows, expected)
-    assert "(108) Skipped index: (100) ,Error" in files["Messages.csv"].read_text()
+    assert ('108,"Lost 7 records (1.4 s): Index 101 to 107, from 23:34:20.",Error'
+            in files["Messages.csv"].read_text())
 
 
 def test_a_generation_2_recording_has_every_paradigm_column_na(tmp_path: Path) -> None:
@@ -677,8 +678,12 @@ for r in data["rows"]:
 messages = MessagesList.MessageList()
 messages.AddMessage(Message.Message(0, start, 0, "Recording started", Enums.MESSAGETYPE.ANNOTATION, -99))
 for dfm, index, after in data["gaps"]:
-    when = start + datetime.timedelta(seconds=index * StatusPacket.V3_PACKET_INTERVAL)
-    text = "({:d}) Skipped index: ({:d}) ".format(index, after)
+    # The wording and date of DFM._ReportLostRecords (DFM itself needs pyserial).
+    count = index - after - 1
+    when = start + datetime.timedelta(seconds=(index - count) * StatusPacket.V3_PACKET_INTERVAL)
+    span = "Index {}".format(after + 1) if count == 1 else "Index {} to {}".format(after + 1, index - 1)
+    text = "Lost {} record{} ({:.1f} s): {}, from {}.".format(
+        count, "" if count == 1 else "s", count * StatusPacket.V3_PACKET_INTERVAL, span, when.strftime("%H:%M:%S"))
     messages.AddMessage(Message.Message(dfm, when, index, text, Enums.MESSAGETYPE.ERROR, -99))
 end = start + datetime.timedelta(minutes=data["minutes"])
 messages.AddMessage(Message.Message(0, end, 0, "Recording ended", Enums.MESSAGETYPE.ANNOTATION, -99))

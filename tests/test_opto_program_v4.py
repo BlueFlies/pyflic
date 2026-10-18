@@ -287,6 +287,38 @@ def test_exponential_defaults_give_richardson_and_roberts():
     assert _requirements(capped, 10) == [1, 2, 4, 6, 9, 12, 15, 20, 20, 20]
 
 
+def test_an_overflowing_exponential_series_gives_the_cap_as_the_firmware_does():
+    """DFMV3_V2 024b692: e^(Rate k) past a float's range gives the Cap, and
+    Scale 0 gives 1 (never 0 x infinity).  pyflic raised OverflowError."""
+    huge = _paradigm(op.PROGRESSIVE_RATIO, activation_ms=1, series="Exponential",
+                     scale=5.0, rate=100.0, cap=50)
+    assert huge.requirement_for(1) == 50 and huge.requirement_for(65535) == 50
+    flat = _paradigm(op.PROGRESSIVE_RATIO, activation_ms=1, series="Exponential",
+                     scale=0.0, rate=100.0, cap=50)
+    assert flat.requirement_for(1) == 1 and flat.requirement_for(65535) == 1
+    defaults = _paradigm(op.PROGRESSIVE_RATIO, activation_ms=1, series="Exponential",
+                         scale=5.0, rate=0.2, cap=65535)
+    assert defaults.requirement_for(65535) == 65535
+
+
+def test_the_exponential_series_rounds_in_single_precision_as_the_firmware_does():
+    """The firmware computes in single precision; double precision rounded
+    Scale 5, Rate 0.05, k 146 to 7396 where the firmware gives 7397.  The
+    simulator's copy of RequirementFor is checked against the compiled
+    firmware in test_ledcontrol_crosscheck."""
+    from types import SimpleNamespace
+
+    import v4_fixtures as vf
+
+    for scale in (0.5, 5.0, 7.333):
+        for rate in (0.05, 0.2, 0.37, 2.5):
+            p = _paradigm(op.PROGRESSIVE_RATIO, activation_ms=1, series="Exponential",
+                          scale=scale, rate=rate, cap=65535)
+            ins = SimpleNamespace(type=vf._PROGRESSIVERATIO,
+                                  settings=(1, 1, round(scale * 1000), round(rate * 1000), 65535))
+            assert _requirements(p, 300) == [vf._requirement_for(ins, k) for k in range(1, 301)]
+
+
 def test_arithmetic_series_are_capped():
     small = _paradigm(op.PROGRESSIVE_RATIO, activation_ms=500, series="Arithmetic",
                       first_requirement=1, step=2, cap=5)

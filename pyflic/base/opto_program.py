@@ -47,12 +47,13 @@ the editors.
 
 from __future__ import annotations
 
-import math
 import re
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable, Iterable
+
+import numpy as np
 
 PROGRAM_FILENAME = "Program.txt"
 N_WELLS = 12
@@ -398,12 +399,19 @@ class Paradigm:
             if cap > MAX_REQUIREMENT:
                 cap = MAX_REQUIREMENT
             if self.series == SERIES_EXPONENTIAL:
-                ## The MCU sends Scale and Rate as thousandths; the firmware
-                ## rounds half up and caps before converting.
-                scale = round(float(5.0 if self.scale is None else self.scale) * 1000) / 1000
-                rate = round(float(0.2 if self.rate is None else self.rate) * 1000) / 1000
-                x = scale * math.exp(rate * k) - scale
-                value = cap if x >= cap else int(math.floor(x + 0.5))
+                ## The MCU sends Scale and Rate as thousandths. The firmware
+                ## works in single precision (so the rounding at the halves is
+                ## its own), skips the exponential when Scale is 0, and gives
+                ## the cap for anything not below it, an overflow included.
+                f32 = np.float32
+                scale = f32(round(float(5.0 if self.scale is None else self.scale) * 1000)) / f32(1000.0)
+                rate = f32(round(float(0.2 if self.rate is None else self.rate) * 1000)) / f32(1000.0)
+                if scale > 0:
+                    with np.errstate(over="ignore"):
+                        x = scale * np.exp(rate * f32(k)) - scale
+                else:
+                    x = f32(0.0)
+                value = int(x + f32(0.5)) if x < f32(cap) else cap
             else:
                 first = 1 if self.first_requirement is None else int(self.first_requirement)
                 step = 0 if self.step is None else int(self.step)

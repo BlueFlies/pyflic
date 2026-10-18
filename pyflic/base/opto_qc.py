@@ -296,7 +296,8 @@ OPTO_INTERVAL_COLUMNS: tuple[str, ...] = (
 #: ``qc/opto/opto_light_events.csv`` — one row per light event: a lit run of
 #: ``OptoCol1`` (``Source`` ``optocol1``) or, on generation 3, one
 #: Activation of a Trigger Well (``activations``), with its ``Well``,
-#: ``Phase``, the Requirement it met and the Firmware Events behind it.
+#: ``Phase``, the Requirement it met and the Firmware Events behind it
+#: (``NA`` for an Acclimation Activation, which no Firmware Event earns).
 OPTO_EVENT_COLUMNS: tuple[str, ...] = (
     "DFM", "Group", "Event", "Well", "OnsetMin", "EndMin", "DurationSec", "Interval",
     "Mode", "Phase", "RequirementMet", "FirmwareEvents", "UnexplainedSec", "Explained",
@@ -1882,8 +1883,11 @@ def _analyze_paradigm_state(inp: DFMInputs, *, program: op.OptoProgram | None,
             requirement = np.nan
             events = np.nan
             if in_a:
-                ## Each Acclimation Activation is one Firmware Event.
-                events = 1
+                ## Acclimation counts Activations, not Firmware Events: a fly
+                ## back within the Event gap after the light went off gets a
+                ## new Activation without a new Event (DFMV3_V2 024b692), and
+                ## Progress counts neither.  So no Event count is given.
+                pass
             elif mode in op.RATIO_PARADIGMS:
                 ## The Requirement met is on the row before; the first row of
                 ## a new Paradigm shows none, so the program's series says it.

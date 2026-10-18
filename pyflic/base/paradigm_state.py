@@ -30,8 +30,10 @@ rely on, all reproduced by ``tests/v4_fixtures.py``:
   **the Requirement an Activation met is on the row before the one where
   Activations rises**.
 * During Acclimation (Phase ``A``) ``Requirement`` already shows the first
-  Main value and ``Progress`` stays 0: Acclimation Events are not counted by
-  Progress, and Acclimation Activations meet no Requirement.
+  Main value and ``Progress`` stays 0: Acclimation counts Activations, not
+  Events (each time contact lights the LED is one, so a fly back within the
+  Event gap gets a new Activation without a new Event), and Acclimation
+  Activations meet no Requirement.
 * Wells set ``On`` or ``Off`` report Phase ``M`` and ``NA`` Requirement and
   Progress.
 * The same Paradigm name in consecutive Intervals keeps every Well's state;
@@ -496,11 +498,11 @@ class ParadigmState:
 
         Exact on the simulator's truth, with these edges:
 
-        * Only Events that ``Progress`` counts are counted.  Acclimation
-          Events are not (``Progress`` stays 0 in Phase ``A``; each
-          Acclimation Activation is one Event, :meth:`acclimation_runs` and
-          :meth:`activations_between` count them), nor Events under any
-          other Paradigm type (``Progress`` is ``NA``).
+        * Only Events that ``Progress`` counts are counted.  Acclimation is
+          not (``Progress`` stays 0 in Phase ``A``, and Acclimation counts
+          Activations, which :meth:`acclimation_runs` and
+          :meth:`activations_between` count), nor Events under any other
+          Paradigm type (``Progress`` is ``NA``).
         * A change of Paradigm name resets ``Progress`` without an Event;
           the window's accounting restarts there.  An Event in the same
           record as the change, before it, is lost with the reset.  A drop

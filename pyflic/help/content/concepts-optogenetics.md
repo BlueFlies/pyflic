@@ -189,9 +189,12 @@ pyflic's feeding events, on the same signal. The two agree in the main and diffe
 edges.
 
 **Acclimation.** A FixedInterval or ratio Paradigm with `Acclimation: N` starts each well
-with N closed-loop Activations: each of its first N Firmware Events lights the LED during
-contact and for `ActivationMs` after. The well's `Phase` reads `A` until its Nth Activation
-ends, then `M` (Main). Each well moves on separately.
+with N closed-loop Activations: contact lights the LED, and it stays lit for `ActivationMs`
+after contact ends. Each time the LED comes on is one Activation, so a fly that comes back
+after the light has gone off counts again, even within the same Firmware Event. The well's
+`Phase` reads `A` until its Nth Activation ends, then `M` (Main). Each well moves on
+separately. Acclimation Activations earn no Firmware Event, so the light-events table leaves
+their `FirmwareEvents` empty.
 
 **Same name, same state.** When the next interval names the same Paradigm, every well keeps
 its Phase, Requirement and Progress. A different name starts every well afresh.

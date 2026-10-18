@@ -671,8 +671,10 @@ now a cross-check).
 **Firmware Event**:
 One feeding bout as the firmware counts it: contact above the Well's
 threshold, ended once the signal has stayed below it for the Event gap, and
-not started while the Well's own Activation is running. Ratio Paradigms and
-Acclimation count these. Visible on Generation 3 as a rise in Progress. A
+not started while the Well's own Activation is running; a bout that starts
+during that Activation is not one even if it carries on after it ends. Ratio
+Paradigms count these; Acclimation counts Activations instead. Visible on
+Generation 3 as a rise in Progress. A
 different detector from pyflic's feeding event (licks linked across the link
 gap) on the same signal; they agree in the main and differ at the edges, and
 the difference is a QC measure.
@@ -681,7 +683,8 @@ _Avoid_: event (alone, ambiguous with pyflic's), lick, contact time.
 **Phase** / **Acclimation**:
 Where a Well is in its Paradigm: `A` during **Acclimation**, the firmware's
 opening run of N closed-loop Activations under a FixedInterval or ratio
-Paradigm, and `M` (Main) otherwise. Per Well, recorded on every Generation-3
+Paradigm (each time contact lights the LED is one, even within one Firmware
+Event), and `M` (Main) otherwise. Per Well, recorded on every Generation-3
 row; a Well with an `On` or `Off` threshold, or under a Paradigm without
 Acclimation, reads `M` throughout and says nothing about Training. In a
 Progressive Ratio experiment the Paired Sucrose Well's Acclimation **is**

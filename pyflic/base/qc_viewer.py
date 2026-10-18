@@ -1045,10 +1045,11 @@ class DfmTab(QtWidgets.QWidget):
         panel = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(panel)
         layout.setContentsMargins(0, 4, 0, 0)
-        n_errors = len(messages.errors(frame))
+        ## Counted with the repeats PyMCU folds into one line.
+        n_errors = messages.count(messages.errors(frame))
         layout.addWidget(QtWidgets.QLabel(
             f"<b>{messages.MESSAGES_FILENAME}</b> — DFM {dfm_id} and the MCU (DFM 0): "
-            f"{len(frame)} message(s), {n_errors} error(s)"))
+            f"{messages.count(frame)} message(s), {n_errors} error(s)"))
         if not frame.empty:
             shown = frame.assign(Time=frame["Time"].dt.strftime("%m/%d/%Y %H:%M:%S.%f")
                                  .str[:-3].fillna(""))

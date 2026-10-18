@@ -165,14 +165,30 @@ LegacyP`.
 
 ## Messages.csv
 
-PyMCU writes it unquoted: `DFM,Date,Time,Millisecond,Sample,Message,MsgType`,
-where `Sample` holds the record `Index`, `Millisecond` is an unformatted float,
-and the message may contain commas. `messages.read` splits on the first five
-commas and the last one, and returns `DFM, Time, Index, Message, MsgType`; a
-missing file is an empty frame. DFM 0 is the MCU itself.
+The columns are `DFM,Date,Time,Millisecond,Sample,Message,MsgType`, where
+`Sample` holds the record `Index` and `Millisecond` is an unformatted float.
+DFM 0 is the MCU itself. Two writers exist, and `messages.read` reads both:
+
+- **PyMCU 4.0.0 from 10/17/2026** (PyMCU d148926) writes with the csv module,
+  so a message holding a comma is quoted. A message that came again within 10
+  minutes (same DFM, type and text) is one line ending "(repeated N more
+  times, the last at HH:MM:SS)"; `messages.read` puts N in `Repeats`, and
+  `messages.count` counts a frame with its repeats. Lost records read "Lost N
+  records (S s): Index A to B, from HH:MM:SS.", dated when the gap began; a DFM
+  that restarted reads "DFM n restarted: its record count went back from …"
+  and "DFM n recorded nothing for about S s while it restarted: Index A to B
+  are missing."; DFM error bits are notices naming the bit ("DFM 1 error: No
+  Ack (…)").
+- **Earlier builds** wrote every line unquoted, so a message's commas made
+  extra fields: the line is split on its first five commas and its last one,
+  as before. Their lost records read "(1021) Skipped index: (1000)".
+
+`messages.read` returns `DFM, Time, Index, Message, MsgType, Repeats`; a
+missing file is an empty frame.
 
 - The integrity report lists the `Error` rows for the DFM and for DFM 0.
-- The QC Viewer's Integrity sub-tab shows every message for the DFM and DFM 0.
+- The QC Viewer's Integrity sub-tab shows every message for the DFM and DFM 0,
+  and counts them with their repeats.
 
 ## What pyflic derives
 
@@ -244,6 +260,27 @@ diff it against the fixtures and the loader:
 
 Then re-run the real Progressive Ratio dataset (generation 1) and confirm its
 outputs are unchanged apart from the deliberate changes in `CHANGELOG.md`.
+
+**Confirmed since** (10/17/2026):
+
+- The lead-in, from the first bench recording (a quiet single-well run, every
+  well Off): 20 `Interval` 0 rows, `Paradigm` `NA`, `OptoFreq` and `OptoPW` 0.
+- `Requirement` during Acclimation shows the first Main Requirement (PyMCU, on
+  a FixedRatio bench recording).
+- OpenLoop and `On` wells never add Activations (DFMV3_V2's `LEDControl.c`).
+- Acclimation counts every on-period as an Activation, even within one
+  Firmware Event (DFMV3_V2 024b692). The simulator follows it, and the
+  cross-check passes against that firmware.
+- PyMCU's own simulator (`scripts/simulate_recording.py`, PyMCU 6d1aa42) runs
+  simulated flies through PyMCU's real record parser and file writer, and
+  writes a truth folder. On its two-hour Progressive Ratio recording,
+  pyflic's light table matched the truth exactly for all twelve triggering
+  wells: Activations, Acclimation Activations and end, the last Requirement
+  met, Progress at the end and lit time.
+
+Still to see on the bench: a DFM that restarts mid-recording (PyMCU 529b926
+keeps `Index` and the times continuous, writes `NA` Interval rows until it has
+sent the instruction again, and the Paradigm state starts over).
 
 ## Not read
 
