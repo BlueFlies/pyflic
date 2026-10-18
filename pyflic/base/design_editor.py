@@ -90,6 +90,33 @@ def _add_help(target: Card | CardGroup, ref: str, tooltip: str) -> None:
     target.add_title_widget(HelpButton(ref, target, tooltip=tooltip))
 
 
+def _with_help(widget: QWidget, ref: str, tooltip: str, *,
+               grow: bool = True) -> QWidget:
+    """*widget* with a ``?`` opening *ref* right after it, as one row — for a
+    form field or a section label — or *widget* alone without help."""
+    try:
+        from ..help import HelpButton
+    except Exception:  # noqa: BLE001 - help is optional, the editor is not
+        return widget
+    holder = QWidget()
+    row = QHBoxLayout(holder)
+    row.setContentsMargins(0, 0, 0, 0)
+    row.setSpacing(6)
+    row.addWidget(widget, 1 if grow else 0)
+    row.addWidget(HelpButton(ref, holder, tooltip=tooltip), 0,
+                  Qt.AlignmentFlag.AlignVCenter)
+    if not grow:
+        row.addStretch(1)
+    return holder
+
+
+def _add_section(card: Card, text: str, ref: str, tooltip: str) -> None:
+    """A section label in *card* with a ``?`` opening *ref* after it."""
+    label = QLabel(text, card)
+    label.setObjectName("PyflicSectionDivider")
+    card.add_body(_with_help(label, ref, tooltip, grow=False))
+
+
 def _truthy(value) -> bool:
     if isinstance(value, str):
         return value.strip().lower() not in ("", "0", "false", "no", "off")
@@ -157,6 +184,12 @@ class ProjectDesignDialog(QDialog):
         except Exception:  # noqa: BLE001 - help is optional, the editor is not
             pass
         outer.addLayout(intro_row)
+        try:
+            from ..help import install_help_shortcut
+
+            install_help_shortcut(self, "concepts-project#the-project-design-dialog")
+        except Exception:  # noqa: BLE001 - help is optional, the editor is not
+            pass
 
         body = QWidget()
         body_layout = QVBoxLayout(body)
@@ -189,6 +222,8 @@ class ProjectDesignDialog(QDialog):
 
     def _build_identity_card(self, start_dir) -> Card:
         card = Card("Project", Category.LOAD, icon_name="project")
+        _add_help(card, "concepts-project#the-project-design-dialog",
+                  "This dialog, card by card  (F1)")
         form = QFormLayout()
         form.setFieldGrowthPolicy(
             QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
@@ -247,6 +282,14 @@ class ProjectDesignDialog(QDialog):
         type_row.setContentsMargins(0, 0, 0, 0)
         type_row.addWidget(self.type_combo, 1)
         type_row.addWidget(self.new_type_btn)
+        try:
+            from ..help import HelpButton
+
+            type_row.addWidget(HelpButton(
+                "concepts-experiment-types",
+                tooltip="What an Experiment Type decides, and building your own"))
+        except Exception:  # noqa: BLE001 - help is optional, the editor is not
+            pass
         type_holder = QWidget()
         type_holder.setLayout(type_row)
         form.addRow("Experiment type:", type_holder)
@@ -315,7 +358,9 @@ class ProjectDesignDialog(QDialog):
             "or one per Cycle).  A Program Facet needs a Program.txt section for "
             "every DFM, and no cutoffs.")
         self.facet_source_combo.currentIndexChanged.connect(self._on_facet_source_changed)
-        form.addRow("Facet source:", self.facet_source_combo)
+        form.addRow("Facet source:", _with_help(
+            self.facet_source_combo, "concepts-facets",
+            "Facets: minute cutoffs and their names, or Program Intervals"))
         self.cutoffs_edit = QLineEdit()
         self.cutoffs_edit.setPlaceholderText("e.g. 10, 70  (minutes)")
         form.addRow("Facet cutoffs:", self.cutoffs_edit)
@@ -329,7 +374,9 @@ class ProjectDesignDialog(QDialog):
         self.exclusion_edit.setToolTip(
             "The group column every member's remove_chambers.csv is read "
             "under, so one rule filters the whole Project.")
-        form.addRow("Exclusion group:", self.exclusion_edit)
+        form.addRow("Exclusion group:", _with_help(
+            self.exclusion_edit, "config-structure#globalexclusion-group",
+            "The remove_chambers.csv group every member is read under"))
 
         ## The Treatment control's level (ADR-0019), for a type that compares
         ## every level of a factor with a control: the type names the factor,
@@ -339,12 +386,15 @@ class ProjectDesignDialog(QDialog):
             "control_level — the level of the type's control factor every other "
             "level is compared with.")
         self._control_level_row = form.rowCount()
-        form.addRow("Control level:", self.control_level_edit)
+        form.addRow("Control level:", _with_help(
+            self.control_level_edit, "concepts-experiment-types#control-comparisons",
+            "The Treatment control every other level is compared with"))
 
         self._form = form
         card.add_body(form)
 
-        card.add_section_label("Design factors")
+        _add_section(card, "Design factors", "config-factors",
+                     "Factorial designs: factors, levels and assignments")
         hint = QLabel(
             "The factors a chamber assignment names, in this order.  Members "
             "assign levels per chamber; the factors themselves are fixed here.")
@@ -365,8 +415,9 @@ class ProjectDesignDialog(QDialog):
                                       num_columns=2)
         card.add_body(self.params_form)
 
-        card.add_section_label("Auto-filter thresholds "
-                               "(used by auto_remove_chambers)")
+        _add_section(card, "Auto-filter thresholds (used by auto_remove_chambers)",
+                     "config-dfms-chambers#automatic-exclusion",
+                     "What each auto-removal cutoff removes, and the Use box")
         cform = QFormLayout()
         cform.setFieldGrowthPolicy(
             QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
@@ -472,7 +523,7 @@ class ProjectDesignDialog(QDialog):
                 self.opto_number_edits[field.key] = edit
                 oform.addRow(f"{field.label}:", edit)
         self.opto_group.add(oform)
-        _add_help(self.opto_group, "concepts-optogenetics",
+        _add_help(self.opto_group, "concepts-optogenetics#thresholds",
                   "What the optogenetic light QC checks, and what its thresholds do")
         card.add_body(self.opto_group)
         return card

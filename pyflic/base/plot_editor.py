@@ -82,8 +82,9 @@ def _readable_on(colour: str) -> str:
     return "#000000" if luminance > 0.6 else "#ffffff"
 
 
-def _add_help(group: CardGroup, ref: str, tooltip: str) -> None:
-    """Put a ``?`` opening *ref* at the top of *group*, if help is available."""
+def _add_help(group: CardGroup | Card, ref: str, tooltip: str) -> None:
+    """Put a ``?`` opening *ref* at the top of *group* (a group box or a
+    card), if help is available."""
     try:
         from ..help import HelpButton
     except Exception:  # noqa: BLE001 - help is optional, the editor is not
@@ -287,8 +288,8 @@ class PlotEditorWindow(QMainWindow):
     def _build_roles_group(self) -> CardGroup:
         """Paired vs yoked panels — Progressive Ratio only, when Role is present."""
         self.roles_group = CardGroup("Roles")
-        _add_help(self.roles_group, "concepts-progressive-ratio",
-                  "Paired and yoked are roles, not treatments")
+        _add_help(self.roles_group, "app-plot-editor#progressive-ratio-projects",
+                  "Paired and yoked as columns: the Phase × Role grid")
         self.role_list = QListWidget()
         self.role_list.setMaximumHeight(90)
         self.role_list.itemChanged.connect(self._apply_content)
@@ -415,6 +416,8 @@ class PlotEditorWindow(QMainWindow):
         card = Card("Preview", Category.PLOTS, icon_name="plot",
                     subtitle="Rendered by the same Spec + Style that saving "
                              "uses — what you see is what lands in figures/.")
+        _add_help(card, "app-plot-editor#preview-and-output",
+                  "The preview, and what Render figures writes")
         self.preview_scroll = QScrollArea()
         self.preview_scroll.setWidgetResizable(True)
         ## The figure is fitted to this viewport, so it never needs sideways

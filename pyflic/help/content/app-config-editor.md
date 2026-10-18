@@ -12,69 +12,136 @@ Use it for your first configuration. Hand-editing YAML is fine once you know the
 see [Configuration file structure](config-structure.md) — but there is no advantage to
 starting there.
 
+**F1**, or the editor's **Help** menu, opens this topic; every card carries a `?` for its
+own section, and every detection parameter a `?` that opens
+[Parameter reference](reference-parameters.md) at that parameter, so you can read what a
+value does without leaving the form. **File → Script Editor…** (Ctrl+E), or the scripts
+button in the top bar, opens the [Script Editor](scripts-editor.md) on the saved file.
+
 ## The two tabs
 
-**Experiment** — everything that applies to the recording as a whole: the
-Experiment Type, the Chamber Layout it implies, well names, the detection
-parameters, and the factors of your design. Each parameter field carries a `?`
-that opens [Parameter reference](reference-parameters.md) at that parameter, so
-you can read what a value does without leaving the form.
+**Experiment** — everything that applies to the recording as a whole: the Experiment
+Type, the Chamber Layout it implies, well names, the detection parameters, and the factors
+of your design.
 
-Declaring a factor here regenerates the chamber assignment fields on the other
-tab to match, which is the main reason to use the editor rather than hand
-editing: adding a factor by hand means rewriting every chamber assignment in
-the file. See [Factorial designs](config-factors.md).
+**DFMs & Chambers** — one tab down the left side per device, each with its own chamber
+assignments and parameter overrides. **Add DFM** and **Remove DFM** sit below the list;
+Remove acts on the DFM you have selected and names it before it discards anything.
 
-**DFMs & Chambers** — one tab down the left side per device, each with its own
-chamber assignments and parameter overrides. **Add DFM** and **Remove DFM** sit
-below the list; Remove acts on the DFM you have selected and names it before it
-discards anything. Per-DFM overrides are how counterbalancing is set up; see
-[`pi_direction`](reference-parameters.md#pi_direction).
+**Problems are counted on the tab they live on.** A ⚠ and a number on a tab label means
+something there needs attention — a Hedonic experiment with no well names, a chamber
+missing a factor level. Saving with problems outstanding is allowed; the editor lists them
+first so you are choosing to.
 
-## Things worth knowing
+## The Experiment tab
 
-**The Experiment Type owns the Chamber Layout.** Choose *Hedonic Feeding* or
-*Progressive Ratio* and the layout is fixed for you — shown, but not editable,
-because those assays are two-well by definition. A **Custom Experiment**, or a
-lab type that leaves the layout open, chooses its own. The editor writes
-`experiment_type:` for any type but Custom, `chamber_layout:` when the type leaves
-the layout open, and `params.chamber_size` for neither: it is derived from the
-layout, never stored. **New type…** beside the list opens the
-[Experiment Type Editor](app-type-editor.md); saving a config whose type is one of
-your lab's writes the type beside it as `experiment_type.yaml`.
+### Experiment Settings
 
-**Chamber count follows the Chamber Layout.** Single-well gives 12 chambers per
-DFM; two-well gives 6. Change the layout and the chamber fields change with it —
-and if that would discard assignments you have already made, the editor names
-them and asks first.
+- **Experiment Type** — the assay; its `?` opens
+  [Experiment types](concepts-experiment-types.md). **The Experiment Type owns the Chamber
+  Layout.** Choose *Hedonic Feeding* or *Progressive Ratio* and the layout is fixed for you
+  — shown, but not editable, because those assays are two-well by definition. A **Custom
+  Experiment**, or a lab type that leaves the layout open, chooses its own. Your lab's own
+  types are listed with *(lab)* after them, and **New type…** opens the
+  [Experiment Type Editor](app-type-editor.md); saving a config whose type is one of your
+  lab's writes the type beside it as `experiment_type.yaml`.
+- **Chamber Layout** — single-well gives 12 chambers per DFM; two-well gives 6. Change the
+  layout and the chamber fields on the other tab change with it — and if that would discard
+  assignments you have already made, the editor names them and asks first. The editor
+  writes `experiment_type:` for any type but Custom, `chamber_layout:` when the type leaves
+  the layout open, and `params.chamber_size` for neither: it is derived from the layout,
+  never stored.
+- **Well A** and **Well B** — the names of the two wells, for a two-well layout.
+- **Transform Licks** — the 0.25-power transform of lick counts; see
+  [The lick transform](concepts-metrics.md#the-lick-transform).
+- **Control Level** — shown for a type with a Treatment control: the level of its control
+  factor that every other level is compared with. See
+  [Control comparisons](concepts-experiment-types.md#control-comparisons).
+- **Optogenetics** — `auto`, `yes` or `no`: whether the optogenetic light QC runs. Each
+  DFM tab has its own picker, which inherits unless you pick. See
+  [`global.optogenetics`](config-structure.md#globaloptogenetics).
+- **Facet source** — where the Facets come from: minute cutoffs (the default), or the
+  Program Intervals of `Program.txt`, with or without their Cycles pooled. A type that
+  owns its Facets, such as Progressive Ratio, greys it out. See
+  [Program Facets](concepts-facets.md#program-facets).
 
-**Auto-filter thresholds are optional.** Each of Min Untransformed Licks, Max
-Median Duration and Max Events has a **Use** checkbox and a value field. Uncheck
-**Use** to turn that filter off (the editor writes YAML `null` so a typed
-experiment does not fall back to its default). Check **Use** and leave the value
-blank to keep the Experiment Type's default (shown as grey placeholder text).
-Check **Use** and type a number to override. A Custom Experiment has no defaults,
-so there the filter runs only when **Use** is checked and a number is typed.
+### Auto-filter thresholds
 
-**Factor assignments are positional and must be complete.** With two factors
-declared, every assigned chamber needs a level in both columns — the columns are
-read in declaration order, so a half-filled row is an incomplete assignment, not
-a shorter one. The editor marks the gap and leaves that chamber out of the file
-rather than writing something that would read back wrong.
+Each of **Min Untransformed Licks**, **Max Median Duration** and **Max Events** has a
+**Use** checkbox and a value field:
 
-**Problems are counted on the tab they live on.** A ⚠ and a number on a tab
-label means something there needs attention — a Hedonic experiment with no well
-names, a chamber missing a factor level. Saving with problems outstanding is
-allowed; the editor lists them first so you are choosing to.
+- Uncheck **Use** to turn that filter off. The editor writes YAML `null`, so a typed
+  experiment does not fall back to its default.
+- Check **Use** and leave the value blank to keep the Experiment Type's default, shown as
+  grey placeholder text.
+- Check **Use** and type a number to override it.
 
-**The editor writes canonical parameter names.** Older aliases such as `link_gap`
-and `tasting_low` are still accepted when read, but what gets written is the
-canonical name. The same goes for configurations written before pyflic split
-Experiment Type from Chamber Layout: `experiment_type: two_well` still opens — as
-a Custom Experiment with that layout — and saving migrates it.
+A Custom Experiment has no defaults, so there the filter runs only when **Use** is checked
+and a number is typed. What each cutoff removes is in
+[Automatic exclusion](config-dfms-chambers.md#automatic-exclusion).
 
-**Progressive Ratio adds the chamber groups.** With *Progressive Ratio* chosen, each DFM
-tab shows **Paired chamber per chamber group**, with a **Groups** choice:
+### Progressive Ratio settings
+
+For a type with the Progressive Ratio module, a *Progressive Ratio* section below the
+thresholds holds the module's own constants: whether a chamber group whose training never
+completed, or whose light QC failed, leaves the analysis; the light QC's thresholds; and
+the breaking point's **Break gap** (`pr_break_gap_min`) and **Test window cap**
+(`pr_test_window_min`). They follow the thresholds' rule. A blank field shows the type's
+default as grey text and keeps it, and a switch left on *default* does the same; only a
+value you type or pick is written under `global.constants`. A value out of range, such as
+a gap of 0, is counted on the tab and listed before saving, and pyflic refuses to load a
+config that states one. What each setting does is in
+[the light QC](concepts-progressive-ratio.md#light-qc) and
+[the breaking point](concepts-progressive-ratio.md#breaking-point).
+
+### Optogenetic light QC settings
+
+Once the experiment is known to be optogenetic — **Optogenetics** is `yes`, or it is `auto`
+and `data/` holds a `Program.txt` or a run has already written its light QC — an
+*Optogenetic light QC* section shows the thresholds, shared by every type, under the same
+rule as the rest: grey defaults, and only what you type is written. Thirteen of them apply
+to firmware 4.0.0 recordings only, eight of those to the checks of each Paradigm's own
+rule. See [Optogenetic experiments](concepts-optogenetics.md#thresholds).
+
+### Global Parameters
+
+The detection parameters, applied to every DFM unless a DFM tab overrides them. Each has a
+`?` for its entry in [Parameter reference](reference-parameters.md). **The editor writes
+canonical parameter names.** Older aliases such as `link_gap` and `tasting_low` are still
+accepted when read, but what gets written is the canonical name.
+
+### Experimental Design Factors
+
+Optional. Declaring a factor here gives the chamber table on the other tab one column per
+factor, each a dropdown of that factor's levels, which is the main reason to use the editor
+rather than hand editing: adding a factor by hand means rewriting every chamber assignment
+in the file. See [Factorial designs](config-factors.md).
+
+## The DFMs & Chambers tab
+
+### DFM Identity
+
+The DFM's id — the number in its data file names — and its own **Optogenetics** picker:
+*inherit* takes the Experiment tab's setting; `auto`, `yes` or `no` decide for this DFM
+alone, because whether a lid was lit is a fact about the recording. See
+[Optogenetics per DFM](config-dfms-chambers.md#optogenetics-per-dfm).
+
+### Chamber assignments
+
+The **Chamber → Treatment Assignments** table, one row per chamber. Leave a Treatment cell
+blank to omit that chamber from the config. With factors declared, the table has a column
+per factor instead, each a dropdown of its levels.
+
+**Factor assignments are positional and must be complete.** With two factors declared,
+every assigned chamber needs a level in both columns — the columns are read in declaration
+order, so a half-filled row is an incomplete assignment, not a shorter one. The editor
+marks the gap and leaves that chamber out of the file rather than writing something that
+would read back wrong. See [How chambers map to wells](config-dfms-chambers.md#how-chambers-map-to-wells).
+
+### Paired chamber per chamber group
+
+With a type that has the Progressive Ratio module, each DFM tab shows **Paired chamber per
+chamber group**, with a **Groups** choice:
 
 - **Pairs**: one picker per pair (1+2, 3+4, 5+6) naming its paired chamber, written as
   `paired_chambers:`. The other chamber is yoked and never written. Give both chambers of
@@ -88,34 +155,24 @@ A DFM entry that already names neither key opens on *From Program.txt*. Set **PI
 Direction** on the DFM to the side the sucrose well (well A) is on. See
 [Progressive Ratio experiments](concepts-progressive-ratio.md#chamber-groups-paired-and-yoked).
 
-**Progressive Ratio has its own settings.** Below the auto-filter thresholds, a
-*Progressive Ratio* section holds the type's own constants: whether a chamber group whose
-training never completed, or whose light QC failed, leaves the analysis; the light QC's
-thresholds; and the breaking point's **Break gap** (`pr_break_gap_min`) and **Test window
-cap** (`pr_test_window_min`). They follow the thresholds' rule. A blank field shows the
-type's default as grey text and keeps it, and a switch left on *default* does the same;
-only a value you type or pick is written under `global.constants`. A value out of range,
-such as a gap of 0, is counted on the tab and listed before saving, and pyflic refuses to
-load a config that states one. What each setting does is in
-[the light QC](concepts-progressive-ratio.md#light-qc) and
-[the breaking point](concepts-progressive-ratio.md#breaking-point).
+### Parameter Overrides
 
-**Optogenetics has a setting and a section.** *Optogenetics* on the Experiment tab is
-`auto`, `yes` or `no`, and each DFM tab has its own picker, which inherits unless you pick.
-Once the experiment is known to be optogenetic — the setting is `yes`, `data/` holds a
-`Program.txt`, or a run has already written its light QC — an *Optogenetic light QC*
-section shows the thresholds, shared by every type, under the same rule as the rest: grey
-defaults, and only what you type is written. Thirteen of them apply to firmware 4.0.0
-recordings only, eight of those to the checks of each Paradigm's own rule. See [Optogenetic experiments](concepts-optogenetics.md#thresholds).
+Tick a parameter's box to override the global value for this DFM alone; an unticked one
+inherits. Per-DFM overrides are how counterbalancing is set up; see
+[`pi_direction`](reference-parameters.md#pi_direction).
 
-**Facet source** on the Experiment tab says where the Facets come from: minute cutoffs (the
-default), or the Program Intervals of `Program.txt`, with or without their Cycles pooled.
-A type that owns its Facets, such as Progressive Ratio, greys it out. See
-[Program Facets](concepts-facets.md#program-facets).
+## A member's config
 
-**A member's config shows the design read-only.** Opened on a Project's member, the
-editor fills the global settings from `project.yaml`, marks them read-only with a banner,
-and writes only `dfms:` — see [Projects and members](concepts-project.md).
+Opened on a Project's member, the editor fills the global settings from `project.yaml`,
+marks them read-only with a banner, and writes only `dfms:` — see
+[Projects and members](concepts-project.md). Any save keeps the keys the editor does not
+show, `scripts:` above all, as they were.
+
+## Things worth knowing
+
+**Old configurations migrate on save.** Configurations written before pyflic split
+Experiment Type from Chamber Layout still open: `experiment_type: two_well` opens as a
+Custom Experiment with that layout, and saving migrates it.
 
 **Exclusions do not live here.** `excluded_chambers` in YAML is ignored at load
 time. Chamber exclusions belong in `remove_chambers.csv` — see
@@ -134,8 +191,7 @@ but the linter also catches things it cannot know — a DFM with no matching CSV
 from an older version of pyflic.
 
 If the Hub already has this member loaded, load it again — double-click its row in the
-Project panel — to pick up your changes. **F1**, or the editor's **Help** menu, opens this
-topic.
+Project panel — to pick up your changes.
 
 ---
 

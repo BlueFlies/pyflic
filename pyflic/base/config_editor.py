@@ -193,6 +193,38 @@ def _param_help_button(key: str, parent: QWidget | None = None):
     )
 
 
+def _help_button(ref: str, tooltip: str, parent: QWidget | None = None):
+    """A ``?`` opening *ref*, or ``None`` when help is unavailable."""
+    try:
+        from ..help import HelpButton
+    except Exception:  # noqa: BLE001 - help is optional, the editor is not
+        return None
+    return HelpButton(ref, parent, tooltip=tooltip)
+
+
+def _add_help(card: Card, ref: str, tooltip: str) -> None:
+    """Put a ``?`` opening *ref* in *card*'s title row, if help is available."""
+    button = _help_button(ref, tooltip, card)
+    if button is not None:
+        card.add_title_widget(button)
+
+
+def _with_help(widget: QWidget, ref: str, tooltip: str) -> QWidget:
+    """*widget* with a ``?`` opening *ref* right after it, as one row — for a
+    form field or a section label — or *widget* alone without help."""
+    button = _help_button(ref, tooltip)
+    if button is None:
+        return widget
+    holder = QWidget()
+    row = QHBoxLayout(holder)
+    row.setContentsMargins(0, 0, 0, 0)
+    row.setSpacing(6)
+    row.addWidget(widget)
+    row.addWidget(button, 0, Qt.AlignmentFlag.AlignVCenter)
+    row.addStretch(1)
+    return holder
+
+
 class ParamsForm(QWidget):
     """
     A QFormLayout-based widget for all non-chamber_size Parameters fields.
@@ -676,6 +708,8 @@ class DFMWidget(QWidget):
 
         # -- DFM ID --------------------------------------------------------
         id_card = Card("DFM Identity", Category.NEUTRAL)
+        _add_help(id_card, "app-config-editor#dfm-identity",
+                  "The DFM's id, and its own optogenetics setting")
         id_inner = QHBoxLayout()
         id_inner.setContentsMargins(0, 0, 0, 0)
         id_inner.addWidget(QLabel("DFM ID:"))
@@ -705,6 +739,8 @@ class DFMWidget(QWidget):
         # -- Chamber table -------------------------------------------------
         n_chambers = 12 if chamber_size == 1 else 6
         self._ch_card = Card("Chamber → Treatment Assignments", Category.LOAD)
+        _add_help(self._ch_card, "app-config-editor#chamber-assignments",
+                  "Assigning treatments, and factor levels, to chambers")
         self._ch_hint = QLabel(
             "Leave a Treatment cell blank to omit that chamber from the config."
         )
@@ -775,6 +811,8 @@ class DFMWidget(QWidget):
             Category.ANALYZE,
             subtitle="Check a box to override the global value for this DFM.",
         )
+        _add_help(over_card, "app-config-editor#parameter-overrides",
+                  "Overriding a detection parameter for this DFM alone")
         ## Two columns, not three.  Three needed 888px inside a page that has
         ## ~877 once the West tab bar and a scrollbar are taken out, so the
         ## whole tab scrolled sideways — much worse than the 54px of extra
@@ -1207,8 +1245,9 @@ class FLICConfigEditor(QMainWindow):
             return
         install_help_shortcut(self, "app-config-editor")
         help_menu = self.menuBar().addMenu("&Help")
-        act_this = QAction(icon("info"), "Config Editor &help", self)
-        act_this.setShortcut("F1")
+        ## F1 is the shortcut above.  Binding it on this action as well made
+        ## the key ambiguous, and Qt then fires neither; the menu only shows it.
+        act_this = QAction(icon("info"), "Config Editor &help\tF1", self)
         act_this.triggered.connect(lambda: open_help("app-config-editor"))
         help_menu.addAction(act_this)
         act_params = QAction(icon("sensitivity", category=Category.ANALYZE),
@@ -1345,6 +1384,8 @@ class FLICConfigEditor(QMainWindow):
 
         # Experiment Settings
         exp_card = Card("Experiment Settings", Category.LOAD, icon_name="settings")
+        _add_help(exp_card, "app-config-editor#experiment-settings",
+                  "The Experiment tab's settings, field by field")
         self._exp_form = QFormLayout()
         self._exp_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         self._exp_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
@@ -1370,6 +1411,10 @@ class FLICConfigEditor(QMainWindow):
         type_row.setContentsMargins(0, 0, 0, 0)
         type_row.addWidget(self._experiment_type_combo)
         type_row.addWidget(self._new_type_btn)
+        type_help = _help_button("concepts-experiment-types",
+                                 "What an Experiment Type decides")
+        if type_help is not None:
+            type_row.addWidget(type_help)
         type_row.addStretch(1)
         self._exp_form.addRow("Experiment Type:", type_row)
 
@@ -1426,7 +1471,9 @@ class FLICConfigEditor(QMainWindow):
             "control_level — the level of the type's control factor every other "
             "level is compared with.")
         self._control_level_row = self._exp_form.rowCount()
-        self._exp_form.addRow("Control Level:", self._control_level_edit)
+        self._exp_form.addRow("Control Level:", _with_help(
+            self._control_level_edit, "concepts-experiment-types#control-comparisons",
+            "The Treatment control every other level is compared with"))
 
         ## Whether the optogenetic light QC runs (auto | yes | no); a DFM tab
         ## can override it for that DFM.
@@ -1441,7 +1488,9 @@ class FLICConfigEditor(QMainWindow):
             "never.  Any experiment type.")
         self._opto_combo.currentIndexChanged.connect(self._refresh_opto_rows)
         self._opto_combo.currentIndexChanged.connect(self._refresh_badges)
-        self._exp_form.addRow("Optogenetics:", self._opto_combo)
+        self._exp_form.addRow("Optogenetics:", _with_help(
+            self._opto_combo, "config-structure#globaloptogenetics",
+            "auto, yes or no: when the optogenetic light QC runs"))
 
         ## Where the Facets come from (facet_source, decision 7): minute
         ## cutoffs, or each DFM's Program Intervals from data/Program.txt.  A
@@ -1458,13 +1507,17 @@ class FLICConfigEditor(QMainWindow):
             "of each DFM's data/Program.txt section, labelled by its Paradigm "
             "(Cycles pooled, or one per Cycle).")
         self._facet_source_combo.currentIndexChanged.connect(self._refresh_badges)
-        self._exp_form.addRow("Facet source:", self._facet_source_combo)
+        self._exp_form.addRow("Facet source:", _with_help(
+            self._facet_source_combo, "concepts-facets#program-facets",
+            "Facets from minute cutoffs, or from Program.txt"))
 
         # Auto-filter thresholds (used by auto_remove_chambers)
         filter_header = QLabel("Auto-filter Thresholds  (used by auto_remove_chambers)")
         filter_header.setObjectName("PyflicSectionDivider")
         self._filter_header_row = self._exp_form.rowCount()
-        self._exp_form.addRow(filter_header)
+        self._exp_form.addRow(_with_help(
+            filter_header, "app-config-editor#auto-filter-thresholds",
+            "The Use box and value of each auto-removal cutoff"))
 
         ## Each cutoff is optional: unchecked writes YAML null (filter off);
         ## checked + blank inherits the type's default (ADR-0011); checked +
@@ -1496,7 +1549,9 @@ class FLICConfigEditor(QMainWindow):
         pr_header = QLabel("Progressive Ratio  (light QC and breaking point)")
         pr_header.setObjectName("PyflicSectionDivider")
         self._pr_header_row = self._exp_form.rowCount()
-        self._exp_form.addRow(pr_header)
+        self._exp_form.addRow(_with_help(
+            pr_header, "app-config-editor#progressive-ratio-settings",
+            "The Progressive Ratio light QC and breaking point settings"))
         self._pr_constant_widgets: dict[str, QWidget] = {}
         self._pr_constant_rows: dict[str, int] = {}
         for field in PR_CONSTANT_FIELDS:
@@ -1527,7 +1582,9 @@ class FLICConfigEditor(QMainWindow):
         opto_header = QLabel("Optogenetic light QC  (every experiment type)")
         opto_header.setObjectName("PyflicSectionDivider")
         self._opto_header_row = self._exp_form.rowCount()
-        self._exp_form.addRow(opto_header)
+        self._exp_form.addRow(_with_help(
+            opto_header, "concepts-optogenetics#thresholds",
+            "What each optogenetic light QC threshold does"))
         self._opto_constant_widgets: dict[str, QWidget] = {}
         self._opto_constant_rows: dict[str, int] = {}
         for field in OPTO_CONSTANT_FIELDS:
@@ -1562,6 +1619,8 @@ class FLICConfigEditor(QMainWindow):
             Category.ANALYZE,
             subtitle="Applied to all DFMs unless overridden per-DFM.",
         )
+        _add_help(global_card, "reference-parameters",
+                  "Every detection parameter, and which way it moves results")
         ## One column.  Two put "PI Direction (side with PI = 1)" past the
         ## right edge of a half-width card and gave the whole page a
         ## horizontal scrollbar; the tab has vertical room to spare instead.
@@ -1580,6 +1639,8 @@ class FLICConfigEditor(QMainWindow):
                 "level values. Leave empty for simple treatment names."
             ),
         )
+        _add_help(factors_card, "config-factors",
+                  "Factorial designs: factors, levels and chamber assignments")
         self._factors_widget = FactorsWidget()
         factors_card.add_body(self._factors_widget)
         top_layout.addWidget(factors_card)

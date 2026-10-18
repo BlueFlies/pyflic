@@ -10,12 +10,15 @@ Opening a member redirects up to its Project — a publication figure is a state
 the pooled result, not about one recording.
 
 The Editor is presentation only. It never alters a `flic_config.yaml`; everything it writes
-goes to `plot_specs.yaml` and `figures/`.
+goes to `plot_specs.yaml` and `figures/`. The toolbar holds **Open Project…**, the **Plot**
+picker, **Restore defaults**, **Save plot_specs.yaml** and **Render figures**; closing the
+window saves any change you made to `plot_specs.yaml` too. **F1**, or the `?` at the end of
+the toolbar, opens this topic, and each group on the left has a `?` for its own section.
 
 ## One plot at a time
 
 The **Plot** picker in the toolbar chooses which figure you are editing; the preview shows
-that one, and the Content and Style tabs edit that one. Switching plots keeps whatever you
+that one, and the panel on the left edits that one. Switching plots keeps whatever you
 changed on the plot you left.
 
 There is nothing to include or exclude. Every figure the Project's data supports is part of
@@ -79,15 +82,22 @@ everything else is the same across families. The check boxes on the panel are *w
 figure — which facets it shows and which treatments it draws — not a choice between
 figures.
 
-A faceted figure needs the Combined Analysis (build it from the Hub's Project panel). A
-time course needs saved binned summaries — run a binned CSV in each member first.
+A faceted figure needs the Combined Analysis (**Combine**, on the Hub's Project panel). A
+time course needs each member's saved binned summary — tick *Binned summary* and **Run
+analysis** on the member's Analyze panel, or run a script's `binned_csv` step.
+
+The **light figures**, one per numeric column of the light table — `faceted_activations`,
+`faceted_litsec`, `faceted_lightfeedingindex` and the rest, each named "(light, faceted)" in
+the picker — appear once the Project's Combined Analysis has a light table, from
+optogenetic members. See [Light behaviour plots](plots-catalog.md#light-behaviour-plots).
 
 Preference-index plots are offered only for two-well projects; they have no meaning with a
 single well.
 
 ## Progressive Ratio projects
 
-A Progressive Ratio Project adds two type-specific figures beside the shared faceted set:
+A Project whose type has the Progressive Ratio module adds three figures beside the shared
+faceted set:
 
 - **Paired − yoked cumulative licks since training** (`timecourse_pr_diff`) — the headline
   time course from each member's `pr_cumulative_diff.csv`. Minutes since training end on
@@ -95,9 +105,9 @@ A Progressive Ratio Project adds two type-specific figures beside the shared fac
 - **Breaking point vs Test time** (`scatter_pr_breaking_point`) — one point per chamber
   group from each member's `pr_breaking_point.csv`: x = `BreakMin` (minutes into the Test
   phase of the last counted light event), y = `BreakingPoint`. Open symbols are censored
-  (still responding when the Test window ended). Run the breaking-point step (or basic
-  analysis) in each member first. Facets and Roles are hidden; Treatments and Mark members
-  still apply.
+  (still responding when the Test window ended). Each member needs its breaking point
+  first: tick *Breaking point* and **Run analysis**, or use **Analyze all**. Facets and Roles
+  are hidden; Treatments and Mark members still apply.
 - **Breaking point by treatment** (`dot_pr_breaking_point`) — the same breaking-point
   rows with **Treatment** on the x axis (every selected treatment along one categorical
   axis) and Breaking Point on y; no Phase/Role facets. Open symbols are censored. Use the
@@ -127,7 +137,7 @@ a time course, which plots treatment means.
 The preview is rendered by the same Spec + Style that saving uses — what you see is what
 lands in `figures/`.
 
-**Render figures** writes SVG (or PDF). SVG uses `svg.fonttype='none'`, so labels arrive in
-Illustrator as live, editable text rather than outlined paths.
-
-Press **F1**, or the `?` at the end of the toolbar, to open this topic.
+**Render figures** saves `plot_specs.yaml` and then writes every figure the Project's data
+supports into `figures/`, as SVG; a script's `render_publication_figures` step can write
+PDF instead. SVG uses `svg.fonttype='none'`, so labels arrive in Illustrator as live,
+editable text rather than outlined paths.

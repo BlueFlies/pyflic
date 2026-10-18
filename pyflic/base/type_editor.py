@@ -91,6 +91,15 @@ def _split(text: str) -> list[str]:
     return [part.strip() for part in str(text or "").split(",") if part.strip()]
 
 
+def _add_help(card: Card, ref: str, tooltip: str) -> None:
+    """Put a ``?`` opening *ref* in *card*'s title row, if help is available."""
+    try:
+        from ..help import HelpButton
+    except Exception:  # noqa: BLE001 - help is optional, the editor is not
+        return
+    card.add_title_widget(HelpButton(ref, card, tooltip=tooltip))
+
+
 class ExperimentTypeEditor(QMainWindow):
     """Build, edit, copy and delete Experiment Types (ADR-0019)."""
 
@@ -116,6 +125,12 @@ class ExperimentTypeEditor(QMainWindow):
         self._loading = True
         self._build()
         self._loading = False
+        try:
+            from ..help import install_help_shortcut
+
+            install_help_shortcut(self, "app-type-editor")
+        except Exception:  # noqa: BLE001 - help is optional, the editor is not
+            pass
         self._reload_list()
         if name:
             self.open_type(name)
@@ -169,6 +184,8 @@ class ExperimentTypeEditor(QMainWindow):
         card = Card("Lab library", Category.TOOLS, icon_name="project",
                     subtitle="Where the lab's types are kept.  Point it at a shared "
                              "drive to share them.")
+        _add_help(card, "app-type-editor#the-lab-library",
+                  "Where lab types are kept, and sharing them")
         self.library_label = QLabel("")
         self.library_label.setWordWrap(True)
         self.library_label.setTextInteractionFlags(
@@ -223,14 +240,8 @@ class ExperimentTypeEditor(QMainWindow):
         card = Card("Type", Category.LOAD, icon_name="settings",
                     subtitle="What experiment_type: names, and how menus and the "
                              "report cover say it.")
-        try:
-            from ..help import HelpButton
-
-            card.add_title_widget(HelpButton(
-                "app-type-editor",
-                tooltip="The Experiment Type Editor: what a type states and where it lives"))
-        except Exception:  # noqa: BLE001 - help is optional, the editor is not
-            pass
+        _add_help(card, "app-type-editor#type",
+                  "The type's name, display name and description  (F1: this editor)")
         form = QFormLayout()
         self.name_edit = QLineEdit()
         self.name_edit.setPlaceholderText("e.g. HedonicClosedLoop  (letters, digits, _)")
@@ -251,6 +262,8 @@ class ExperimentTypeEditor(QMainWindow):
 
     def _build_shape_card(self) -> Card:
         card = Card("Layout, wells and factors", Category.ANALYZE)
+        _add_help(card, "app-type-editor#layout-wells-and-factors",
+                  "The chamber layout, the wells to name and the factors")
         form = QFormLayout()
         self.layout_combo = QComboBox()
         for label, value in _LAYOUTS:
@@ -280,6 +293,8 @@ class ExperimentTypeEditor(QMainWindow):
                     subtitle="What the Opto Program may run.  A recording whose program "
                              "runs anything else fails to load; OpenLoop and dark "
                              "intervals may run beside a set of Paradigm types.")
+        _add_help(card, "concepts-experiment-types#the-light-a-type-expects",
+                  "The light a type expects, and what fails to load")
         self.light_group = QButtonGroup(self)
         row = QHBoxLayout()
         self.light_buttons: dict[str, QRadioButton] = {}
@@ -307,6 +322,8 @@ class ExperimentTypeEditor(QMainWindow):
                     subtitle="The analyses pyflic provides that this type runs.  Each "
                              "states what it needs; the problems below say when a "
                              "choice cannot run.")
+        _add_help(card, "concepts-experiment-types#analysis-modules",
+                  "Each Analysis Module: what it adds and what it needs")
         self.module_checks: dict[str, QCheckBox] = {}
         for module in MODULES:
             check = QCheckBox(f"{module.title}  ({module.id})")
@@ -324,6 +341,8 @@ class ExperimentTypeEditor(QMainWindow):
         card = Card("Control comparisons", Category.ANALYZE,
                     subtitle="What the report leads with.  Both are optional; with both, "
                              "the Role comparison comes first.")
+        _add_help(card, "concepts-experiment-types#control-comparisons",
+                  "The Role comparison and the Treatment control")
         grid = QGridLayout()
         self.role_check = QCheckBox("Role comparison:")
         self.role_check.toggled.connect(self._on_edited)
@@ -360,6 +379,8 @@ class ExperimentTypeEditor(QMainWindow):
                     subtitle="The built-in figures the type's report draws, after its "
                              "modules' own.  A figure the layout cannot draw is "
                              "skipped.")
+        _add_help(card, "app-type-editor#plots",
+                  "The built-in figures, and Plot Specs of the type's own")
         self.plot_list = QListWidget()
         for plot_id, info in PLOT_TYPES.items():
             if info.get("module"):
@@ -401,6 +422,8 @@ class ExperimentTypeEditor(QMainWindow):
                     subtitle="The default minute cutoffs and their names.  A module "
                              "whose Facets come from the data (the Ratio analysis) "
                              "overrides them.")
+        _add_help(card, "app-type-editor#facets",
+                  "Default facet cutoffs and names, and Fixed")
         form = QFormLayout()
         self.cutoffs_edit = QLineEdit()
         self.cutoffs_edit.setPlaceholderText("e.g. 10, 70  (minutes; blank for none)")
@@ -420,6 +443,8 @@ class ExperimentTypeEditor(QMainWindow):
         card = Card("Default constants", Category.ANALYZE,
                     subtitle="Defaults under each config's constants: block, such as the "
                              "auto-removal cutoffs.  A config's own value wins.")
+        _add_help(card, "app-type-editor#default-constants",
+                  "Defaults for a config's constants: block")
         self.constants_table = QTableWidget(0, 2)
         self.constants_table.setHorizontalHeaderLabels(["Constant", "Value"])
         self.constants_table.horizontalHeader().setSectionResizeMode(
@@ -443,6 +468,8 @@ class ExperimentTypeEditor(QMainWindow):
 
     def _build_problems_card(self) -> Card:
         card = Card("Problems", Category.QC, icon_name="warning")
+        _add_help(card, "app-type-editor#problems",
+                  "What stops a type from running, and from being saved")
         self.problems_label = QLabel("")
         self.problems_label.setWordWrap(True)
         self.problems_label.setTextFormat(Qt.TextFormat.RichText)

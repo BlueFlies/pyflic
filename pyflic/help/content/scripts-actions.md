@@ -124,7 +124,7 @@ Experiment Script, nor the ones above in a Project Script.
 | `run_all_analyses` | `skip_analyzed`, `reports` | Basic analysis in every member, with its QC reports, optionally skipping every member that already has a saved `feeding_summary.csv` (stale or not) and writing each member's PDF report. Like the Hub's **Analyze all**, it does not read `global.omit` |
 | `build_combined_analysis` | — | Stack the members' saved summaries into the Combined Analysis, with pooled and mixed-model statistics |
 | `project_report` | `ai_summary` | The Project Report; builds the Combined Analysis first when it is missing — see [Reports](reports.md#the-project-report) |
-| `render_publication_figures` | `format`, `only` | Every figure in `plot_specs.yaml`, or the ids in `only`, into `figures/` — `svg` (default) or `pdf`. Skipped with a log line when the Project has no `plot_specs.yaml` |
+| `render_publication_figures` | `format`, `only` | Every figure the Project's data supports, each drawn by its Spec in `plot_specs.yaml` or its default, or only the ids in `only`, into `figures/` — `svg` (default) or `pdf`. Skipped with a log line when the Project has no `plot_specs.yaml` |
 | `generate_ai_narrative` | `provider` | The [AI summary](concepts-ai-summary.md) of the Combined Analysis, into `analysis/ai_summary.txt`; `provider` is `anthropic` (default) or `openai` |
 
 The Combined Analysis never analyses a member: one with no saved summary is omitted and

@@ -129,6 +129,27 @@ EXPERIMENT_SUBTILES = tuple(spec[0] for spec in SUBTILE_SPECS)
 _NOT_BUILT = object()
 
 
+def _help_button(ref: str, tooltip: str) -> QWidget | None:
+    """A ``?`` opening *ref*, for a control inside a card that needs more
+    than the card's own ``?`` says — or ``None`` when help does not import.
+
+    Imported here rather than at module scope, like every help call site, so
+    a broken help package costs the buttons and never the Hub."""
+    try:
+        from pyflic.help.button import HelpButton
+    except Exception:  # noqa: BLE001 - no help package, no help button
+        return None
+    return HelpButton(ref, tooltip=tooltip)
+
+
+def _add_row_help(row: QHBoxLayout, ref: str, tooltip: str) -> QWidget | None:
+    """Append a ``?`` opening *ref* to *row*; the button, or ``None``."""
+    button = _help_button(ref, tooltip)
+    if button is not None:
+        row.addWidget(button, 0, Qt.AlignmentFlag.AlignVCenter)
+    return button
+
+
 # ---------------------------------------------------------------------------
 # Worker plumbing
 # ---------------------------------------------------------------------------
@@ -314,20 +335,22 @@ class AnalysisHubWindow(QMainWindow):
     #: Tile key → help topic reference. Adding a tile means adding a line here;
     #: ``tests/test_help_refs.py`` asserts every value resolves.
     _TILE_HELP: dict[str, str] = {
-        "batch": "scripts-batch#the-review-window",
+        "batch": "app-hub#batch-panel",
         "project": "app-hub#getting-a-project-open-four-buttons-three-cases",
         "analyze": "app-hub#analyze-panel",
         "qc": "app-hub#qc-panel",
-        "plots": "plots-catalog",
+        "plots": "app-hub#plots-panel",
         "scripts": "scripts-overview",
-        "ai": "concepts-ai-summary",
+        "ai": "concepts-ai-summary#making-one",
         "tools": "app-hub#tools-panel",
     }
 
     #: (tile key, card title) → help topic, for a panel's cards after its
-    #: first, which takes the tile's entry above.
+    #: first, which takes the tile's entry above.  The controls inside a card
+    #: that need more than its ``?`` says get their own as they are built
+    #: (:func:`_add_row_help`).
     _CARD_HELP: dict[tuple[str, str], str] = {
-        ("project", "Experiments"): "concepts-project#blocked-members",
+        ("project", "Experiments"): "app-hub#the-members-table",
         ("project", "Analysis"): "app-hub#the-analysis-card",
         ("qc", "View"): "app-qc-viewer",
     }
@@ -492,6 +515,8 @@ class AnalysisHubWindow(QMainWindow):
         self.batch_script.currentIndexChanged.connect(
             self._on_batch_script_changed)
         run_row.addWidget(self.batch_script, 1)
+        _add_row_help(run_row, "scripts-batch#which-script-runs",
+                      "Which Project Script a Batch Run executes in each Project")
         self.batch_run_btn = ActionButton("Run Batch", Category.SCRIPTS, "play",
                                           primary=True)
         self.batch_run_btn.setToolTip(
@@ -508,7 +533,13 @@ class AnalysisHubWindow(QMainWindow):
             "own narratives into batch_ai_narrative.md at the batch folder — "
             "results across the batch, design problems, and Projects that "
             "lost a lot of chambers.")
-        card.add_body(self.chk_batch_narrative)
+        narrative_row = QHBoxLayout()
+        narrative_row.setContentsMargins(0, 0, 0, 0)
+        narrative_row.addWidget(self.chk_batch_narrative)
+        _add_row_help(narrative_row, "scripts-batch#ai-narrative-of-the-batch",
+                      "The AI narrative of a batch: what it needs and writes")
+        narrative_row.addStretch(1)
+        card.add_body(narrative_row)
 
         ## A Batch Run touches every member of every Project, so the figure
         ## and artifact tabs it would open run into the hundreds and bury the
@@ -620,9 +651,19 @@ class AnalysisHubWindow(QMainWindow):
             "re-run to reflect it.")
         self.type_drift_btn.clicked.connect(self._update_type_copy)
         card.add_body(self.type_drift_label)
-        card.add_body(self.type_drift_btn)
+        drift_row = QHBoxLayout()
+        drift_row.setContentsMargins(0, 0, 0, 0)
+        drift_row.addWidget(self.type_drift_btn)
+        ## Shown and hidden with the button it explains.
+        self._type_drift_help = _add_row_help(
+            drift_row, "concepts-experiment-types#where-types-live",
+            "A lab type's copy beside project.yaml, and the library's master")
+        drift_row.addStretch(1)
+        card.add_body(drift_row)
         self.type_drift_label.setVisible(False)
         self.type_drift_btn.setVisible(False)
+        if self._type_drift_help is not None:
+            self._type_drift_help.setVisible(False)
         self.panels["project"].add_card(card)
 
     def _build_project_experiments_card(self) -> None:
@@ -676,6 +717,11 @@ class AnalysisHubWindow(QMainWindow):
                                     self.init_member_btn, self.scaffold_btn)):
             member_grid.addWidget(button, 0, i)
             member_grid.setColumnStretch(i, 1)
+        member_help = _help_button(
+            "app-hub#adding-a-member-the-same-three-cases-one-level-down",
+            "Which of the three buttons fits the folder you have")
+        if member_help is not None:
+            member_grid.addWidget(member_help, 0, 3, Qt.AlignmentFlag.AlignVCenter)
         card.add_body(member_grid)
 
         ## The one repair that is safe in bulk keeps its own row, and stays
@@ -691,6 +737,8 @@ class AnalysisHubWindow(QMainWindow):
             "overwritten.")
         self.file_btn.clicked.connect(self._file_unfiled)
         self.repair_row.addWidget(self.file_btn)
+        _add_row_help(self.repair_row, "concepts-project#blocked-members",
+                      "Blocked members: the red rows, why each is blocked and its fix")
         self.repair_row.addStretch(1)
         card.add_body(self.repair_row)
 
@@ -704,6 +752,8 @@ class AnalysisHubWindow(QMainWindow):
         self.spin_workers.setRange(0, 64)
         self.spin_workers.setSpecialValueText("auto")
         opts.addWidget(self.spin_workers)
+        _add_row_help(opts, "performance#parallel-loading",
+                      "Parallel loading and the worker count")
         opts.addStretch(1)
         card.add_body(opts)
         self.panels["project"].add_card(card)
@@ -798,6 +848,8 @@ class AnalysisHubWindow(QMainWindow):
         self.project_script = QComboBox()
         self.project_script.setMinimumWidth(200)
         srow.addWidget(self.project_script, 1)
+        _add_row_help(srow, "scripts-overview#two-levels",
+                      "Project Scripts: what they act on, and how they reach members")
         self.run_project_script_btn = ActionButton("Run script",
                                                    Category.NEUTRAL,
                                                    "play", primary=True)
@@ -1239,6 +1291,8 @@ class AnalysisHubWindow(QMainWindow):
         self.ai_provider = QComboBox()
         self.ai_provider.currentTextChanged.connect(self._refresh_ai_models)
         row.addWidget(self.ai_provider, 1)
+        _add_row_help(row, "concepts-ai-summary#providers-and-keys",
+                      "AI providers, and where pyflic looks for their API keys")
         card.add_body(row)
 
         mrow = QHBoxLayout()
@@ -2673,6 +2727,8 @@ class AnalysisHubWindow(QMainWindow):
         self.type_drift_label.setText(f"⚠ {drift}" if drift else "")
         self.type_drift_label.setVisible(bool(drift))
         self.type_drift_btn.setVisible(bool(drift))
+        if self._type_drift_help is not None:
+            self._type_drift_help.setVisible(bool(drift))
 
     def _update_type_copy(self) -> None:
         """Replace the Project's copy with the library's master, and reload."""
@@ -3539,7 +3595,19 @@ class MemberConfigsDialog(QDialog):
             "data/ — ids with no entry are added with chambers unassigned, "
             "and entries with no data are flagged rather than dropped.")
         heading.setWordWrap(True)
-        outer.addWidget(heading)
+        heading_row = QHBoxLayout()
+        heading_row.addWidget(heading, 1)
+        help_ = _help_button("concepts-project#the-member-configs-dialog",
+                             "What scaffolding a member's config does  (F1)")
+        if help_ is not None:
+            heading_row.addWidget(help_, 0, Qt.AlignmentFlag.AlignTop)
+        outer.addLayout(heading_row)
+        try:
+            from pyflic.help.button import install_help_shortcut
+
+            install_help_shortcut(self, "concepts-project#the-member-configs-dialog")
+        except Exception:  # noqa: BLE001 - no help package, no F1
+            pass
 
         self._list = QListWidget()
         self._list.itemDoubleClicked.connect(self._on_double_click)
