@@ -920,7 +920,9 @@ class OptoLightQC:
     # ------------------------------------------------------------------
 
     def report_glance_blocks(self) -> list[Any]:
-        """The cover's callout: how many Linkage Groups failed or warned."""
+        """The cover's callout: how many Linkage Groups failed or warned, and
+        how many groups each failing and each warning flag was raised on
+        (the rule checks' among them, on a firmware 4.0.0 recording)."""
         from . import report_layout as rl
 
         if not self.active:
@@ -931,17 +933,24 @@ class OptoLightQC:
         warned = table[table["Verdict"] == VERDICT_WARNING]
         name = lambda rows: "; ".join(f"DFM {int(r.DFM)} group {r.Group}"  # noqa: E731
                                       for r in rows.itertuples())
+        firmware4 = GENERATION_PARADIGM in self.generations().values()
         if not failed.empty:
             excluded = int(failed["Excluded"].sum())
-            text = (f"{len(failed)} of {n} linkage groups failed ({name(failed)})"
+            text = (f"{len(failed)} of {n} linkage groups failed ({name(failed)}): "
+                    f"{_flag_counts(failed, oq.FAILING_FLAGS)}"
                     + (f"; {excluded} excluded." if excluded else
                        "; kept and flagged, because exclude_failed_opto_chambers is off."))
             tone = "failed"
+        elif firmware4:
+            text = (f"Every linkage group's light was explained by its licks and kept its "
+                    f"Paradigm's rule ({n} of {n}).")
+            tone = "ok"
         else:
             text = f"Every linkage group's light was explained by its licks ({n} of {n})."
             tone = "ok"
         if not warned.empty:
-            text += f"  {len(warned)} warning(s): {name(warned)} — see Quality control."
+            text += (f"  {len(warned)} warning(s), {name(warned)}: "
+                     f"{_flag_counts(warned, oq.WARNING_FLAGS)} — see Quality control.")
             tone = "warning" if tone == "ok" else tone
         if self.program is None:
             text += "  No Program.txt: the check is limited."
@@ -955,18 +964,42 @@ class OptoLightQC:
 
         if not self.active:
             return []
+        from . import rule_figures
+
         settings = self.settings()
-        blocks: list[Any] = [
-            rl.Heading("Optogenetic light QC", level=2),
-            rl.Paragraph(
+        generations = self.generations()
+        firmware4 = GENERATION_PARADIGM in generations.values()
+        if firmware4:
+            ## Generation 3 records each Activation's light, and each Paradigm's
+            ## rule is checked below; generations 1 and 2 keep the decay rule.
+            rules = rule_figures.rule_sections(self)
+            intro = (
+                "The firmware lights a linkage group from its own reading of the group's "
+                "trigger wells during the run; pyflic counts licks afterwards, from the "
+                "baselined signal.  On a firmware 4.0.0 recording each Activation's light is "
+                "recorded to the millisecond: a fixed-length Activation is explained when "
+                "its trigger well had a lick or a touch at its onset, closed-loop light when "
+                "one came within the Hold, plus "
+                f"{settings.tolerance_samples} sample(s), before it.  Unexplained light — "
+                "light with no lick behind it — is the sign of a drifting sensor, a "
+                "sustained contact or a hardware fault.  "
+                + ("Each Paradigm is also checked against its own rule, one Activation at a "
+                   "time, with Program.txt's settings: one subsection per Paradigm follows "
+                   "the figures.  " if rules else
+                   "Each Paradigm's own rule is checked only with Program.txt's settings, "
+                   "and this recording has none for its firmware 4.0.0 DFMs.  ")
+                + "Computed over the whole recording.")
+        else:
+            rules = []
+            intro = (
                 "The firmware lights a linkage group from its own reading of the group's "
                 "trigger wells during the run; pyflic counts licks afterwards, from the "
                 "baselined signal.  A lit sample is explained when a trigger well has a "
                 "lick or a touch within the interval's light decay, plus "
                 f"{settings.tolerance_samples} sample(s), before it.  Unexplained light — "
                 "light with no lick behind it — is the sign of a drifting sensor, a "
-                "sustained contact or a hardware fault.  Computed over the whole recording."),
-        ]
+                "sustained contact or a hardware fault.  Computed over the whole recording.")
+        blocks: list[Any] = [rl.Heading("Optogenetic light QC", level=2), rl.Paragraph(intro)]
         program_tone = "info" if self.program is not None else "warning"
         blocks.append(rl.Callout(self.program_line(), tone=program_tone, title="Program"))
         program = self.program_table()
@@ -975,8 +1008,6 @@ class OptoLightQC:
                                    caption="The program, as the MCU echoed it",
                                    formats={"Minutes": "{:g}"}))
         table = self.qc_table()
-        generations = self.generations()
-        firmware4 = GENERATION_PARADIGM in generations.values()
         columns: dict[str, Any] = {
             "DFM": table["DFM"], "Group": table["Group"], "Wells": table["Wells"],
             "Chambers": table["Chambers"]}
@@ -1025,6 +1056,9 @@ class OptoLightQC:
                 height=min(8.4, 1.45 * self.plot_rows(dfm_id) + 0.9),
                 title=f"Light explained by licks — DFM {dfm_id}",
                 caption=caption))
+        ## Each Paradigm against its own rule (stream S3).
+        if rules:
+            blocks += rule_figures.report_blocks(self, rules)
         return blocks
 
     def _bullets(self) -> list[str]:
@@ -1043,3 +1077,17 @@ class OptoLightQC:
         if current:
             items.append(current)
         return items
+
+
+def _flag_counts(rows: pd.DataFrame, kinds) -> str:
+    """How many of *rows*' Linkage Groups raised each flag of *kinds*, in
+    *kinds*' order: ``wrong activation length in 2 groups, lockout broken in
+    1 group`` — the glance callout's count."""
+    counts: dict[str, int] = {}
+    for flags in rows["Flags"]:
+        for flag in _split_flags(flags):
+            if flag in kinds:
+                counts[flag] = counts.get(flag, 0) + 1
+    ordered = sorted(counts, key=list(kinds).index)
+    return ", ".join(f"{flag} in {counts[flag]} group{'s' if counts[flag] != 1 else ''}"
+                     for flag in ordered) or "—"

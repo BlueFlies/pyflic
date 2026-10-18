@@ -6,15 +6,19 @@ Laid out by :mod:`pyflic.base.report_layout` on fixed US Letter pages:
   verdicts at a glance, and the contents.
 * **1 Quality control** — per-DFM data integrity, two-well cross-talk
   (simultaneous feeding, bleeding), the Program timeline of each DFM with a
-  program or a Paradigm state, the chambers excluded and why, then the
-  Experiment Type's own checks (:meth:`Experiment.report_qc_blocks`;
-  Progressive Ratio: training and the light QC).
+  program or a Paradigm state, the chambers excluded and why, the
+  optogenetic light QC (on a firmware 4.0.0 recording with each Paradigm's
+  rule checks, :mod:`pyflic.base.rule_figures`), then the Experiment Type's
+  own checks (:meth:`Experiment.report_qc_blocks`; Progressive Ratio:
+  training and its light QC).
 * **2 Results** — the inference figures with their statistics, chosen by the
   Chamber Layout (two-well: preference, then consumption; single-well:
   consumption) and extended or replaced by the Experiment Type
   (:meth:`Experiment.report_results_blocks`; Progressive Ratio: the
   paired − yoked difference and the breaking point), then for an
-  optogenetic member the light table's **Light behaviour**.
+  optogenetic member the light table's **Light behaviour**, one subsection
+  per Paradigm Family the program runs, and **Paired and yoked** where a
+  Linkage Group yokes chambers to a Paired one.
 * **Appendix A** — every feeding metric by treatment; **Appendix B** — the
   analysis settings.
 
@@ -468,9 +472,13 @@ def _timeline_blocks(experiment: Experiment) -> list[Any]:
     (:mod:`pyflic.base.program_timeline`)."""
     from . import program_timeline
 
+    from .paradigm_state import GENERATION_PARADIGM
+
     ids = program_timeline.timeline_dfms(experiment)
     if not ids:
         return []
+    firmware4 = any(getattr(experiment.dfms[d], "generation", None) == GENERATION_PARADIGM
+                    for d in ids)
     blocks: list[Any] = [
         rl.Heading("Program timeline", level=2),
         rl.Paragraph(
@@ -479,7 +487,10 @@ def _timeline_blocks(experiment: Experiment) -> list[Any]:
             "(Phase A) shaded, its Activations as ticks and the share of each bin its LED "
             "was on.  A firmware 4.0.0 recording states all of this row by row; an older "
             "one is laid out from Program.txt's clock times and shows the sampled light "
-            "only."),
+            "only."
+            + ("  On a firmware 4.0.0 recording a lane is also hatched where Program.txt "
+               "sets its well On and grey where it sets it Off, and each restart of the "
+               "DFM is a red band." if firmware4 else "")),
     ]
     ## The figure titles itself ("DFM n — Program timeline").
     for dfm_id in ids:
@@ -700,16 +711,41 @@ def _generic_results(experiment: Experiment, options: ReportOptions) -> list[Any
     return blocks
 
 
+def _light_programs(experiment: Experiment) -> tuple[list, dict]:
+    """``([(program, DFMs)], {(None, DFM): light keys})`` of the member's
+    generation-3 DFMs the light QC covers, for the *Light behaviour*
+    subsections (:func:`report_content.light_families`)."""
+    from .paradigm_state import GENERATION_PARADIGM
+
+    program = getattr(experiment, "opto_program", None)
+    ids = [d for d in experiment.opto.dfm_ids()
+           if int(getattr(experiment.dfms[d], "generation", 0) or 0) == GENERATION_PARADIGM]
+    if program is None or not ids:
+        return [], {}
+    return [(program, ids)], {(None, int(d)): rc.program_light_keys(program, [d]) for d in ids}
+
+
+def _facet_frames(rows: pd.DataFrame, facet_col: str | None) -> list[tuple[str, pd.DataFrame]]:
+    if facet_col:
+        labels = list(dict.fromkeys(rows[facet_col].astype(str)))
+        return [(label, rows[rows[facet_col].astype(str) == label]) for label in labels]
+    return [("Whole recording", rows)]
+
+
 def _light_results(experiment: Experiment, options: ReportOptions) -> list[Any]:
     """"Light behaviour", after the feeding results, for an optogenetic
-    member: a dot plot per headline metric of the light table by Treatment,
-    per Facet when the experiment has them, with the generic treatment
-    comparisons (decision 17).  A metric no row defines (its Paradigm type
-    does not, or the recording predates firmware 4.0.0) is left out."""
+    member: one subsection per Paradigm Family the program runs (decision 9;
+    fixed length by its branch, and the Acclimation), each with a dot plot
+    per headline metric of the light table by Treatment, per Facet when the
+    experiment has them, and the generic treatment comparisons; open loop
+    adds *Feeding in light and dark* (decision 11).  A member whose program
+    runs no family (no generation-3 DFM, or no program) keeps the four
+    metrics of before in one section.  A metric no row defines is left out
+    and named.  Then *Paired and yoked* when a Linkage Group yokes chambers
+    to a Paired one (decision 12)."""
     if not experiment.is_optogenetic:
         return []
     from . import light_summary as ls
-    from .analytics import treatment_comparisons
 
     facet = ls.light_summary_facet(experiment)
     if facet is not None and not facet.empty:
@@ -721,13 +757,123 @@ def _light_results(experiment: Experiment, options: ReportOptions) -> list[Any]:
     blocks: list[Any] = [rl.Heading("Light behaviour", level=2)]
     if kept is None or kept.empty:
         return blocks + [rl.Callout("No chamber with a treatment has a light table row.",
-                                    tone="warning")]
-    if facet_col:
-        labels = list(dict.fromkeys(kept["Facet"].astype(str)))
-        frames = [(label, kept[kept["Facet"].astype(str) == label]) for label in labels]
-    else:
-        frames = [("Whole recording", kept)]
-    ## The headline metrics of the families the program runs (decision 9).
+                                    tone="warning")] + _yoked_blocks(experiment, options)
+    programs, keys = _light_programs(experiment)
+    families = rc.light_families(programs)
+    if not families:
+        return (blocks + _light_headline_blocks(experiment, frame, kept, facet_col, options)
+                + _yoked_blocks(experiment, options))
+    per = "per Facet" if facet_col else "over the whole recording"
+    blocks.append(rl.Paragraph(
+        f"What the light did, from the light table (analysis/light_summary.csv), one point "
+        f"per chamber, {per}, under each Paradigm Family the program runs: each family's "
+        f"own measures, for the chambers that ran it.  A chamber whose window ran Paradigms "
+        f"of several families shows under each.  The diamond and bars are the treatment "
+        f"mean ± SEM."
+        + _role_sentence(frame, kept)))
+    compare = options.include_comparison and len(rc.treatment_levels(kept)) != 1
+    for family in families:
+        rows = family.rows(kept, keys)
+        blocks += _light_family_blocks(experiment, family, rows, facet_col, compare=compare)
+    return blocks + _yoked_blocks(experiment, options)
+
+
+def _role_sentence(frame: pd.DataFrame, kept: pd.DataFrame) -> str:
+    """What the Roles do to the statistics (decision 12): Progressive Ratio
+    compares its paired chambers only; under any other type a yoked fly
+    keeps its lit time, and the Activation statistics leave it out."""
+    if len(kept) < len(frame):
+        return "  Paired chambers only: a yoked fly's light is its partner's."
+    roles = kept["Role"].astype(str) if "Role" in kept.columns else pd.Series(dtype=str)
+    if (roles == "Yoked").any():
+        return ("  Yoked chambers keep their lit time, beside their partners'; the "
+                "statistics of Activations and the other Activation measures compare the "
+                "chambers that earn light (Paired, Self, Mutual).")
+    return ""
+
+
+def _light_family_blocks(experiment: Experiment, family, rows: pd.DataFrame | None,
+                         facet_col: str | None, *, compare: bool) -> list[Any]:
+    """One family's subsection of *Light behaviour*: its dot plots, two to a
+    row, the open-loop *Feeding in light and dark*, and the comparisons."""
+    from .analytics import treatment_comparisons
+    from .paradigm_families import OPEN_LOOP
+
+    blocks: list[Any] = [rl.Heading(f"Light behaviour: {family.title}", level=2)]
+    if rows is None or rows.empty:
+        return blocks + [rl.Paragraph(f"No chamber with a treatment ran it: {family.about}.",
+                                      color=rl.MUTED, italic=True)]
+    metrics = [m for m in family.metrics
+               if m in rows.columns and pd.to_numeric(rows[m], errors="coerce").notna().any()]
+    missing = [m for m in family.metrics if m not in metrics]
+    blocks.append(rl.Paragraph(
+        f"{family.about[0].upper()}{family.about[1:]}."
+        + (f"  Not defined here: {', '.join(rc.metric_label(m) for m in missing)}."
+           if missing else "")))
+    pending: list[rl.Plot] = []
+    for metric in metrics:
+        label = rc.metric_label(metric)
+        ## Half the width each, a last one alone too, as the Project's.
+        pending.append(rl.Plot(_dot(experiment, rows, metric, label, facet_col), title=label,
+                               width=(rl.CONTENT_W - 0.25) / 2))
+        if len(pending) == 2:
+            blocks.append(rl.PlotRow(pending, height=3.0))
+            pending = []
+    if pending:
+        blocks.append(rl.PlotRow(pending, height=3.0))
+    if family.key == OPEN_LOOP:
+        blocks.append(rl.Plot(lambda: rc.light_dark_plot(rows, facet_col=facet_col),
+                              height=3.0, title="Feeding in light and dark",
+                              caption="Each open-loop chamber's licks per minute in its own "
+                                      "light and in the dark, joined by a line; the diamond "
+                                      "is the treatment mean.  The light feeding index above "
+                                      "is (lit − dark) / (lit + dark) of the two."))
+    if compare and metrics:
+        blocks += rc.stats_table(treatment_comparisons(_facet_frames(rows, facet_col), metrics),
+                                 caption=f"Treatment comparisons: light behaviour, "
+                                         f"{family.title}",
+                                 show_phase=bool(facet_col))
+    return blocks
+
+
+def _yoked_blocks(experiment: Experiment, options: ReportOptions) -> list[Any]:
+    """*Paired and yoked* (decision 12): where a Linkage Group yokes
+    chambers to a Paired one, under any type but Progressive Ratio (which
+    keeps its own), the paired fly's feeding minus its yoked partners', by
+    treatment (:func:`analytics.yoked_comparison`, :mod:`yoked_report`)."""
+    from . import analytics
+    from . import yoked_report as yr
+
+    if not analytics.yoked_groups(experiment):
+        return []
+    frame = analytics.yoked_comparison(experiment, range_minutes=options.range_minutes,
+                                       transform_licks=options.transform_licks)
+    tables = yr.yoked_table_blocks(frame, well_names=experiment.well_names or {},
+                                   two_well=_is_two_well(experiment),
+                                   include_comparison=options.include_comparison)
+    if not tables:
+        return []
+    return [rl.Heading("Paired and yoked", level=2),
+            rl.Paragraph("A Linkage Group that lights a Paired chamber's fly by its own "
+                         "feeding lights its Yoked chambers at the same moments, whatever "
+                         "their flies do.  Per group, the paired fly's feeding minus the mean "
+                         "of its yoked partners', by treatment: is the paired fly different "
+                         "(against zero), and do treatments differ?"),
+            *tables,
+            *yr.yoked_figure_blocks(frame, well_names=experiment.well_names or {},
+                                    factors=experiment.design_factors)]
+
+
+def _light_headline_blocks(experiment: Experiment, frame: pd.DataFrame, kept: pd.DataFrame,
+                           facet_col: str | None, options: ReportOptions) -> list[Any]:
+    """*Light behaviour* as before the Paradigm Families, for a member whose
+    program runs none (generations 1 and 2, or no program): the four
+    metrics of before, in one section."""
+    from . import light_summary as ls
+    from .analytics import treatment_comparisons
+
+    blocks: list[Any] = []
+    frames = _facet_frames(kept, facet_col)
     headline = ls.experiment_headline_metrics(experiment)
     metrics = [m for m in headline
                if m in kept.columns and pd.to_numeric(kept[m], errors="coerce").notna().any()]

@@ -1432,31 +1432,41 @@ class Project:
             return lines
 
         if diff is not None:
-            ## Progressive Ratio: the within-group difference is the primary
-            ## result (one observation per Chamber Group); per-chamber tables
-            ## follow as the secondary section.
-            out.append("Paired − yoked difference (primary; one observation "
-                       "per chamber group)")
-            out.append(f"Chamber groups pooled : {len(diff)}")
-            out.append("")
-            if diff_rows:
-                out.extend(_table(diff_rows))
+            from .experiment_types.progressive_ratio import pooled_yoked_controls
+
+            if diff.empty and not pooled_yoked_controls(self):
+                ## Decision 13: a design of solo groups has no difference to
+                ## take; said once, where it would have been.
+                out.append("Paired − yoked difference: none; the design has no yoked "
+                           "controls (every chamber group is one chamber, lit by its own "
+                           "fly alone)")
+                out.append("")
             else:
-                out.append("(no comparable treatment groups found)")
-            out.append("")
-            out.append("Paired − yoked difference against zero (is the paired fly "
-                       "different from its yoked partner?)")
-            out.append("p_t: paired t-test, a one-sample t-test on the differences; "
-                       "p_wilcoxon: signed-rank test; p_mixed: mixed-model intercept, "
-                       "DFM nested within Experiment.")
-            out.append("")
-            zero_rows = self.diff_zero_rows(diff)
-            if zero_rows:
-                out.extend(_zero_table(zero_rows))
-                out.append("* p_t < 0.05")
-            else:
-                out.append("(no treatment with two or more differences to test)")
-            out.append("")
+                ## Progressive Ratio: the within-group difference is the primary
+                ## result (one observation per Chamber Group); per-chamber tables
+                ## follow as the secondary section.
+                out.append("Paired − yoked difference (primary; one observation "
+                           "per chamber group)")
+                out.append(f"Chamber groups pooled : {len(diff)}")
+                out.append("")
+                if diff_rows:
+                    out.extend(_table(diff_rows))
+                else:
+                    out.append("(no comparable treatment groups found)")
+                out.append("")
+                out.append("Paired − yoked difference against zero (is the paired fly "
+                           "different from its yoked partner?)")
+                out.append("p_t: paired t-test, a one-sample t-test on the differences; "
+                           "p_wilcoxon: signed-rank test; p_mixed: mixed-model intercept, "
+                           "DFM nested within Experiment.")
+                out.append("")
+                zero_rows = self.diff_zero_rows(diff)
+                if zero_rows:
+                    out.extend(_zero_table(zero_rows))
+                    out.append("* p_t < 0.05")
+                else:
+                    out.append("(no treatment with two or more differences to test)")
+                out.append("")
             breaking = self.combined_breaking_point_frame()
             if breaking is not None:
                 from .analytics import as_bool

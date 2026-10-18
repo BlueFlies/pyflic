@@ -757,8 +757,11 @@ class FeedingSummaryTab(QtWidgets.QWidget):
 
 class _ProgramPanel(QtWidgets.QWidget):
     """A DFM tab's **Program** sub-tab: the Program timeline
-    (:func:`pyflic.base.program_timeline.plot_dfm`) above each Well's state
-    at the end of the loaded range (:func:`~pyflic.base.program_timeline.well_table`).
+    (:func:`pyflic.base.program_timeline.plot_dfm`) above two tables, each
+    Well's state at the end of the loaded range
+    (:func:`~pyflic.base.program_timeline.well_table`) and, on a firmware 4.0.0
+    recording, the DFM's *Activations*, the ledger's rows of
+    ``opto_light_events.csv`` (:func:`~pyflic.base.program_timeline.activations_table`).
 
     Computed from the loaded experiment, not read from ``qc/``, and drawn the
     first time the sub-tab is shown: a viewer with many DFMs does not draw
@@ -785,6 +788,7 @@ class _ProgramPanel(QtWidgets.QWidget):
         splitter.setSizes([520, 300])
         root.addWidget(splitter, 1)
         self.table: _DfTableWidget | None = None
+        self.activations: _DfTableWidget | None = None
 
     def showEvent(self, event) -> None:  # noqa: N802 - Qt's name
         super().showEvent(event)
@@ -809,6 +813,7 @@ class _ProgramPanel(QtWidgets.QWidget):
                 if item.widget():
                     item.widget().deleteLater()
         self.table = None
+        self.activations = None
         try:
             import io
 
@@ -830,11 +835,37 @@ class _ProgramPanel(QtWidgets.QWidget):
         except Exception as exc:  # noqa: BLE001
             self._table_host.addWidget(QtWidgets.QLabel(f"Could not compute the wells: {exc}"))
             return
-        self._table_host.addWidget(QtWidgets.QLabel(
+        tabs = QtWidgets.QTabWidget()
+        wells = QtWidgets.QWidget()
+        wells_layout = QtWidgets.QVBoxLayout(wells)
+        wells_layout.setContentsMargins(0, 4, 0, 0)
+        wells_layout.addWidget(QtWidgets.QLabel(
             "<b>Each well at the end of the loaded range</b> — Activations and LitSec "
             "over the whole range"))
         self.table = _DfTableWidget(frame.astype(object).where(frame.notna(), "—"))
-        self._table_host.addWidget(self.table)
+        wells_layout.addWidget(self.table)
+        tabs.addTab(wells, "Wells")
+        ## The DFM's Activations, one row each (firmware 4.0.0 only).
+        try:
+            activations = program_timeline.activations_table(self._exp, self._dfm_id)
+        except Exception as exc:  # noqa: BLE001 - a view must not take the window down
+            activations = None
+            tabs.addTab(QtWidgets.QLabel(f"Could not list the Activations: {exc}"),
+                        "Activations")
+        if activations is not None and not activations.empty:
+            page = QtWidgets.QWidget()
+            page_layout = QtWidgets.QVBoxLayout(page)
+            page_layout.setContentsMargins(0, 4, 0, 0)
+            page_layout.addWidget(QtWidgets.QLabel(
+                f"<b>{len(activations)} Activations</b> of this DFM's trigger wells, as "
+                f"qc/opto/opto_light_events.csv has them: K is the Main Activation's "
+                f"number in its Paradigm-state run, LitMs its lit time, EndedBy what "
+                f"ended it; Overlap means other light merged with it"))
+            self.activations = _DfTableWidget(
+                activations.astype(object).where(activations.notna(), "—"))
+            page_layout.addWidget(self.activations)
+            tabs.addTab(page, "Activations")
+        self._table_host.addWidget(tabs)
 
 
 # ───────────────────────────────────────────────────────────────────────────

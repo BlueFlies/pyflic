@@ -27,6 +27,7 @@ import pandas as pd
 from . import pubfigures
 from . import report_content as rc
 from . import report_layout as rl
+from .paradigm_families import OPEN_LOOP
 
 
 def member_table(project) -> pd.DataFrame:
@@ -113,23 +114,30 @@ def cover_text(project, summary: pd.DataFrame | None,
     return "\n".join(lines)
 
 
-def _pooled_figure(project, plot_id: str, facet, binned, specs):
+def _pooled_figure(project, plot_id: str, facet, binned, specs, *, source=None):
     """A pooled figure for *plot_id* from the Combined Analysis, or ``None``.
 
     Uses the same Spec+Style the Plot Editor saves, so the report's figure and
     the curated vector figure cannot drift apart in content — only in size.
+    *source* replaces the frame the plot draws from (the light table's rows
+    of one Paradigm Family).  A breaking-point figure takes its tidy rows
+    (:func:`pubfigures.breaking_point_data`), as the Plot Editor draws it.
     """
     info = pubfigures.PLOT_TYPES[plot_id]
     family = info["family"]
-    source = pubfigures.frame_for(plot_id, facet, binned, project)
+    if source is None:
+        source = pubfigures.frame_for(plot_id, facet, binned, project)
     if source is None or source.empty:
         return None
     ## A figure from another table (the light table) orders its own Facets.
     label_order = pubfigures.facet_order(
         facet if pubfigures.source_of(plot_id) == "facet" else source)
-    df = (pubfigures.timecourse_data(source, info["metric"])
-          if family == pubfigures.FAMILY_TIMECOURSE
-          else pubfigures.faceted_data(source, info["metric"], label_order))
+    if family == pubfigures.FAMILY_TIMECOURSE:
+        df = pubfigures.timecourse_data(source, info["metric"])
+    elif family == pubfigures.FAMILY_SCATTER:
+        df = pubfigures.breaking_point_data(source)
+    else:
+        df = pubfigures.faceted_data(source, info["metric"], label_order)
     if df.empty:
         return None
     spec = specs.plots.get(plot_id)
@@ -389,6 +397,10 @@ def _results_blocks(project, summary: pd.DataFrame, facet) -> list[Any]:
     if single:
         blocks.append(rc.single_treatment_note(levels[0]))
     diff = project.combined_diff_frame()
+    if diff is not None and diff.empty:
+        ## A design without yoked controls writes an empty table (decision
+        ## 13); the type's own results say so once.
+        diff = None
     diff_rows = project.diff_comparison_rows(diff)
     if diff is not None:
         if not single:
@@ -407,20 +419,139 @@ def _results_blocks(project, summary: pd.DataFrame, facet) -> list[Any]:
         blocks += rc.stats_table(rows, caption=caption, well_names=names, show_phase=True,
                                  two_well=two_well)
     blocks += _light_blocks(project, specs, compare=not single)
+    blocks += _yoked_blocks(project)
     return blocks
+
+
+def _member_programs(project, light: pd.DataFrame | None) -> tuple[list, dict]:
+    """``([(program, DFMs)], {(member, DFM): light keys})``: each member's
+    ``data/Program.txt`` with the DFMs its saved light table records as
+    generation 3, as :meth:`Project.light_headline_metrics` reads them, for
+    the *Light behaviour* subsections (:func:`report_content.light_families`)."""
+    from . import opto_program as op
+    from .paradigm_state import GENERATION_PARADIGM
+
+    if light is None or not {"Experiment", "DFM", "Generation"} <= set(light.columns):
+        return [], {}
+    generation = pd.to_numeric(light["Generation"], errors="coerce")
+    programs: list = []
+    keys: dict = {}
+    for name, rows in light[generation == GENERATION_PARADIGM].groupby("Experiment", sort=False):
+        try:
+            path = op.find_program(os.path.join(project.member_dir(str(name)), "data"))
+            program = op.read_program(path) if path is not None else None
+        except (op.ProgramError, OSError, ValueError):
+            program = None
+        ids = sorted({int(d) for d in pd.to_numeric(rows["DFM"], errors="coerce").dropna()})
+        programs.append((program, ids))
+        for d in ids:
+            keys[(str(name), d)] = rc.program_light_keys(program, [d])
+    return programs, keys
 
 
 def _light_blocks(project, specs, *, compare: bool = True) -> list[Any]:
     """"Light behaviour": the stacked light table pooled as the feeding
-    metrics are — a faceted figure per headline metric and the treatment
-    comparisons — for a Project with optogenetic Members; nothing otherwise."""
+    metrics are, one subsection per Paradigm Family the members' programs run
+    (decision 9; fixed length by its branch, and the Acclimation) — a faceted
+    figure per headline metric, open loop's *Feeding in light and dark*, and
+    the treatment comparisons, per chamber — for a Project with optogenetic
+    Members; nothing otherwise.  A Project whose members' programs run no
+    family (recorded before firmware 4.0.0) keeps the four metrics of before
+    in one section."""
     from .light_summary import behaviour_rows
 
     frames = project.combined_light_frames()
     light = frames.get("LightSummary")
     if light is None:
         return []
-    ## The headline metrics of the families the Members run (decision 9).
+    programs, keys = _member_programs(project, light)
+    families = rc.light_families(programs)
+    if not families:
+        return _light_headline_blocks(project, specs, frames, compare=compare)
+    kept = behaviour_rows(light)
+    kept_facet = behaviour_rows(frames.get("LightSummary_Facet"))
+    paired_only = len(kept) < len(light)
+    yoked = "Role" in kept.columns and (kept["Role"].astype(str) == "Yoked").any()
+    blocks: list[Any] = [
+        rl.Heading("Light behaviour", level=2),
+        rl.Paragraph(
+            "What the light did, from every optogenetic member's light table, one point per "
+            "chamber, under each Paradigm Family the members' programs run: each family's "
+            "own measures, for the chambers that ran it.  A chamber whose window ran "
+            "Paradigms of several families shows under each.  Members recorded before DFM "
+            "firmware 4.0.0 have lit time only (from OptoCol1)."
+            + ("  The statistics compare paired chambers: a yoked fly's light is its "
+               "partner's." if paired_only else "")
+            + ("  Yoked chambers keep their lit time, beside their partners'; the statistics "
+               "of Activations and the other Activation measures compare the chambers that "
+               "earn light (Paired, Self, Mutual)." if yoked and not paired_only else "")),
+    ]
+    for family in families:
+        rows = family.rows(kept, keys)
+        facet_rows = family.rows(kept_facet, keys)
+        blocks += _light_family_blocks(project, specs, family, rows, facet_rows,
+                                       compare=compare)
+    return blocks
+
+
+def _light_family_blocks(project, specs, family, rows: pd.DataFrame,
+                         facet_rows: pd.DataFrame | None, *, compare: bool) -> list[Any]:
+    """One family's subsection of the pooled *Light behaviour*."""
+    blocks: list[Any] = [rl.Heading(f"Light behaviour: {family.title}", level=2)]
+    if rows is None or rows.empty:
+        return blocks + [rl.Paragraph(f"No pooled chamber ran it: {family.about}.",
+                                      color=rl.MUTED, italic=True)]
+    ## The figures' source, as the Plot Editor's: the faceted table when
+    ## there is one.
+    source = facet_rows if facet_rows is not None and not facet_rows.empty else rows
+    metrics = [m for m in family.metrics
+               if m in rows.columns and pd.to_numeric(rows[m], errors="coerce").notna().any()]
+    missing = [m for m in family.metrics if m not in metrics]
+    blocks.append(rl.Paragraph(
+        f"{family.about[0].upper()}{family.about[1:]}."
+        + (f"  Not defined here: {', '.join(rc.metric_label(m) for m in missing)}."
+           if missing else "")))
+    pending: list[rl.Plot] = []
+    for metric in metrics:
+        plot_id = f"faceted_{metric.lower()}"
+        info = pubfigures.PLOT_TYPES[plot_id]
+        try:
+            figure = _pooled_figure(project, plot_id, None, None, specs, source=source)
+        except Exception as exc:  # noqa: BLE001
+            blocks.append(rl.Callout(f"{info['display']}: could not be drawn ({exc}).",
+                                     tone="failed"))
+            continue
+        if figure is None:
+            continue
+        pending.append(rl.Plot(figure, title=info["y_label"],
+                               width=(rl.CONTENT_W - 0.25) / 2))
+        if len(pending) == 2:
+            blocks.append(rl.PlotRow(pending, height=3.2))
+            pending = []
+    if pending:
+        blocks.append(rl.PlotRow(pending, height=3.2))
+    if family.key == OPEN_LOOP:
+        facet_col = "Facet" if "Facet" in source.columns else None
+        blocks.append(rl.Plot(lambda: rc.light_dark_plot(source, facet_col=facet_col),
+                              height=3.2, title="Feeding in light and dark",
+                              caption="Each open-loop chamber's licks per minute in its own "
+                                      "light and in the dark, joined by a line; the diamond "
+                                      "is the treatment mean.  The light feeding index is "
+                                      "(lit − dark) / (lit + dark) of the two."))
+    if compare and metrics:
+        comparisons = project._compare_frames(project._facet_frames(rows, facet_rows), metrics)
+        blocks += rc.stats_table(comparisons, caption=f"Light behaviour, {family.title}: "
+                                                      f"treatment comparisons, per chamber",
+                                 show_phase=True)
+    return blocks
+
+
+def _light_headline_blocks(project, specs, frames: dict, *, compare: bool) -> list[Any]:
+    """*Light behaviour* as before the Paradigm Families: the four metrics of
+    before, for a Project whose members' programs run no family."""
+    from .light_summary import behaviour_rows
+
+    light = frames.get("LightSummary")
     headline = project.light_headline_metrics(light)
     paired_only = len(behaviour_rows(light)) < len(light)
     blocks: list[Any] = [
@@ -458,6 +589,34 @@ def _light_blocks(project, specs, *, compare: bool = True) -> list[Any]:
         blocks += rc.stats_table(rows, caption="Light behaviour: treatment comparisons, "
                                                "per chamber", show_phase=True)
     return blocks
+
+
+def _yoked_blocks(project) -> list[Any]:
+    """*Paired and yoked* (decision 12): the members' stacked yoked
+    comparison (``<project>_YokedComparison.csv``), the paired fly's feeding
+    minus its yoked partners' by treatment, with the mixed models beside the
+    pooled tests; nothing without a yoked group."""
+    from . import yoked_report as yr
+
+    frame = project.combined_light_frames().get("YokedComparison")
+    if frame is None or frame.empty:
+        return []
+    names = project.design_global.get("well_names") or {}
+    tables = yr.yoked_table_blocks(frame, well_names=names,
+                                   two_well=project.chamber_layout == "two_well",
+                                   mixed_p=project._mixed_p, mixed_p0=project._mixed_p0)
+    if not tables:
+        return []
+    factors = list((project.design_global.get("experimental_design_factors") or {}))
+    return [rl.Heading("Paired and yoked", level=2),
+            rl.Paragraph("A Linkage Group that lights a Paired chamber's fly by its own "
+                         "feeding lights its Yoked chambers at the same moments, whatever "
+                         "their flies do.  Per group, pooled across members: the paired "
+                         "fly's feeding minus the mean of its yoked partners', by treatment "
+                         "— is the paired fly different (against zero), and do treatments "
+                         "differ?"),
+            *tables,
+            *yr.yoked_figure_blocks(frame, well_names=names, factors=factors)]
 
 
 def _ai_blocks(project) -> list[Any]:

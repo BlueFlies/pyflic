@@ -7,15 +7,23 @@ report hooks, all of which build from these.
 
 from __future__ import annotations
 
-from typing import Any, Sequence
+from dataclasses import dataclass
+from typing import Any, Iterable, Sequence
 
 import numpy as np
 import pandas as pd
 
+from . import opto_program as op
+from . import paradigm_families as pfam
 from . import report_layout as rl
+from .pubfigures import LIGHT_METRICS
 
 #: How a metric reads in a report table or axis ({A}/{B}: the well names).
+#: The light table's metrics read as the Plot Editor names them
+#: (:data:`pubfigures.LIGHT_METRICS <pyflic.base.pubfigures.LIGHT_METRICS>`,
+#: with their units).
 METRIC_LABELS: dict[str, str] = {
+    **dict(LIGHT_METRICS),
     "PI": "Preference index (PI)",
     "EventPI": "Event PI",
     "Licks": "Licks ({A} + {B})",
@@ -31,11 +39,6 @@ METRIC_LABELS: dict[str, str] = {
     "dPersistA": "Δ {A} persistence, min (paired − yoked)",
     "PersistA": "{A} persistence (min)",
     "BreakingPoint": "Breaking point (light events earned)",
-    ## The light table's headline metrics (pyflic.base.light_summary).
-    "Activations": "Activations",
-    "LitSec": "Lit time (s)",
-    "FirmwareEvents": "Firmware Events",
-    "AcclimationEndMin": "Acclimation end (min)",
 }
 #: Single-well layouts have no A/B.
 SINGLE_WELL_LABELS: dict[str, str] = {
@@ -316,6 +319,224 @@ def join_groups(pairs: Sequence[tuple[int, int]]) -> str:
             parts.append(f"DFM {dfm} groups " + ", ".join(str(g) for g in groups[:-1])
                          + f" and {groups[-1]}")
     return "; ".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# Light behaviour, by Paradigm Family (docs/paradigm-analyses-plan.md, S3)
+# ---------------------------------------------------------------------------
+
+#: The key of the Light behaviour subsection of the Acclimation that
+#: FixedInterval, ProgressiveRatio and FixedRatio can begin with (decision 9's
+#: last row): closed loop, but read from its own columns.
+ACCLIMATION = "acclimation"
+#: What a light-table row of several Paradigms says in ``ParadigmType``
+#: (``light_summary.MIXED``).
+_MIXED = "mixed"
+
+
+@dataclass(frozen=True)
+class LightFamily:
+    """One subsection of the reports' *Light behaviour*: a Paradigm Family,
+    fixed length by its branch (their headline sets differ, decision 9), or
+    the Acclimation of the types that have one.  *metrics* are its headline
+    metrics; *types* the ``ParadigmType`` (PyMCU's spelling) of the
+    light-table rows it shows; *about* what they are, in a sentence."""
+
+    key: str
+    title: str
+    metrics: tuple[str, ...]
+    types: tuple[str, ...]
+    about: str
+
+    def rows(self, frame: pd.DataFrame | None,
+             keys: dict[tuple[str | None, int], set[str]] | None = None
+             ) -> pd.DataFrame | None:
+        """The rows of a light table (:func:`light_summary.behaviour_rows
+        <pyflic.base.light_summary.behaviour_rows>`'s) this subsection shows:
+        those whose window ran one of its *types*.  A row of several
+        Paradigms (``mixed``) shows under each family its DFM's program runs
+        (*keys*: ``{(Experiment or None, DFM): light_keys}``, from
+        :func:`program_light_keys`).  An Open chamber (lit regardless of its
+        fly) is open loop's alone; the Acclimation subsection shows the rows
+        with Acclimation columns."""
+        if frame is None or frame.empty:
+            return frame
+        n = len(frame)
+
+        def column(name: str) -> pd.Series:
+            return frame[name] if name in frame.columns else pd.Series([pd.NA] * n,
+                                                                      index=frame.index)
+
+        if self.key == ACCLIMATION:
+            return frame[pd.to_numeric(column("AcclimationActivations"),
+                                       errors="coerce").notna().to_numpy()]
+        ptype = column("ParadigmType").astype("string").fillna("").str.strip()
+        mask = np.array(ptype.isin(self.types), dtype=bool)
+        mixed = ptype.eq(_MIXED).to_numpy(dtype=bool)
+        if mixed.any() and keys:
+            experiments = (frame["Experiment"].astype(str).tolist()
+                           if "Experiment" in frame.columns else [None] * n)
+            dfms = pd.to_numeric(column("DFM"), errors="coerce").tolist()
+            for i in np.flatnonzero(mixed).tolist():
+                if pd.notna(dfms[i]) and \
+                        self.key in keys.get((experiments[i], int(dfms[i])), set()):
+                    mask[i] = True
+        open_role = column("Role").astype("string").fillna("").str.strip().eq("Open") \
+            .to_numpy(dtype=bool)
+        if self.key == pfam.OPEN_LOOP:
+            rates = pd.to_numeric(column("LicksPerMinLit"), errors="coerce").notna()
+            mask |= open_role | rates.to_numpy(dtype=bool)
+        else:
+            mask &= ~open_role
+        return frame[mask]
+
+
+#: Every *Light behaviour* subsection, by key.
+LIGHT_FAMILIES: dict[str, LightFamily] = {
+    pfam.OPEN_LOOP: LightFamily(
+        pfam.OPEN_LOOP, "open loop", pfam.FAMILIES[pfam.OPEN_LOOP].headline, ("OpenLoop",),
+        "chambers lit whatever their fly does (an OpenLoop Paradigm, or a Well On): "
+        "their lit time, and the light feeding index, (lit − dark) / (lit + dark) of "
+        "their licks per minute in their own light and in the dark"),
+    pfam.CLOSED_LOOP: LightFamily(
+        pfam.CLOSED_LOOP, "closed loop", pfam.FAMILIES[pfam.CLOSED_LOOP].headline,
+        ("ClosedLoop",),
+        "chambers under a ClosedLoop Paradigm, lit by their own contact and its Hold: "
+        "Activations, lit time and the median Activation's length"),
+    pfam.INTERVAL_BRANCH: LightFamily(
+        pfam.INTERVAL_BRANCH, "fixed length, interval",
+        pfam.BRANCH_HEADLINE[pfam.INTERVAL_BRANCH], ("FixedInterval",),
+        "chambers under a FixedInterval Paradigm: Activations, the reward efficiency "
+        "(Main Activations over the most the lockout allows) and the median return "
+        "after the lockout"),
+    pfam.RATIO_BRANCH: LightFamily(
+        pfam.RATIO_BRANCH, "fixed length, ratio", pfam.BRANCH_HEADLINE[pfam.RATIO_BRANCH],
+        ("ProgressiveRatio", "FixedRatio"),
+        "chambers under a ProgressiveRatio or FixedRatio Paradigm: Activations, the last "
+        "Requirement met and the Firmware Events"),
+    pfam.NON_FEEDING: LightFamily(
+        pfam.NON_FEEDING, "non-feeding", pfam.FAMILIES[pfam.NON_FEEDING].headline,
+        ("NonFeeding",),
+        "chambers under a NonFeeding Paradigm, dark while their fly feeds: the fraction "
+        "of the time lit, and the suppressions, light periods their contact ended"),
+    ACCLIMATION: LightFamily(
+        ACCLIMATION, "Acclimation (closed loop)", pfam.ACCLIMATION_HEADLINE,
+        ("FixedInterval", "ProgressiveRatio", "FixedRatio"),
+        "chambers whose Paradigm began with Acclimation: the minute their wells left it"),
+}
+#: The subsections' order: the families' (decision 9's table), fixed length
+#: by its branches, the Acclimation last.
+LIGHT_FAMILY_ORDER: tuple[str, ...] = (pfam.OPEN_LOOP, pfam.CLOSED_LOOP, pfam.INTERVAL_BRANCH,
+                                       pfam.RATIO_BRANCH, pfam.NON_FEEDING, ACCLIMATION)
+
+
+def program_light_keys(program, dfm_ids=None) -> set[str]:
+    """The *Light behaviour* subsections *program* gives for *dfm_ids*
+    (:data:`LIGHT_FAMILY_ORDER` keys): open loop and non-feeding as
+    :func:`paradigm_families.families_in
+    <pyflic.base.paradigm_families.families_in>` finds them, closed loop for
+    a ClosedLoop Paradigm with a Trigger Well, the fixed-length branches
+    (:func:`~pyflic.base.paradigm_families.branches_in`) and the Acclimation
+    (:func:`~pyflic.base.paradigm_families.acclimation_in`)."""
+    if program is None or getattr(program, "grammar", None) == op.GRAMMAR_SIMPLE:
+        return set()
+    ids = None if dfm_ids is None else [int(d) for d in dfm_ids]
+    keys = set(pfam.families_in(program, ids)) & {pfam.OPEN_LOOP, pfam.NON_FEEDING}
+    keys |= set(pfam.branches_in(program, ids))
+    sections = [program.section(d) for d in (sorted(program.dfms) if ids is None else ids)]
+    if any(iv.trigger_wells() and iv.paradigm.type == op.CLOSED_LOOP
+           for s in sections if s is not None for iv in s.intervals):
+        keys.add(pfam.CLOSED_LOOP)
+    if pfam.acclimation_in(program, ids):
+        keys.add(ACCLIMATION)
+    return keys
+
+
+def light_families(programs: Iterable[tuple[Any, Iterable[int] | None]]) -> list[LightFamily]:
+    """The *Light behaviour* subsections of members running *programs*, each
+    an ``(OptoProgram, DFM ids or None)`` pair, in :data:`LIGHT_FAMILY_ORDER`
+    (decision 9), each with its headline metrics: closed loop's ``CutOffs``
+    only where a ClosedLoop runs with ``MaxOnMs``.  Empty when no program
+    runs a family (no program, or a recording made without one): such a
+    member keeps the four metrics of before, in one section."""
+    keys: set[str] = set()
+    max_on = False
+    for program, dfm_ids in programs:
+        keys |= program_light_keys(program, dfm_ids)
+        if program is not None and getattr(program, "grammar", None) != op.GRAMMAR_SIMPLE:
+            max_on |= pfam.max_on_in(program, None if dfm_ids is None else list(dfm_ids))
+    out: list[LightFamily] = []
+    for key in LIGHT_FAMILY_ORDER:
+        if key not in keys:
+            continue
+        family = LIGHT_FAMILIES[key]
+        if key == pfam.CLOSED_LOOP:
+            if max_on:
+                family = LightFamily(family.key, family.title, family.metrics, family.types,
+                                     family.about + ", with the Activations its MaxOnMs cut "
+                                                    "off")
+            else:
+                family = LightFamily(family.key, family.title,
+                                     tuple(m for m in family.metrics
+                                           if m != pfam.MAX_ON_HEADLINE),
+                                     family.types, family.about)
+        out.append(family)
+    return out
+
+
+def light_dark_plot(frame: pd.DataFrame, *, facet_col: str | None = None):
+    """*Feeding in light and dark* (decision 11): each open-loop chamber's
+    licks per minute in its own light and in the dark (``LicksPerMinLit``,
+    ``LicksPerMinDark``) as two points joined by a line, a panel per
+    treatment (and per *facet_col* value, a Facet, when given), with each
+    phase's treatment mean as a black diamond.  Raises
+    :class:`report_layout.NothingToDraw` when no chamber has both rates."""
+    import plotnine as p9
+
+    lit = pd.to_numeric(frame["LicksPerMinLit"], errors="coerce") \
+        if "LicksPerMinLit" in frame.columns else pd.Series(dtype=float)
+    dark = pd.to_numeric(frame["LicksPerMinDark"], errors="coerce") \
+        if "LicksPerMinDark" in frame.columns else pd.Series(dtype=float)
+    both = (lit.notna() & dark.notna()) if len(lit) else pd.Series(dtype=bool)
+    if not len(both) or not both.any():
+        raise rl.NothingToDraw("No open-loop chamber was both lit and dark, so its feeding "
+                               "in the light and in the dark cannot be compared.")
+    df = frame[both.to_numpy()]
+    key_parts = [c for c in ("Experiment", "DFM", "Chamber") if c in df.columns]
+    key = df[key_parts].astype(str).agg(" ".join, axis=1) if key_parts else \
+        pd.Series(range(len(df)), index=df.index).astype(str)
+    panel = (df[facet_col].astype(str) if facet_col and facet_col in df.columns
+             else pd.Series(["All"] * len(df), index=df.index))
+    phases = ["In the light", "In the dark"]
+    long = pd.concat([
+        pd.DataFrame({"Chamber": key + " " + panel, "Phase": phases[0],
+                      "Rate": lit[both].to_numpy(), "Treatment": df["Treatment"].astype(str),
+                      "Panel": panel}),
+        pd.DataFrame({"Chamber": key + " " + panel, "Phase": phases[1],
+                      "Rate": dark[both].to_numpy(), "Treatment": df["Treatment"].astype(str),
+                      "Panel": panel})], ignore_index=True)
+    long["Phase"] = pd.Categorical(long["Phase"], categories=phases, ordered=True)
+    long["Treatment"] = pd.Categorical(long["Treatment"],
+                                       categories=list(dict.fromkeys(long["Treatment"])),
+                                       ordered=True)
+    long["Panel"] = pd.Categorical(long["Panel"], categories=list(dict.fromkeys(long["Panel"])),
+                                   ordered=True)
+    g = (p9.ggplot(long, p9.aes("Phase", "Rate", group="Chamber"))
+         + p9.geom_line(color="#9a9a9a", size=0.5, alpha=0.8)
+         + p9.geom_point(p9.aes(color="Phase"), size=2.0, alpha=0.85)
+         + p9.stat_summary(p9.aes(group="Phase"), fun_y=np.mean, geom="point", shape="D",
+                           size=3.4, color="black", fill="black")
+         + p9.scale_color_manual(values={phases[0]: "#E69F00", phases[1]: "#4D4D4D"},
+                                 guide=None)
+         + p9.labs(x="", y="Licks per minute")
+         + p9.theme_classic(base_size=10.0)
+         + p9.theme(strip_background=p9.element_rect(fill="#f0f0f0", color="black",
+                                                     size=0.5)))
+    if long["Panel"].nunique() > 1:
+        g += p9.facet_grid("Panel ~ Treatment")
+    else:
+        g += p9.facet_wrap("~ Treatment", nrow=1)
+    return g
 
 
 def settings_blocks(global_cfg: dict | None, constants: dict | None) -> list[Any]:
