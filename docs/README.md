@@ -99,3 +99,9 @@ git show 82aace9:docs/v4-data-plan.md      # for example
   and ADR-0014 record the decisions. For researchers, the
   [Progressive Ratio guide](progressive-ratio-user-guide.md) and the help
   topic *Progressive Ratio experiments* cover the same ground.
+
+An earlier guide, `dfm-firmware-4-data-guide.md`, was replaced by
+[Firmware 4.0.0 data in pyflic](firmware-4-data-in-pyflic.md) when the
+firmware 4.0.0 work was documented. Tests still cite its export example
+(its section 7.1, now `tests/fixtures/Program_v4.txt`); its last text is at
+**9679d62**.
