@@ -232,11 +232,40 @@ class ProjectDesignDialog(QDialog):
         form.setFieldGrowthPolicy(
             QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
 
+        ## The shipped types, the lab library's and the copy beside this
+        ## Project (ADR-0019); New type… opens the Experiment Type Editor.
         self.type_combo = QComboBox()
-        for item in experiment_types.available_experiment_types():
-            self.type_combo.addItem(item.display_name, item.name)
+        self._fill_type_combo()
         self.type_combo.currentIndexChanged.connect(self._on_type_changed)
-        form.addRow("Experiment type:", self.type_combo)
+        self.new_type_btn = QPushButton("New type…")
+        self.new_type_btn.setIcon(icon("add", category=Category.LOAD))
+        self.new_type_btn.setToolTip(
+            "Open the Experiment Type Editor to build a type for your lab; it is "
+            "listed here once saved.")
+        self.new_type_btn.clicked.connect(lambda _checked=False: self._open_type_editor())
+        type_row = QHBoxLayout()
+        type_row.setContentsMargins(0, 0, 0, 0)
+        type_row.addWidget(self.type_combo, 1)
+        type_row.addWidget(self.new_type_btn)
+        type_holder = QWidget()
+        type_holder.setLayout(type_row)
+        form.addRow("Experiment type:", type_holder)
+        ## The copy of a lab type beside project.yaml, when it differs from
+        ## the library's master: said here, with the update one click away.
+        self.type_drift_label = QLabel("")
+        self.type_drift_label.setObjectName("PyflicCardSubtitle")
+        self.type_drift_label.setWordWrap(True)
+        self.type_drift_btn = QPushButton("Update the copy from the library")
+        self.type_drift_btn.setIcon(icon("refresh", category=Category.TOOLS))
+        self.type_drift_btn.clicked.connect(lambda _checked=False: self.update_type_copy())
+        drift_row = QHBoxLayout()
+        drift_row.setContentsMargins(0, 0, 0, 0)
+        drift_row.addWidget(self.type_drift_label, 1)
+        drift_row.addWidget(self.type_drift_btn, 0, Qt.AlignmentFlag.AlignTop)
+        self.type_drift_holder = QWidget()
+        self.type_drift_holder.setLayout(drift_row)
+        self.type_drift_holder.setVisible(False)
+        form.addRow("", self.type_drift_holder)
 
         self.layout_combo = QComboBox()
         self.layout_combo.addItem("two_well  (6 chambers)", "two_well")
@@ -301,6 +330,16 @@ class ProjectDesignDialog(QDialog):
             "The group column every member's remove_chambers.csv is read "
             "under, so one rule filters the whole Project.")
         form.addRow("Exclusion group:", self.exclusion_edit)
+
+        ## The Treatment control's level (ADR-0019), for a type that compares
+        ## every level of a factor with a control: the type names the factor,
+        ## the design names the level, since levels change from study to study.
+        self.control_level_edit = QLineEdit()
+        self.control_level_edit.setToolTip(
+            "control_level — the level of the type's control factor every other "
+            "level is compared with.")
+        self._control_level_row = form.rowCount()
+        form.addRow("Control level:", self.control_level_edit)
 
         self._form = form
         card.add_body(form)
@@ -445,9 +484,78 @@ class ProjectDesignDialog(QDialog):
     # Reacting to choices
     # ------------------------------------------------------------------
 
+    def _where(self) -> str | None:
+        """The directory being edited, when it exists: a lab type is read
+        from the copy beside its project.yaml first (ADR-0019)."""
+        edit = getattr(self, "dir_edit", None)
+        directory = edit.text().strip() if edit is not None else ""
+        return directory if directory and os.path.isdir(directory) else None
+
+    def _fill_type_combo(self, select: str | None = None) -> None:
+        """List the types a design here can name, keeping *select* (or the
+        current choice) selected when it is still there."""
+        current = select or self.type_combo.currentData()
+        self.type_combo.blockSignals(True)
+        self.type_combo.clear()
+        for item in experiment_types.available_experiment_types(self._where()):
+            label = item.display_name if item.is_shipped else f"{item.display_name}  (lab)"
+            self.type_combo.addItem(label, item.name)
+        index = self.type_combo.findData(current) if current else -1
+        self.type_combo.setCurrentIndex(max(index, 0))
+        self.type_combo.blockSignals(False)
+
+    def _reload_types(self, select: str | None = None) -> None:
+        """Re-read the type list (the Experiment Type Editor saved or deleted
+        one) and refresh what the chosen type decides."""
+        self._fill_type_combo(select or None)
+        self._on_type_changed()
+
+    def _open_type_editor(self):
+        """The Experiment Type Editor on a new type; a type it saves is
+        listed here and chosen."""
+        from .type_editor import open_type_editor
+
+        editor = open_type_editor(self)
+        editor.typesChanged.connect(self._reload_types)
+        editor.closed.connect(lambda: self._reload_types())
+        return editor
+
     def _experiment_type(self):
-        return experiment_types.get_experiment_type(
-            self.type_combo.currentData())
+        try:
+            return experiment_types.get_experiment_type(
+                self.type_combo.currentData(), self._where())
+        except ValueError:
+            return experiment_types.get_experiment_type(None)
+
+    def _refresh_type_drift(self) -> None:
+        """Show whether the copy beside project.yaml differs from the library's."""
+        from .experiment_types import library
+
+        where = self._where()
+        drift = library.copy_drift(where) if where else None
+        self.type_drift_label.setText(drift or "")
+        self.type_drift_holder.setVisible(bool(drift))
+
+    def update_type_copy(self) -> bool:
+        """Replace the copy beside project.yaml with the library's master of
+        its name; ``False`` when there is nothing to update."""
+        from .experiment_types import library
+
+        where = self._where()
+        if not where:
+            return False
+        try:
+            copy = library.read_copy(where)
+        except ValueError as err:
+            self._warn(str(err))
+            return False
+        master = library.library_definition(copy.name) if copy is not None else None
+        if master is None:
+            return False
+        library.write_copy(master, where)
+        self._reload_types(copy.name)
+        self._refresh_type_drift()
+        return True
 
     def _chamber_layout(self) -> str:
         item = self._experiment_type()
@@ -468,7 +576,8 @@ class ProjectDesignDialog(QDialog):
         self.layout_note.setText(
             f"'{item.display_name}' owns the chamber layout — it is derived, "
             f"never written to the yaml." if fixed_layout else
-            "A Custom Experiment states its own layout.")
+            "A Custom Experiment states its own layout." if item.is_custom else
+            f"'{item.display_name}' leaves the layout to the design.")
 
         self.cutoffs_edit.setEnabled(not item.facets_fixed)
         if getattr(item, "data_derived_facets", False):
@@ -500,6 +609,11 @@ class ProjectDesignDialog(QDialog):
         elif not self.labels_edit.text().strip() and item.phase_labels:
             self.labels_edit.setText(", ".join(item.phase_labels))
         self._apply_facet_widgets()
+        factor = (item.definition.treatment_control
+                  if item.definition is not None else None)
+        self._form.setRowVisible(self._control_level_row, factor is not None)
+        if factor is not None:
+            self.control_level_edit.setPlaceholderText(f"a level of {factor}")
         defaults = item.default_constants or {}
         for key, _label, placeholder in _CONSTANT_ROWS:
             check = self.constant_checks[key]
@@ -637,6 +751,12 @@ class ProjectDesignDialog(QDialog):
     def _prefill_from_dir(self) -> None:
         directory = self.dir_edit.text().strip()
         self._loaded_omit = None                # the Selection of the folder read below
+        ## A Project's lab type may live only in its copy: list it.
+        before = self.type_combo.currentData()
+        self._fill_type_combo()
+        self._refresh_type_drift()
+        if self.type_combo.currentData() != before:
+            self._on_type_changed()
         if not directory or not os.path.isdir(directory):
             self.setWindowTitle("Initialize existing directory"
                                 if self._initialize else "New Project")
@@ -687,7 +807,11 @@ class ProjectDesignDialog(QDialog):
 
     def _load_design(self, design_global: dict | None) -> None:
         g = dict(design_global or {})
-        item = experiment_types.get_experiment_type(g.get("experiment_type"))
+        try:
+            item = experiment_types.get_experiment_type(g.get("experiment_type"),
+                                                        self._where())
+        except ValueError:
+            item = experiment_types.get_experiment_type(None)
         index = self.type_combo.findData(item.name)
         self.type_combo.blockSignals(True)
         self.type_combo.setCurrentIndex(max(index, 0))
@@ -714,6 +838,7 @@ class ProjectDesignDialog(QDialog):
         self.labels_edit.setText(
             ", ".join(str(v) for v in (g.get("facet_labels") or [])))
         self.exclusion_edit.setText(str(g.get("exclusion_group") or ""))
+        self.control_level_edit.setText(str(g.get("control_level") or ""))
         self.factors_widget.load_factors(
             g.get("experimental_design_factors") or {})
 
@@ -870,6 +995,9 @@ class ProjectDesignDialog(QDialog):
         group = self.exclusion_edit.text().strip()
         if group:
             g["exclusion_group"] = group
+        level = self.control_level_edit.text().strip()
+        if level and item.definition is not None and item.definition.treatment_control:
+            g["control_level"] = level
         opto = self.opto_combo.currentData()
         if isinstance(opto, bool):
             g["optogenetics"] = opto
@@ -907,6 +1035,7 @@ class ProjectDesignDialog(QDialog):
         design = self._build_design()
         if design is None:
             return
+        new_project = not project_mod.is_project_dir(directory)
         try:
             os.makedirs(directory, exist_ok=True)
             project_mod.create_project_file(
@@ -922,9 +1051,40 @@ class ProjectDesignDialog(QDialog):
             QMessageBox.critical(self, self.windowTitle(),
                                  f"Could not write project.yaml:\n{err}")
             return
+        self._write_type_copy(directory, new_project=new_project)
         self._offer_reinforcement(directory)
         self.saved_dir = directory
         self.accept()
+
+    def _write_type_copy(self, directory: str, *, new_project: bool) -> None:
+        """Carry the design's type with the data (ADR-0019): a lab type is
+        copied beside project.yaml, a shipped one leaves no copy behind, and
+        a new Project starts with the type's own Plot Specs."""
+        from .experiment_types import library
+
+        try:
+            item = experiment_types.get_experiment_type(
+                self.type_combo.currentData(), directory)
+            if item.is_shipped:
+                library.remove_copy(directory)
+            else:
+                library.write_copy(item.definition, directory)
+        except (OSError, ValueError) as err:
+            self._warn(f"Could not write the experiment type's copy:\n{err}")
+            return
+        specs = item.plot_specs()
+        if not new_project or not specs:
+            return
+        from . import pubfigures
+
+        if os.path.isfile(pubfigures.specs_path(directory)):
+            return
+        seeded = pubfigures.ProjectSpecs()
+        seeded.plots = {plot_id: pubfigures.PlotSpec.from_dict(spec)
+                        for plot_id, spec in specs.items()
+                        if plot_id in pubfigures.PLOT_TYPES}
+        if seeded.plots:
+            pubfigures.save_project_specs(directory, seeded)
 
     def _offer_reinforcement(self, directory: str) -> None:
         """Offer to make existing Members inherit the Design just written.
