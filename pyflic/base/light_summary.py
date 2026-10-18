@@ -7,8 +7,11 @@ DFM the optogenetic light QC covers, over the chambers the design assigns a
 Treatment (the feeding summary's rows, after auto-removal).  They carry the
 feeding summary's Treatment and design-factor columns, so the Combined
 Analysis, the reports and the Plot Editor pool and test light behaviour as
-they do feeding; :data:`HEADLINE_METRICS` are the columns tested between
-treatments by default.
+they do feeding.  The columns tested between treatments are the headline
+metrics of the Paradigm Families the member's program runs
+(:func:`experiment_headline_metrics`, decision 9 of
+``docs/paradigm-analyses-plan.md``); :data:`HEADLINE_METRICS`, the fixed four
+of before, stays for a member without a generation-3 recording.
 
 What a row can say depends on the recording's **Generation** (``CONTEXT.md``):
 
@@ -33,8 +36,43 @@ that defines it:
 * Acclimation columns: FixedInterval and the ratio types, with Acclimation;
 * ``FirmwareEvents``, ``LastRequirementMet``, ``ProgressAtEnd``,
   ``EventsPerActivation``: the ratio types (ProgressiveRatio, FixedRatio);
-* ``LockedOutContactSec``: FixedInterval in Main;
-* ``UnlitSec``, ``Suppressions``: NonFeeding.
+* ``UnlitSec``: NonFeeding.
+
+The Paradigm Families' own columns (stream S2 of
+``docs/paradigm-analyses-plan.md``, decisions 8, 10 and 11) are read from
+the Activation ledger (:mod:`pyflic.base.activation_ledger`), on generation 3
+with a program only, each ``NA`` outside its family.  An Activation belongs
+to the window holding its onset row; one is *judgeable* when it is not
+``Overlap`` and has no ``Boundary``, and ``tol`` is
+``opto_activation_tolerance_ms`` (:func:`activation_tolerance_ms`), one
+record wider for an Activation timed to the record:
+
+* closed loop (ClosedLoop, and any Phase-``A`` Activation):
+  ``MedianActivationSec``, the median ``LitMs`` of its judgeable
+  Activations; ``CutOffs`` (ClosedLoop with ``MaxOnMs``), the judgeable ones
+  within ``tol`` of ``MaxOnMs``;
+* ``MainActivations`` (any Paradigm with Acclimation): the Phase-``M``
+  Activations;
+* FixedInterval: ``MaxActivations``, its Main time divided by
+  max(``LockoutMs``, ``ActivationMs``), floored; ``RewardEfficiency``, its
+  Main Activations divided by that; ``MedianReturnSec``, the median of
+  ``SinceLastOnsetMs`` less that spacing between consecutive Main
+  Activations; ``LockedOutContactSec`` (redefined, decision 10), pyflic's
+  lick time in its Main rows while its own lockout runs (``LockoutMs`` from
+  an onset) and its own Activation is not lit (``ActivationMs`` from it),
+  so a linked partner's light no longer hides it;
+* NonFeeding: ``Suppressions`` (redefined, decision 10), the judgeable
+  Activations not ended by ``MaxOnMs``, since contact is the only other way
+  the light goes out; ``MedianSuppressionSec``, the median dark time from a
+  suppression to the next Activation of its state run;
+* open loop (decision 11; the chamber's Role is Open, or in the window its
+  wells run open loop and nothing else): ``LicksPerMinLit`` and
+  ``LicksPerMinDark``, the licks while the chamber's own light is on and
+  off per minute of each (:func:`analytics.chamber_light_phases
+  <pyflic.base.analytics.chamber_light_phases>`, which
+  ``light_phase_summary`` reports), and ``LightFeedingIndex``, (lit - dark)
+  / (lit + dark) of the two, ``NA`` when either phase is absent or both
+  rates are 0.
 
 A window is the feeding summary's: one ``(a, b]`` range of minutes
 (``(0, 0)`` the whole recording), or a list of them, as a Program Facet
@@ -51,14 +89,26 @@ and ``Activations`` on the feeding summary's rows.
 
 from __future__ import annotations
 
-from typing import Any, Iterable, NamedTuple, Sequence
+import math
+from typing import Any, Callable, Iterable, NamedTuple, Sequence
 
 import numpy as np
 import pandas as pd
 
+from . import activation_ledger as al
 from . import opto_program as op
+from . import paradigm_families as pfam
 from . import windowing
+from .opto_roles import ROLE_OPEN
 from .paradigm_state import GENERATION_PARADIGM
+
+#: The Paradigm Families' columns (stream S2), grouped by family as
+#: :data:`paradigm_families.FAMILIES` declares them.
+CLOSED_LOOP_COLUMNS: tuple[str, ...] = ("MedianActivationSec", "CutOffs")
+FIXED_INTERVAL_COLUMNS: tuple[str, ...] = ("MaxActivations", "RewardEfficiency",
+                                           "MedianReturnSec", "LockedOutContactSec")
+NON_FEEDING_COLUMNS: tuple[str, ...] = ("UnlitSec", "Suppressions", "MedianSuppressionSec")
+OPEN_LOOP_COLUMNS: tuple[str, ...] = ("LicksPerMinLit", "LicksPerMinDark", "LightFeedingIndex")
 
 #: The per-well table, ``analysis/light_wells.csv``.  The design's factor
 #: columns follow ``Treatment``, as in the feeding summary.
@@ -66,25 +116,37 @@ LIGHT_WELL_COLUMNS: tuple[str, ...] = (
     "DFM", "Well", "Chamber", "Treatment", "Role", "Generation",
     "Paradigm", "ParadigmType", "ProgramInterval", "Cycle", "WindowMinutes",
     "LitSec", "LitFraction", "LitSource", "Activations", "ActivationsPerHour", "LightOnsets",
-    "AcclimationActivations", "AcclimationEndMin", "AcclimationComplete",
+    "AcclimationActivations", "AcclimationEndMin", "AcclimationComplete", "MainActivations",
     "FirmwareEvents", "LastRequirementMet", "ProgressAtEnd", "EventsPerActivation",
-    "LockedOutContactSec", "UnlitSec", "Suppressions", "PyflicEvents", "PyflicLicks")
+    *CLOSED_LOOP_COLUMNS, *FIXED_INTERVAL_COLUMNS, *NON_FEEDING_COLUMNS, *OPEN_LOOP_COLUMNS,
+    "PyflicEvents", "PyflicLicks")
 
 #: The per-chamber table, ``analysis/light_summary.csv``: counts and times
 #: summed over the chamber's wells, except ``LitSec`` and ``LightOnsets``,
 #: which describe the chamber's own light (lit while any of its wells is),
 #: ``AcclimationEndMin`` (the latest) and ``AcclimationComplete`` (all).
+#: The medians are over the Activations of all its wells, the open-loop
+#: rates are the chamber's licks per minute of its own light and dark, and
+#: ``RewardEfficiency`` is its wells' FixedInterval Main Activations over
+#: their ``MaxActivations``.
 LIGHT_CHAMBER_COLUMNS: tuple[str, ...] = (
     "DFM", "Chamber", "Treatment", "Role", "Generation",
     "Paradigm", "ParadigmType", "ProgramInterval", "Cycle", "WindowMinutes",
     "LitSec", "LitFraction", "LitSource", "Activations", "ActivationsPerHour", "LightOnsets",
-    "AcclimationActivations", "AcclimationEndMin", "AcclimationComplete",
+    "AcclimationActivations", "AcclimationEndMin", "AcclimationComplete", "MainActivations",
     "FirmwareEvents", "LastRequirementMet", "ProgressAtEnd", "EventsPerActivation",
-    "LockedOutContactSec", "UnlitSec", "Suppressions", "EventsA", "EventsB")
+    *CLOSED_LOOP_COLUMNS, *FIXED_INTERVAL_COLUMNS, *NON_FEEDING_COLUMNS, *OPEN_LOOP_COLUMNS,
+    "EventsA", "EventsB")
 
-#: The light metrics tested between treatments by default (decision 16).
+#: The light metrics tested between treatments before the Paradigm Families
+#: (decision 16 of ``docs/v4-data-plan.md``).  Kept for compatibility, and
+#: for a member or Project without a generation-3 recording: the headline
+#: metrics now follow the families run (:func:`experiment_headline_metrics`).
 HEADLINE_METRICS: tuple[str, ...] = ("Activations", "LitSec", "FirmwareEvents",
                                      "AcclimationEndMin")
+
+#: ``opto_activation_tolerance_ms``'s default (decision 7).
+DEFAULT_ACTIVATION_TOLERANCE_MS = 25
 
 #: What :func:`with_light_columns` adds to an optogenetic feeding summary.
 FEEDING_COLUMNS: tuple[str, ...] = ("Role", "LitSec", "Activations")
@@ -97,7 +159,29 @@ MIXED = "mixed"
 _PR_ROLES = ("paired", "yoked")
 
 _COUNT_COLUMNS = ("Activations", "AcclimationActivations", "FirmwareEvents", "ProgressAtEnd",
-                  "LockedOutContactSec", "UnlitSec", "Suppressions")
+                  "LockedOutContactSec", "UnlitSec", "Suppressions", "MainActivations",
+                  "CutOffs", "MaxActivations")
+#: The per-well values the chamber's medians pool (hidden keys of a well's
+#: values), by the column they give.
+_POOLED = {"MedianActivationSec": "_ActivationSec", "MedianReturnSec": "_ReturnSec",
+           "MedianSuppressionSec": "_SuppressionSec"}
+
+
+def activation_tolerance_ms(exp) -> int:
+    """``opto_activation_tolerance_ms`` (decision 7), the tolerance the
+    family columns judge an Activation's length with, from *exp*'s design
+    ``constants:``; :data:`DEFAULT_ACTIVATION_TOLERANCE_MS` when it is not
+    set or not a number.
+
+    Stream S1 adds the constant to the light QC's ``OptoQCSettings``; once
+    it has, this reads it from there (``exp.opto.settings()``), one line."""
+    constants = getattr(exp, "global_constants", None) or {}
+    try:
+        value = float(constants.get("opto_activation_tolerance_ms",
+                                    DEFAULT_ACTIVATION_TOLERANCE_MS))
+    except (TypeError, ValueError):
+        return DEFAULT_ACTIVATION_TOLERANCE_MS
+    return max(0, int(value)) if math.isfinite(value) else DEFAULT_ACTIVATION_TOLERANCE_MS
 
 
 # ---------------------------------------------------------------------------
@@ -217,7 +301,9 @@ class _DFMLight:
     def _read_types(self) -> None:
         """Per row: the Paradigm in force (by the name the row records) and
         its type; per row and well: whether the well ran that Paradigm (a
-        level threshold in the row's Program Interval)."""
+        level threshold in the row's Program Interval), and whether it ran
+        open loop (``On``, or a level under OpenLoop) or a rule its fly
+        drives (a level under any other type)."""
         state, program = self.state, self.program
         n = len(state)
         names = state.paradigm.to_numpy(dtype=object, na_value=None)
@@ -230,6 +316,7 @@ class _DFMLight:
                                     for p in self.paradigm_by_code], dtype=object)[self.codes]
         self._type_masks: dict[tuple, np.ndarray] = {}
         self.trigger = np.zeros((n, op.N_WELLS), dtype=bool)
+        always_on = np.zeros((n, op.N_WELLS), dtype=bool)
         fallback = list(self.section.trigger_wells())
         for run in state.interval_runs():
             if run.kind != "program":
@@ -237,23 +324,146 @@ class _DFMLight:
             interval = program.interval_for(self.dfm_id, int(run.program_interval))
             for w in (interval.trigger_wells() if interval is not None else fallback):
                 self.trigger[run.i0:run.i1, int(w) - 1] = True
+            for w in (interval.open_wells() if interval is not None else ()):
+                always_on[run.i0:run.i1, int(w) - 1] = True
+        open_type = (self.row_type == op.OPEN_LOOP)[:, None]
+        known = np.asarray([t is not None for t in self.row_type], dtype=bool)[:, None]
+        self.open_loop = always_on | (self.trigger & open_type)
+        self.driven = self.trigger & known & ~open_type
+        ## The Activation ledger and what is read from it, per well, on first use.
+        self._book: pd.DataFrame | None = None
+        self._activations: dict[int, _Activations] = {}
+        self._timed: dict[tuple[int, str], np.ndarray] = {}
 
     def type_rows(self, w: int, types: Iterable[str], win: _Window, *,
                   acclimation: bool = False) -> np.ndarray:
         """Per row of *win*: whether well *w* ran a Paradigm of one of *types*
         (with Acclimation, when *acclimation*)."""
         key = (tuple(types), bool(acclimation))
+        return self.paradigm_rows(w, win, key, lambda p: p.type in key[0] and (
+            not acclimation or int(p.acclimation or 0) > 0))
+
+    def paradigm_rows(self, w: int, win: _Window, key: Any,
+                      keep: Callable[[op.Paradigm], bool]) -> np.ndarray:
+        """Per row of *win*: whether well *w* ran a Paradigm *keep* accepts;
+        *key* names the test, for the cache."""
         rows = self._type_masks.get(key)
         if rows is None:
             ## Decided once per Paradigm name, then spread over the rows.
-            per_code = [p is not None and p.type in key[0]
-                        and (not acclimation or int(p.acclimation or 0) > 0)
-                        for p in self.paradigm_by_code]
+            per_code = [p is not None and bool(keep(p)) for p in self.paradigm_by_code]
             rows = self._type_masks[key] = np.asarray(per_code, dtype=bool)[self.codes]
         return rows[win.rows] & self.trigger[win.rows, w - 1]
 
     def window(self, range_minutes: Any) -> _Window:
         return _window(self.minutes, range_minutes)
+
+    # -- the Activation ledger (generation 3 with a program) -------------------
+
+    @property
+    def record_ms(self) -> float:
+        return 1000.0 / self.sps
+
+    @property
+    def book(self) -> pd.DataFrame:
+        """The DFM's Activation ledger, with the program's Linkage Groups,
+        as the light QC reads it (``opto_qc._analyze_paradigm_state``)."""
+        if self._book is None:
+            groups = self.section.linkage_groups()
+            self._book = al.ledger(self.state,
+                                   linked={w: tuple(g) for g in groups.values() for w in g},
+                                   record_ms=int(round(self.record_ms)))
+        return self._book
+
+    def activations(self, w: int) -> _Activations:
+        """Well *w*'s ledger rows, as arrays."""
+        found = self._activations.get(int(w))
+        if found is None:
+            found = self._activations[int(w)] = _Activations.of(self, int(w))
+        return found
+
+    def fixed_rows(self, w: int, setting: str) -> np.ndarray:
+        """(n,) bool: the rows during which a timer of well *w*'s
+        FixedInterval Main Activations runs, *setting* (``lockout_ms`` or
+        ``activation_ms``) from each one's onset (``OnsetMs``), within its
+        state run.  The firmware times both from the start of the
+        Activation (``LEDControl.c``, ``StepFixedInterval``), so
+        ``activation_ms`` gives the rows the well's own Activation lit,
+        whatever light a partner adds.  A row is in when any of its record
+        is."""
+        key = (int(w), setting)
+        found = self._timed.get(key)
+        if found is not None:
+            return found
+        state, n = self.state, len(self.state)
+        acts = self.activations(w)
+        steps = np.zeros(n + 1, dtype=np.int64)
+        length = np.nan_to_num(acts.setting(setting))
+        chosen = acts.main & acts.is_type(op.FIXED_INTERVAL) & (length > 0)
+        if chosen.any():
+            ## Records start at (Index - 1) * record; kept rising for the search.
+            starts = np.maximum.accumulate((np.asarray(state.index, dtype=float) - 1.0)
+                                           * self.record_ms)
+            run_starts = np.array([a for a, _b in state.state_runs()], dtype=np.int64)
+            run_ends = np.append(run_starts[1:], n)
+            r0 = acts.row[chosen]
+            r1 = np.searchsorted(starts, acts.onset_ms[chosen] + length[chosen], side="left")
+            r1 = np.minimum(r1, run_ends[np.searchsorted(run_starts, r0, side="right") - 1])
+            r1 = np.maximum(r1, r0 + 1)
+            np.add.at(steps, r0, 1)
+            np.add.at(steps, r1, -1)
+        found = self._timed[key] = np.cumsum(steps)[:n] > 0
+        return found
+
+
+class _Activations(NamedTuple):
+    """One well's rows of the Activation ledger, as arrays in onset order,
+    with what the family columns read from them."""
+
+    row: np.ndarray            # the onset row
+    onset_ms: np.ndarray       # float
+    end_ms: np.ndarray         # float
+    lit_ms: np.ndarray         # float
+    record: np.ndarray         # Timing record: the times are good to one record
+    judgeable: np.ndarray      # not Overlap, no Boundary: the length is the rule's
+    main: np.ndarray           # Phase M
+    since_ms: np.ndarray       # SinceLastOnsetMs, NaN for a state run's first
+    after_main: np.ndarray     # the previous Activation, in the same state run, is Main
+    next_onset_ms: np.ndarray  # the next Activation's onset in the same state run, or NaN
+    paradigm: list             # the Paradigm in force at the onset row, or None
+
+    @classmethod
+    def of(cls, ctx: _DFMLight, w: int) -> _Activations:
+        book = ctx.book
+        mine = book[book["Well"] == int(w)]
+        row = mine["Row"].to_numpy(dtype=np.int64)
+        since = mine["SinceLastOnsetMs"].to_numpy(dtype=float, na_value=np.nan)
+        main = (mine["Phase"] == "M").to_numpy(dtype=bool)
+        onset = mine["OnsetMs"].to_numpy(dtype=float)
+        same_run_next = np.append(~np.isnan(since[1:]), False)
+        after_main = np.insert(main[:-1], 0, False) & ~np.isnan(since) if row.size else main
+        return cls(
+            row=row, onset_ms=onset, end_ms=mine["EndMs"].to_numpy(dtype=float),
+            lit_ms=mine["LitMs"].to_numpy(dtype=float),
+            record=(mine["Timing"] == al.TIMING_RECORD).to_numpy(dtype=bool),
+            judgeable=(~mine["Overlap"].to_numpy(dtype=bool)
+                       & (mine["Boundary"] == al.BOUNDARY_NONE).to_numpy(dtype=bool)),
+            main=main, since_ms=since, after_main=after_main,
+            next_onset_ms=np.where(same_run_next, np.append(onset[1:], np.nan), np.nan),
+            paradigm=[ctx.paradigm_by_code[c] for c in ctx.codes[row]])
+
+    def is_type(self, *types: str) -> np.ndarray:
+        """Per Activation: whether its Paradigm is of one of *types*."""
+        return np.asarray([p is not None and p.type in types for p in self.paradigm], dtype=bool)
+
+    def setting(self, name: str) -> np.ndarray:
+        """Per Activation: its Paradigm's *name* setting, NaN where not set."""
+        out = [getattr(p, name, None) if p is not None else None for p in self.paradigm]
+        return np.asarray([np.nan if v is None else float(v) for v in out], dtype=float)
+
+    def slack_ms(self, tol: float, record_ms: float) -> np.ndarray:
+        """``tol`` per Activation, one record wider where it is timed to the
+        record (stream S1's rule)."""
+        return float(tol) + np.where(self.record, float(record_ms), 0.0)
 
 
 def _matrix(frame: pd.DataFrame | None, n: int, dtype) -> np.ndarray:
@@ -375,10 +585,24 @@ def _scheduled_paradigm(ctx: _DFMLight, win: _Window, out: dict) -> dict:
 # One well over one window
 # ---------------------------------------------------------------------------
 
-def _well_values(ctx: _DFMLight, w: int, win: _Window) -> dict[str, Any]:
+#: Every family column's value off its family, and the hidden values the
+#: chamber pools.
+_NO_FAMILY: dict[str, Any] = {
+    **{c: np.nan for c in (*CLOSED_LOOP_COLUMNS, *FIXED_INTERVAL_COLUMNS,
+                           *NON_FEEDING_COLUMNS, *OPEN_LOOP_COLUMNS, "MainActivations")},
+    **{hidden: np.zeros(0) for hidden in _POOLED.values()}, "_FixedMain": np.nan,
+}
+
+
+def _well_values(ctx: _DFMLight, w: int, win: _Window, *, tol: float = 0.0,
+                 phases: dict | None = None) -> dict[str, Any]:
     """Every metric of :data:`LIGHT_WELL_COLUMNS` for well *w* over *win*,
-    plus ``_Main`` (its Main ratio Activations) for the chamber's
-    EventsPerActivation."""
+    plus the hidden values the chamber's columns pool: ``_Main`` (its Main
+    ratio Activations) for EventsPerActivation, ``_FixedMain`` for
+    RewardEfficiency and the ``_POOLED`` lists for the medians.  *tol* is
+    ``opto_activation_tolerance_ms``; *phases*, the chamber's
+    :func:`analytics.chamber_light_phases <pyflic.base.analytics.chamber_light_phases>`
+    over *win* when the chamber is open loop there (decision 11)."""
     col, rows = w - 1, win.rows
     minutes = win.size / ctx.sps / 60.0
     lit = ctx.lit[rows, col]
@@ -396,8 +620,7 @@ def _well_values(ctx: _DFMLight, w: int, win: _Window) -> dict[str, Any]:
         "AcclimationActivations": np.nan, "AcclimationEndMin": np.nan,
         "AcclimationComplete": None, "FirmwareEvents": np.nan,
         "LastRequirementMet": np.nan, "ProgressAtEnd": np.nan,
-        "EventsPerActivation": np.nan, "LockedOutContactSec": np.nan,
-        "UnlitSec": np.nan, "Suppressions": np.nan, "_Main": np.nan,
+        "EventsPerActivation": np.nan, "_Main": np.nan, **_NO_FAMILY,
     }
     state = ctx.state
     if state is None or not win.size:
@@ -409,19 +632,149 @@ def _well_values(ctx: _DFMLight, w: int, win: _Window) -> dict[str, Any]:
         return out
     out.update(_acclimation(ctx, w, win))
     out.update(_ratio(ctx, w, win))
-    fixed = ctx.type_rows(w, (op.FIXED_INTERVAL,), win)
-    if fixed.any():
-        main = fixed & ~state.phase_a[rows, col]
-        locked = main & ctx.licks[rows, col] & (ctx.on_ms[rows, col] == 0)
-        out["LockedOutContactSec"] = float(np.count_nonzero(locked)) / ctx.sps
+    acts = ctx.activations(w)
+    inside = win.contains(acts.row)
+    out.update(_closed_loop(ctx, w, win, acts, inside, tol))
+    if ctx.type_rows(w, op.ACCLIMATION_PARADIGMS, win, acclimation=True).any():
+        out["MainActivations"] = float(np.count_nonzero(inside & acts.main))
+    out.update(_fixed_interval(ctx, w, win, acts, inside))
     nonfeeding = ctx.type_rows(w, (op.NON_FEEDING,), win)
     if nonfeeding.any():
         on_ms = ctx.on_ms[rows, col]
         out["UnlitSec"] = max(0.0, float(np.count_nonzero(nonfeeding)) / ctx.sps
                               - float(on_ms[nonfeeding].sum()) / 1000.0)
-        went_dark = nonfeeding & ctx.lit_before[rows, col] & ~lit
-        out["Suppressions"] = float(np.count_nonzero(went_dark))
+        out.update(_suppressions(ctx, acts, inside, tol))
+    if phases is not None:
+        out.update(_open_loop_rates(ctx, phases, (w,)))
     return out
+
+
+def _median(values: np.ndarray) -> float:
+    values = np.asarray(values, dtype=float)
+    values = values[~np.isnan(values)]
+    return float(np.median(values)) if values.size else np.nan
+
+
+def _closed_loop(ctx: _DFMLight, w: int, win: _Window, acts: _Activations,
+                 inside: np.ndarray, tol: float) -> dict[str, Any]:
+    """MedianActivationSec and CutOffs: where the well ran closed loop in
+    the window, ClosedLoop or a Phase-``A`` row; CutOffs only under a
+    ClosedLoop with ``MaxOnMs``.  Its closed-loop Activations are its
+    ClosedLoop ones and those the ledger puts in Phase ``A``."""
+    col = w - 1
+    acclimating = ctx.type_rows(w, op.ACCLIMATION_PARADIGMS, win, acclimation=True) \
+        & ctx.state.phase_a[win.rows, col]
+    if not (ctx.type_rows(w, (op.CLOSED_LOOP,), win) | acclimating).any():
+        return {}
+    closed = acts.is_type(op.CLOSED_LOOP)
+    judged = inside & acts.judgeable
+    seconds = acts.lit_ms[judged & (closed | ~acts.main)] / 1000.0
+    out: dict[str, Any] = {"MedianActivationSec": _median(seconds), "_ActivationSec": seconds}
+    if ctx.paradigm_rows(w, win, "max_on", lambda p: p.mode == op.CLOSED_LOOP_MAX).any():
+        max_on = acts.setting("max_on_ms")
+        limited = closed & acts.main & (max_on > 0)
+        at_max = np.abs(acts.lit_ms - np.nan_to_num(max_on)) <= acts.slack_ms(tol, ctx.record_ms)
+        out["CutOffs"] = float(np.count_nonzero(judged & limited & at_max))
+    return out
+
+
+def _spacing_ms(p: op.Paradigm | None) -> float:
+    """A FixedInterval's shortest time between Activation starts:
+    max(``LockoutMs``, ``ActivationMs``), since a new one needs both the
+    last one over and the lockout passed."""
+    if p is None:
+        return np.nan
+    return float(max(int(p.lockout_ms or 0), int(p.activation_ms or 0)))
+
+
+def _fixed_interval(ctx: _DFMLight, w: int, win: _Window, acts: _Activations,
+                    inside: np.ndarray) -> dict[str, Any]:
+    """MaxActivations, RewardEfficiency, MedianReturnSec and
+    LockedOutContactSec, where the well ran FixedInterval in the window."""
+    col, rows = w - 1, win.rows
+    fixed = ctx.type_rows(w, (op.FIXED_INTERVAL,), win)
+    if not fixed.any():
+        return {}
+    main_rows = fixed & ~ctx.state.phase_a[rows, col]
+    ## The most it could earn: each Paradigm's Main time over its spacing.
+    most = 0.0
+    codes, counts = np.unique(ctx.codes[rows][main_rows], return_counts=True)
+    for code, count in zip(codes.tolist(), counts.tolist()):
+        spacing = _spacing_ms(ctx.paradigm_by_code[code])
+        if spacing > 0:
+            most += math.floor(count * ctx.record_ms / spacing)
+    earned_rows = inside & acts.main & acts.is_type(op.FIXED_INTERVAL)
+    earned = float(np.count_nonzero(earned_rows))
+    spacing = np.asarray([_spacing_ms(p) for p in acts.paradigm], dtype=float)
+    after = earned_rows & acts.after_main
+    returns = (acts.since_ms[after] - spacing[after]) / 1000.0
+    ## Decision 10: its own lockout running and its own Activation dark, so
+    ## a partner's light no longer hides the feeding.
+    locked = (main_rows & ctx.licks[rows, col] & ctx.fixed_rows(w, "lockout_ms")[rows]
+              & ~ctx.fixed_rows(w, "activation_ms")[rows])
+    return {
+        "MaxActivations": float(most),
+        "RewardEfficiency": earned / most if most > 0 else np.nan,
+        "_FixedMain": earned,
+        "MedianReturnSec": _median(returns), "_ReturnSec": returns,
+        "LockedOutContactSec": float(np.count_nonzero(locked)) / ctx.sps,
+    }
+
+
+def _suppressions(ctx: _DFMLight, acts: _Activations, inside: np.ndarray,
+                  tol: float) -> dict[str, Any]:
+    """Suppressions and MedianSuppressionSec (the well ran NonFeeding in the
+    window): its judgeable NonFeeding Activations that ``MaxOnMs`` did not
+    end, so contact did, and the dark time from each to the next Activation
+    of its state run."""
+    max_on = np.nan_to_num(acts.setting("max_on_ms"))
+    by_max = (max_on > 0) & (np.abs(acts.lit_ms - max_on) <= acts.slack_ms(tol, ctx.record_ms))
+    suppressed = inside & acts.judgeable & acts.is_type(op.NON_FEEDING) & ~by_max
+    dark = (acts.next_onset_ms[suppressed] - acts.end_ms[suppressed]) / 1000.0
+    dark = dark[~np.isnan(dark)]
+    return {"Suppressions": float(np.count_nonzero(suppressed)),
+            "MedianSuppressionSec": _median(dark), "_SuppressionSec": dark}
+
+
+def _light_index(lit: float, dark: float) -> float:
+    """(lit - dark) / (lit + dark); ``NA`` when either rate is missing or
+    both are 0."""
+    if pd.isna(lit) or pd.isna(dark) or lit + dark <= 0:
+        return np.nan
+    return float((lit - dark) / (lit + dark))
+
+
+def _open_loop_rates(ctx: _DFMLight, phases: dict, wells: Sequence[int]) -> dict[str, Any]:
+    """LicksPerMinLit, LicksPerMinDark and LightFeedingIndex of *wells*' licks,
+    by the chamber's own light (*phases*)."""
+    rates = {}
+    for phase, column in (("light", "LicksPerMinLit"), ("dark", "LicksPerMinDark")):
+        counts = phases[phase]
+        phase_min = counts.samples / ctx.sps / 60.0
+        licks = sum(counts.licks[int(w)] for w in wells)
+        rates[column] = float(licks) / phase_min if phase_min > 0 else np.nan
+    rates["LightFeedingIndex"] = _light_index(rates["LicksPerMinLit"], rates["LicksPerMinDark"])
+    return rates
+
+
+def _open_loop_phases(ctx: _DFMLight, chamber: int, win: _Window) -> dict | None:
+    """The chamber's light and dark over *win*
+    (:func:`analytics.chamber_light_phases`) when its light there does not
+    depend on its fly (decision 11): its Role is Open, or its wells run open
+    loop (``On``, or under OpenLoop) in the window and no rule of theirs
+    their fly drives.  ``None`` otherwise, and off generation 3 with a
+    program."""
+    if not ctx.typed or not win.size:
+        return None
+    cols = [int(w) - 1 for w in ctx.chambers[chamber].wells]
+    if ctx.roles.get(chamber) != ROLE_OPEN:
+        open_loop = ctx.open_loop[win.rows][:, cols].any()
+        driven = ctx.driven[win.rows][:, cols].any()
+        if not open_loop or driven:
+            return None
+    from .analytics import chamber_light_phases
+
+    return chamber_light_phases(ctx.dfm, ctx.chambers[chamber].wells, lit=ctx.lit, rows=win.rows)
 
 
 def _acclimation(ctx: _DFMLight, w: int, win: _Window) -> dict[str, Any]:
@@ -516,7 +869,7 @@ def _chamber_light(ctx: _DFMLight, wells: Sequence[int], win: _Window) -> tuple[
 
 
 def _chamber_values(ctx: _DFMLight, chamber: int, wells: dict[int, dict],
-                    win: _Window) -> dict[str, Any]:
+                    win: _Window, phases: dict | None = None) -> dict[str, Any]:
     ch = ctx.chambers[chamber]
     values = list(wells.values())
     minutes = win.size / ctx.sps / 60.0
@@ -527,6 +880,16 @@ def _chamber_values(ctx: _DFMLight, chamber: int, wells: dict[int, dict],
     for column in _COUNT_COLUMNS:
         out[column] = _sum(v[column] for v in values)
     out["ActivationsPerHour"] = _per_hour(out["Activations"], minutes)
+    ## The medians pool the wells' Activations; a well off the family has none.
+    for column, hidden in _POOLED.items():
+        out[column] = _median(np.concatenate([v[hidden] for v in values])) \
+            if any(pd.notna(v[column]) for v in values) else np.nan
+    earned = _sum(v["_FixedMain"] for v in values)
+    out["RewardEfficiency"] = (earned / out["MaxActivations"]
+                               if pd.notna(earned) and pd.notna(out["MaxActivations"])
+                               and out["MaxActivations"] > 0 else np.nan)
+    out.update(_open_loop_rates(ctx, phases, list(wells)) if phases is not None
+               else {c: np.nan for c in OPEN_LOOP_COLUMNS})
     acclimated = [v for v in values if v["AcclimationComplete"] is not None]
     if acclimated:
         complete = all(bool(v["AcclimationComplete"]) for v in acclimated)
@@ -565,6 +928,7 @@ def _rows(exp, dfm_id: int, range_minutes: Any,
     win = ctx.window(range_minutes)
     wanted = None if chambers is None else {int(c) for c in chambers}
     head = {"Generation": ctx.generation, **_window_paradigm(ctx, win)}
+    tol = activation_tolerance_ms(exp)
     well_rows: list[dict] = []
     chamber_rows: list[dict] = []
     for chamber in sorted(ctx.chambers):
@@ -575,11 +939,13 @@ def _rows(exp, dfm_id: int, range_minutes: Any,
             continue
         ident = {"DFM": ctx.dfm_id, "Chamber": chamber, "Treatment": treatment,
                  "Role": ctx.roles.get(chamber, "")}
-        wells = {int(w): _well_values(ctx, int(w), win)
+        phases = _open_loop_phases(ctx, chamber, win)
+        wells = {int(w): _well_values(ctx, int(w), win, tol=tol, phases=phases)
                  for w in sorted(ctx.chambers[chamber].wells)}
         for w, values in wells.items():
             well_rows.append({**ident, "Well": w, **head, **values})
-        chamber_rows.append({**ident, **head, **_chamber_values(ctx, chamber, wells, win)})
+        chamber_rows.append({**ident, **head,
+                             **_chamber_values(ctx, chamber, wells, win, phases)})
     return well_rows, chamber_rows
 
 
@@ -765,6 +1131,45 @@ def with_light_columns(exp, df: pd.DataFrame, range_minutes: Any = (0, 0)) -> pd
 # ---------------------------------------------------------------------------
 # For the reports
 # ---------------------------------------------------------------------------
+
+def program_headline_metrics(programs: Iterable[tuple[Any, Iterable[int] | None]]) -> list[str]:
+    """The headline metrics of the light table (decision 9) for members
+    running *programs*, each an ``(OptoProgram, DFM ids or None for every
+    section)`` pair: :func:`paradigm_families.headline_metrics
+    <pyflic.base.paradigm_families.headline_metrics>` of the families
+    :func:`~pyflic.base.paradigm_families.families_in` finds, fixed length
+    given by its branches, ``CutOffs`` with a ClosedLoop ``MaxOnMs`` and
+    ``AcclimationEndMin`` with Acclimation, pooled per family as a Project
+    pools them.  :data:`HEADLINE_METRICS` when no program runs a family (no
+    program, or one recorded without a program)."""
+    keys: list[str] = []
+    max_on = acclimation = False
+    for program, dfm_ids in programs:
+        if program is None:
+            continue
+        ids = None if dfm_ids is None else list(dfm_ids)
+        keys += [f for f in pfam.families_in(program, ids) if f != pfam.FIXED_LENGTH]
+        keys += pfam.branches_in(program, ids)
+        max_on |= pfam.max_on_in(program, ids)
+        acclimation |= pfam.acclimation_in(program, ids)
+    if not keys:
+        return list(HEADLINE_METRICS)
+    return pfam.headline_metrics(keys, max_on=max_on, acclimation=acclimation)
+
+
+def experiment_headline_metrics(exp) -> list[str]:
+    """The headline metrics of *exp*'s light table: those of the families
+    its program runs on its generation-3 DFMs (:func:`program_headline_metrics`).
+    A member with no generation-3 DFM the light QC covers keeps
+    :data:`HEADLINE_METRICS`, as before the families: its light table has
+    lit time only (decision 3)."""
+    if not getattr(exp, "is_optogenetic", False):
+        return list(HEADLINE_METRICS)
+    ids = [d for d in exp.opto.dfm_ids() if int(exp.dfms[d].generation) == GENERATION_PARADIGM]
+    if not ids:
+        return list(HEADLINE_METRICS)
+    return program_headline_metrics([(getattr(exp, "opto_program", None), ids)])
+
 
 def behaviour_rows(frame: pd.DataFrame | None) -> pd.DataFrame | None:
     """The rows whose light is their own, for comparing light behaviour

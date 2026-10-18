@@ -180,7 +180,9 @@ PLOT_TYPES: dict[str, dict] = {
 #: The light table's numeric columns as faceted figures (decision 17 of
 #: ``docs/v4-data-plan.md``): ``faceted_<metric lower-cased>``, drawn from the
 #: Combined Analysis' stacked light table (:data:`SOURCE_LIGHT`), one point per
-#: chamber.  The four headline metrics come first.
+#: chamber, each labelled with its unit.  The four headline metrics of before
+#: come first; then the other columns, and the Paradigm Families' own
+#: (stream S2 of ``docs/paradigm-analyses-plan.md``).
 LIGHT_METRICS: tuple[tuple[str, str], ...] = (
     ("Activations", "Activations"),
     ("LitSec", "Lit time (s)"),
@@ -196,16 +198,31 @@ LIGHT_METRICS: tuple[tuple[str, str], ...] = (
     ("LockedOutContactSec", "Feeding while locked out (s)"),
     ("UnlitSec", "Unlit time (s)"),
     ("Suppressions", "Suppressions"),
+    ("MainActivations", "Main Activations"),
+    ("MedianActivationSec", "Median Activation (s)"),
+    ("CutOffs", "Cut-offs"),
+    ("MaxActivations", "Most Activations possible"),
+    ("RewardEfficiency", "Reward efficiency (fraction)"),
+    ("MedianReturnSec", "Median return after the lockout (s)"),
+    ("MedianSuppressionSec", "Median suppression (s)"),
+    ("LicksPerMinLit", "Licks in the light (per min)"),
+    ("LicksPerMinDark", "Licks in the dark (per min)"),
+    ("LightFeedingIndex", "Light feeding index"),
 )
+#: A light metric's fixed axis and reference line, where its range is known.
+_LIGHT_AXES: dict[str, tuple[tuple[float, float], float]] = {
+    "LightFeedingIndex": ((-1.0, 1.0), 0.0),
+}
 #: The named source of the light figures.
 SOURCE_LIGHT = "light"
 for _metric, _label in LIGHT_METRICS:
+    _limits, _ref = _LIGHT_AXES.get(_metric, (None, None))
     PLOT_TYPES[f"faceted_{_metric.lower()}"] = {
         "family": FAMILY_FACETED, "metric": _metric, "y_label": _label,
-        "y_limits": None, "ref_line": None, "free_y": True,
+        "y_limits": _limits, "ref_line": _ref, "free_y": _limits is None,
         "display": f"{_label} (light, faceted)", "source": SOURCE_LIGHT,
     }
-del _metric, _label
+del _metric, _label, _limits, _ref
 
 #: Member file behind each named extra source, relative to ``analysis/``.
 #: The default time-course source is ``binned_feeding_summary.csv``; the

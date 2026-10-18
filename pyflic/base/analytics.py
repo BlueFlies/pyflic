@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, Sequence
+from typing import Any, Literal, NamedTuple, Sequence
 
 import numpy as np
 import pandas as pd
@@ -349,6 +349,67 @@ def compare_treatments(
 # Light-phase summary
 # ---------------------------------------------------------------------------
 
+#: The two phases of :func:`light_phase_summary`, in its row order.
+LIGHT_PHASES: tuple[str, ...] = ("light", "dark")
+
+
+class PhaseCounts(NamedTuple):
+    """One chamber's samples in one phase, and each of its wells' lick
+    samples and feeding-event starts in them, keyed by well (1-12)."""
+
+    samples: int
+    licks: dict[int, int]
+    events: dict[int, int]
+
+
+def dfm_lit(dfm: DFM) -> np.ndarray | None:
+    """``(n, 12)`` bool: whether each well's LED was lit in each sample, its
+    ``OnMs`` above 0 on a generation-3 recording (light from its Linkage
+    Group included), else its ``OptoCol1`` bit; ``None`` when the DFM has no
+    light columns."""
+    from .paradigm_state import GENERATION_PARADIGM
+
+    if dfm.generation == GENERATION_PARADIGM and dfm.paradigm is not None:
+        return np.asarray(dfm.paradigm.on_ms) > 0
+    lights = dfm.lights_df
+    columns = [f"W{w}" for w in range(1, 13)]
+    if lights is None or not set(columns) <= set(lights.columns):
+        return None
+    return lights[columns].fillna(0).to_numpy().astype(bool)
+
+
+def chamber_light_phases(dfm: DFM, wells: Sequence[int], *, lit: np.ndarray | None = None,
+                         rows: np.ndarray | None = None) -> dict[str, PhaseCounts]:
+    """:class:`PhaseCounts` of one chamber, its *wells*, keyed by phase
+    (:data:`LIGHT_PHASES`): a sample is "light" when one of the chamber's
+    own wells is lit (*lit*, default :func:`dfm_lit`), "dark" otherwise.
+    Over the sample indices *rows*, default every sample.
+
+    :func:`light_phase_summary` reports these over the whole recording;
+    the light table's open-loop rates (``light_summary``) over its
+    windows."""
+    lit = dfm_lit(dfm) if lit is None else lit
+    is_light = lit[:, [int(w) - 1 for w in wells]].any(axis=1)
+    if rows is not None:
+        is_light = is_light[rows]
+    columns = {}
+    for well in wells:
+        cname = f"W{int(well)}"
+        licks = dfm.lick_df[cname].to_numpy(dtype=bool)
+        events = dfm.event_df[cname].to_numpy(dtype=int)
+        if rows is not None:
+            licks, events = licks[rows], events[rows]
+        columns[int(well)] = (licks, events)
+    out: dict[str, PhaseCounts] = {}
+    for phase_name, mask in zip(LIGHT_PHASES, (is_light, ~is_light)):
+        out[phase_name] = PhaseCounts(
+            samples=int(np.sum(mask)),
+            licks={w: int(np.sum(licks & mask)) for w, (licks, _e) in columns.items()},
+            events={w: int(np.flatnonzero((events > 0) & mask).size)
+                    for w, (_l, events) in columns.items()})
+    return out
+
+
 def light_phase_summary(
     experiment: Experiment,
     *,
@@ -366,10 +427,10 @@ def light_phase_summary(
     one was lit.
 
     Returns one row per (DFM, Chamber, Phase) with Licks, Events
-    (and the A/B variants for two-well).
+    (and the A/B variants for two-well).  The counts come from
+    :func:`chamber_light_phases`, which the light table's open-loop rates
+    share (``light_summary``: LicksPerMinLit and LicksPerMinDark).
     """
-    from .paradigm_state import GENERATION_PARADIGM
-
     if transform_licks is None:
         transform_licks = experiment.transform_licks
     rows: list[dict[str, Any]] = []
@@ -379,33 +440,25 @@ def light_phase_summary(
             chamber_to_treatment[(int(tc.dfm_id), int(tc.chamber_index))] = trt_name
 
     for dfm_id, dfm in experiment.dfms.items():
-        if dfm.generation == GENERATION_PARADIGM and dfm.paradigm is not None:
-            lit = np.asarray(dfm.paradigm.on_ms) > 0
-        else:
-            lights = dfm.lights_df
-            columns = [f"W{w}" for w in range(1, 13)]
-            if lights is None or not set(columns) <= set(lights.columns):
-                continue
-            lit = lights[columns].fillna(0).to_numpy().astype(bool)
+        lit = dfm_lit(dfm)
+        if lit is None:
+            continue
         for chamber in dfm.chambers or []:
             ch_idx = int(chamber.index)
-            is_light = lit[:, [int(w) - 1 for w in chamber.wells]].any(axis=1)
+            phases = chamber_light_phases(dfm, chamber.wells, lit=lit)
             treatment = chamber_to_treatment.get((int(dfm_id), ch_idx), "")
-            for phase_name, mask in (("light", is_light), ("dark", ~is_light)):
+            for phase_name in LIGHT_PHASES:
+                counts = phases[phase_name]
                 row: dict[str, Any] = {
                     "DFM": int(dfm_id),
                     "Chamber": ch_idx,
                     "Treatment": treatment,
                     "Phase": phase_name,
-                    "PhaseSeconds": float(np.sum(mask)) / float(dfm.params.samples_per_second),
+                    "PhaseSeconds": float(counts.samples) / float(dfm.params.samples_per_second),
                 }
                 for well in chamber.wells:
-                    cname = f"W{int(well)}"
-                    licks = dfm.lick_df[cname].to_numpy(dtype=bool)
-                    events = dfm.event_df[cname].to_numpy(dtype=int)
-                    n_licks = int(np.sum(licks & mask))
-                    starts = np.flatnonzero((events > 0) & mask)
-                    n_events = int(starts.size)
+                    n_licks = counts.licks[int(well)]
+                    n_events = counts.events[int(well)]
                     if transform_licks:
                         n_licks_disp: float = float(n_licks) ** 0.25
                     else:
