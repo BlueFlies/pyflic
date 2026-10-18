@@ -160,3 +160,49 @@ checks the factor and the level.
 
 `pytest tests -q -p no:cacheprovider`: everything passes apart from the
 8 failures that existed before.
+
+## As built
+
+The build was finished on 2026-10-18 on `experiment-type-definitions`, in this
+order: the core (63524c9), the docs (d3571e0), Stream D (62a3f01) and
+Stream C (d956352). Where it departed from the plan above:
+
+- **Fixtures for ClosedLoop Training.** Some test fixtures run a ClosedLoop
+  Training interval before PR10: `choice_pr_spec`, and DFM 1 of
+  `tests/fixtures/Program_v4.txt`. Under the shipped ProgressiveRatio those
+  recordings now fail to load, as ADR-0019 says they should. The tests load
+  them under a lab type, `TrainedProgressiveRatio` (`tests/pr_fixtures.py`),
+  which expects ClosedLoop, ProgressiveRatio and FixedRatio. That keeps the
+  Training-interval code covered.
+- **A type's own Plot Specs.** Plot Specs are keyed by the built-in plot ids
+  in `pubfigures.PLOT_TYPES`. A type's own Plot Specs therefore restyle
+  built-in plots; they cannot add new kinds of plot.
+- **What the Sets offer.** ADR-0019 says "the type decides what is offered".
+  As built, the QC, Analysis and Plot Sets offer:
+  - the generic items, by layout and light, as before;
+  - plus the items of the type's modules.
+
+  The plots a type picks, and its own Plot Specs, make up its report set and
+  the Plot Editor's figures, not Selection items. `CONTEXT.md` says it this
+  way.
+- **A Control level field.** It sits in the Project design editor and the
+  Config Editor, and shows only under a type with a Treatment control.
+  Without it, a Design whose type has one could not be saved.
+- **Paired against Yoked under the ratio module.**
+  - In the experiment report it is a sentence pointing to the Paired-Yoked
+    Difference, which already opens those results.
+  - In the Project Report, the paired − yoked tables move to the front.
+- **No mixed model for the new comparisons.** Project-level Role
+  comparisons and Treatment controls use Welch's t and Dunnett on pooled
+  chambers. Unlike the yoked tables, they have no model of DFM within
+  member. Adding one is optional and has not been built.
+- **Editor details.**
+  - Picked plots are saved in the catalogue's order.
+  - Renaming a library type saves a new file and leaves the old one.
+  - Plot reordering and a reset to the default library folder were not
+    built.
+
+Still open: the real Progressive Ratio dataset is missing from this
+machine, so `tests/test_opto_real_dataset.py` skipped. Whether its program
+fits the shipped ProgressiveRatio, or needs a type that expects ClosedLoop
+Training, is unchecked.
