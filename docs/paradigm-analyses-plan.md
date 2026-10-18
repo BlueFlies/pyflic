@@ -1020,6 +1020,26 @@ Where the build departed from the plan, stream by stream.
   *non-feeding dark* against 10%, and 0.2 s for the interval lag against
   5 s.
 
+**S5** (77909f8):
+- **The test function was already public.** The test against zero is
+  `analytics.zero_tests`, used as it is: nothing was moved or copied.
+- **One treatment** gets the one-treatment note in place of the
+  comparison between treatments. The table of differences, each tested
+  against zero, still shows, as in the Project report.
+- **The CSV is written inside the "Light tables" step** of basic analysis.
+  The Project stacks it through `LIGHT_TABLES`.
+- **AcclimationActivations and AcclimationEndMin** now follow the ledger's
+  Phase. In one edge, an Acclimation of 1 starts and ends inside a state
+  run's first row, and the program corrects the ledger there
+  (`_unseen_acclimation`). On `stress_spec` this moved 8 wells. Activations
+  now equal AcclimationActivations plus MainActivations everywhere.
+- **A known gap on `stress_spec` DFM 3.** Its Circadian program starts
+  partway through its day, and the export lists only the first Interval.
+  The FixedInterval Interval that runs at minutes 2 to 4 is omitted, so its
+  thresholds are unknown, and wells 9 and 10 get no Acclimation columns.
+  The simulator reproduces PyMCU's export exactly, so a real recording of
+  such a program would be the same.
+
 **Joining the streams** (144ddb2): the Progressive Ratio light QC calls
 `rule_checks.requirement_series_mismatches`. The light table reads the
 tolerance through `OptoQCSettings`.
