@@ -513,11 +513,14 @@ class OptoLightQC:
         notes: list[str] = []
         program = self.program
         if program is not None:
-            shown = program.warnings[:8]
+            skipped = program.skipped
+            shown = skipped[:8]
             notes.extend(f"Program.txt: {w}" for w in shown)
-            if len(program.warnings) > len(shown):
-                notes.append(f"Program.txt: and {len(program.warnings) - len(shown)} "
+            if len(skipped) > len(shown):
+                notes.append(f"Program.txt: and {len(skipped) - len(shown)} "
                              f"more line(s) skipped")
+            if program.grammar == op.GRAMMAR_SIMPLE:
+                notes.append(f"Program.txt: {op.SIMPLE_WARNING}")
             sections = {d: program.dfms[d] for d in self.dfm_ids() if d in program.dfms}
             if sections:
                 paradigms = oq.paradigms_in(op.OptoProgram(

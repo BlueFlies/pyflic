@@ -374,9 +374,12 @@ def load_experiment_yaml(
             else:
                 print(f"Read {program_path.name}: DFM section(s) "
                       f"{sorted(opto_program.dfms)}", flush=True)
-                if opto_program.warnings:
-                    print(f"  NOTE: {program_path.name}: {len(opto_program.warnings)} "
+                if opto_program.skipped:
+                    print(f"  NOTE: {program_path.name}: {len(opto_program.skipped)} "
                           f"line(s) skipped or sections dropped (see summary.txt)",
+                          flush=True)
+                if opto_program.grammar == _opto.GRAMMAR_SIMPLE:
+                    print(f"  NOTE: {program_path.name}: {_opto.SIMPLE_WARNING}",
                           flush=True)
     ## The light the type expects (ADR-0019): a Program Interval running a
     ## Paradigm type it does not take stops the load, like any other way

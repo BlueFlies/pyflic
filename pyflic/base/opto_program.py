@@ -673,6 +673,13 @@ class OptoProgram:
     #: :data:`GRAMMAR_LEGACY`, :data:`GRAMMAR_V4` or :data:`GRAMMAR_SIMPLE`.
     grammar: str = GRAMMAR_LEGACY
 
+    @property
+    def skipped(self) -> list[str]:
+        """:attr:`warnings` without :data:`SIMPLE_WARNING`: the lines skipped
+        and sections ignored.  The simple export's warning says what the
+        recording is, and is not a line that was skipped."""
+        return [w for w in self.warnings if w != SIMPLE_WARNING]
+
     def section(self, dfm_id: int) -> DFMProgram | None:
         return self.dfms.get(int(dfm_id))
 
