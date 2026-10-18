@@ -165,11 +165,14 @@ Five new checks (broken yoking, a Paradigm name not in the program, an
 Acclimation count that does not match the Paradigm's, Firmware Events that
 disagree with pyflic's events, and lost, late or unknown-instruction rows)
 with five new constants, and a `Role` column for every optogenetic
-experiment, are specified in `docs/v4-data-plan.md`.
+experiment, are specified in `docs/v4-data-plan.md`, removed once built; its
+text is at commit 82aace9 ([Removed plans](../README.md#removed-plans)).
 
 ## Addendum (2026-10-17): each Paradigm checked against its own rule
 
-`docs/paradigm-analyses-plan.md` and ADR-0017 extend the generation-3 light QC
+`docs/paradigm-analyses-plan.md` (removed once built; its text is at commit
+82aace9, see [Removed plans](../README.md#removed-plans)) and ADR-0017 extend
+the generation-3 light QC
 from explaining light to checking each Paradigm's rule, with the program's
 settings, one Activation at a time.
 

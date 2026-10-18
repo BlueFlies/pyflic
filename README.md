@@ -12,7 +12,7 @@ pyflic is a complete port of the original R-based FLIC analysis pipeline (FLICFu
 - **Experiment Types** -- a named assay (Hedonic, Progressive Ratio, Custom, or one a lab builds in the Experiment Type Editor from pyflic's Analysis Modules) selects a chamber layout, states the light it expects, and constrains the facets, quality cutoffs, analyses, and report
 - **Facets** -- a time window is a column, not a directory: one `analysis/` per experiment carries every phase
 - **YAML configuration** -- experiment structure, parameters, factorial designs, and two levels of automated scripting
-- **Graphical tools** -- a tile-strip analysis hub, config editor, QC viewer, and a project-level Plot Editor
+- **Graphical tools** -- an Analysis Hub whose QC, Analyze and Plots panels are checkboxes over one button each, a config editor, a QC viewer, a project-level Plot Editor, and the Experiment Type Editor
 - **Statistical analysis** -- ANOVA / linear mixed models, bootstrap confidence intervals, parameter sensitivity sweeps, light-phase summaries, and bout microstructure analysis
 - **Publication outputs** -- journal-ready vector figures (faceted metric plots and binned time courses) rendered from a saved Plot Spec + Plot Style, plus PDF experiment and project reports
 
@@ -92,6 +92,13 @@ pyflic lint my_experiment/
 pyflic hub my_project/
 ```
 
+The Hub's QC, Analyze and Plots panels list what a run can produce as checkboxes, over
+one button each: **Run QC**, **Run analysis** and **Generate plots**. A tick is
+configuration, saved at once as `global.omit:` in the Project's design (or a standalone
+experiment's `flic_config.yaml`), so a script's `run_qc`, `run_analysis` and `run_plots`
+steps produce the same files as a click (ADR-0018). The Project's **Analyze all** and a
+Batch Run run each member's Basic analysis and its report, whatever the ticks.
+
 **From Python / Jupyter:**
 
 ```python
@@ -143,6 +150,9 @@ level flag.
 
 `pyflic --help` prints this list as text.
 
+The Experiment Type Editor has an entry point of its own, `pyflic-types`, and opens from
+the Hub's Tools panel too.
+
 ## How it works
 
 pyflic processes raw FLIC signal data through a multi-step pipeline:
@@ -187,6 +197,9 @@ The same topics are readable here on GitHub — they are ordinary markdown in
 | [Analysing a Progressive Ratio assay](docs/progressive-ratio-user-guide.md) | The Progressive Ratio assay end to end: settings, analyses, figures and statistics |
 | [The firmware 4.0.0 data columns](docs/v4-data-columns.md) | The 63 columns a firmware 4.0.0 recording adds, and where pyflic uses them |
 
+[docs/README.md](docs/README.md) indexes these guides, the developer references, and the
+plans removed once they were built.
+
 | Core concepts | |
 |---|---|
 | [The raw signal and the baseline](pyflic/help/content/concepts-signal.md) | Baseline subtraction |
@@ -215,16 +228,24 @@ The same topics are readable here on GitHub — they are ordinary markdown in
 
 The Experiment Type (`experiment_type:`) names the assay; the chamber layout
 (`chamber_layout:`, `single_well` or `two_well`) is set apart from it (ADR-0007). A type is
-a definition: pyflic ships three, and a lab builds its own in the Experiment Type Editor
-(`pyflic-types`) by combining Analysis Modules — Progressive Ratio, Hedonic, Paired and
-yoked, Light and dark — with the light it expects and the comparison its report leads with
-(ADR-0019). A lab type travels with the data as `experiment_type.yaml`.
+a definition, not code (ADR-0019). pyflic ships three, read-only, and a lab builds its own
+in the Experiment Type Editor (`pyflic-types`, or the Hub's Tools panel) by combining
+Analysis Modules — Progressive Ratio, Hedonic, Paired and yoked, Light and dark — with its
+layout, the light it expects, and the Control Comparison its report leads with. The lab's
+types live in a library folder set in the editor (`~/.config/pyflic/experiment_types` by
+default; a shared drive shares it). A lab type travels with the data as
+`experiment_type.yaml` beside `project.yaml` or `flic_config.yaml`; the Project design
+editor, the Hub and `pyflic lint` say when that copy differs from the library's.
 
-| Type | Chamber layout | Use case |
-|---|---|---|
-| `Custom` (the default) | `single_well` or `two_well` | Any design, any light or none: feeding summary, preference index on two wells, and for an optogenetic recording the light QC and light behaviour of whatever Paradigms it ran |
-| `Hedonic` | `two_well` | Hedonic feeding with weighted duration analysis, without light |
-| `ProgressiveRatio` | `two_well` | Progressive or fixed ratio training and test, with breaking point detection, with or without yoked controls |
+| Type | Chamber layout | Light it expects | Analysis Modules | Use case |
+|---|---|---|---|---|
+| `Custom` (the default) | `single_well` or `two_well` | any, or none | Paired and yoked, Light and dark | Any design: feeding summary, preference index on two wells, and for an optogenetic recording the light QC and light behaviour of whatever Paradigms it ran |
+| `Hedonic` | `two_well` | none | Hedonic | Hedonic feeding with weighted duration analysis, without light |
+| `ProgressiveRatio` | `two_well` | ProgressiveRatio, FixedRatio (OpenLoop beside them) | Progressive Ratio, Light and dark | Progressive or fixed ratio training and test, with breaking point detection, with or without yoked controls |
+
+A recording whose `Program.txt` runs a Paradigm type its Experiment Type does not expect
+stops loading and names it. A Progressive Ratio program with a ClosedLoop Training
+interval before its ratio Paradigm needs a lab type that expects ClosedLoop too.
 
 ## Migrating from R
 
@@ -242,7 +263,7 @@ pyflic reproduces the output of the R FLIC analysis pipeline. Key correspondence
 | `Link.Events(z, thresh)` | `link_events(z, thresh)` |
 | `PI.Multiplier` | `pi_direction: "left"` or `"right"` |
 | `ExpDesign.csv` | `flic_config.yaml` chambers section |
-| Manual R scripts | `scripts:` section in YAML, or GUI buttons |
+| Manual R scripts | `scripts:` section in YAML, or the Analysis Hub |
 
 Parameter names use underscores instead of dots (e.g. `Feeding.Threshold` becomes `feeding_threshold`). The YAML config replaces the combination of R parameter objects and `ExpDesign.csv` files.
 
@@ -283,7 +304,9 @@ Design rationale is recorded in
 [docs/adr/0003-help-topics-single-source.md](docs/adr/0003-help-topics-single-source.md)
 (what help is) and
 [docs/adr/0004-help-rendering-and-reference-validation.md](docs/adr/0004-help-rendering-and-reference-validation.md)
-(how it renders, and why the anchor code looks the way it does).
+(how it renders, and why the anchor code looks the way it does). Every other design
+decision is an ADR in [docs/adr/](docs/adr/), and [docs/README.md](docs/README.md) indexes
+the developer references, including where to read the plans removed once they were built.
 
 ## License
 

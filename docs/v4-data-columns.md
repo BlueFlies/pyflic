@@ -91,8 +91,15 @@ family its own way:
   Acclimation; each earned light period lasts exactly `ActivationMs`;
 - **non-feeding**: NonFeeding; dark while the fly feeds.
 
-The light content follows the rules in `Program.txt`, whatever the
-experiment type. Where each column shows up:
+How the light is checked and summarised follows the rules in `Program.txt`,
+whatever the experiment type. The experiment type says only which rules it
+expects: Custom takes any, Hedonic none, and Progressive Ratio its two ratio
+rules, with OpenLoop allowed beside them. A recording whose `Program.txt`
+runs a rule its type does not expect stops loading and names the rule; for
+such a design, build a type that expects that light in the Experiment Type
+Editor.
+
+Where each column shows up:
 
 - **The feeding summary** (`analysis/feeding_summary.csv`) of an optogenetic
   experiment gains `Role`, `LitSec` and `Activations` for each chamber.
@@ -104,17 +111,20 @@ experiment type. Where each column shows up:
   suppressions (NonFeeding), and feeding in the light against feeding in the
   dark (open loop). It carries the same Treatment and factor columns as the
   feeding summary, so it pools, plots and is compared between treatments the
-  same way. A Project stacks it into `<project>_LightSummary.csv`.
+  same way. Basic analysis writes it, as does the Hub's *Light tables* box
+  under **Run analysis**. A Project stacks it into
+  `<project>_LightSummary.csv`.
 - **Reports** gain a *Light behaviour* section, with one part per family the
   program runs, each comparing that family's own headline measures between
   treatments. Only the chambers that earn their own light are compared on
   Activations: a yoked chamber keeps its lit time beside its partner's. The
   Plot Editor offers every measure as a publication figure.
-- **Paired and yoked designs**, under any experiment type: where a light
-  circuit lights a yoked chamber with a paired one, the paired fly's feeding
-  minus its yoked partner's, by treatment, in `analysis/yoked_comparison.csv`,
+- **Paired and yoked designs**, under an experiment type with the *Paired
+  and yoked* analysis, which Custom has: where a light circuit lights a yoked
+  chamber with a paired one, the paired fly's feeding minus its yoked
+  partner's, by treatment, in `analysis/yoked_comparison.csv`,
   `<project>_YokedComparison.csv` and the reports' *Paired and yoked*
-  subsection.
+  subsection. Progressive Ratio has its own Paired-Yoked Difference instead.
 - **Progressive Ratio** reads training, light events and the ratio met
   straight from the recording. `pr_light_events.csv` gains `Requirement`,
   `FirmwareEvents` and `Phase`; `pr_breaking_point.csv` gains
@@ -122,8 +132,9 @@ experiment type. Where each column shows up:
   rule itself is unchanged. Fixed ratio programs, designs without yoked
   controls, and chamber groups taken from the program's linkage are supported
   too.
-- **Program Facets.** Set `facet_source: program` in the Project design, and
-  every summary is split by program step, each labelled with its rule's name.
+- **Program Facets.** Set `facet_source: program` in the Project design (or
+  a standalone experiment's config), and every summary is split by program
+  step, each labelled with its rule's name.
 - **The optogenetic light QC** judges each rule by its own logic, one light
   period at a time, from the firmware's own record, with the program's
   settings: a light period's length against its Hold, `ActivationMs` or
@@ -136,7 +147,8 @@ experiment type. Where each column shows up:
   for each rule the program ran. `qc/opto/opto_light_events.csv` lists every
   light period with its timing to the millisecond and what ended it.
 - **The Program timeline** (`qc/program/`, the report's Quality control, the
-  Hub's QC panel and the QC Viewer's *Program* tab) draws each DFM's program
+  *Program timeline* box of the Hub's QC panel, run by **Run QC**, and the QC
+  Viewer's *Program* tab) draws each DFM's program
   steps, and for each well its Acclimation, its Activations, its light, and
   the steps that set it `On` or `Off`; a restart is a red band.
 - **The integrity report** counts lost, repeated, late and unknown-instruction

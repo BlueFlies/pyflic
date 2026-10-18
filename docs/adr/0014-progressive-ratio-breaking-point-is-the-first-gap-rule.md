@@ -120,5 +120,6 @@ Ledger gains `Requirement`, `FirmwareEvents` and `Phase`. `LargestRequirement`
 is kept for generation 1 and equals `BreakRequirement` on generation 3. Under
 a FixedRatio Paradigm, new with 4.0.0, the same machinery runs with a constant
 `BreakRequirement`, and the Test window ends where the ratio Paradigm's run
-ends rather than at the end of the recording. The plan is
-`docs/v4-data-plan.md`.
+ends rather than at the end of the recording. The plan was
+`docs/v4-data-plan.md`, removed once built; its text is at commit 82aace9
+([Removed plans](../README.md#removed-plans)).

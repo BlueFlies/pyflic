@@ -10,7 +10,9 @@ FixedInterval's lockout, a progressive ratio's series, a NonFeeding's relight
 delay. After the v4 work, pyflic read all of them but checked few: one light
 QC with type-specific branches, and one light table whose report showed the
 same four measures for every program. The plan in
-`docs/paradigm-analyses-plan.md` gives each type a QC against its own rule and
+`docs/paradigm-analyses-plan.md` (removed once built; its text is at commit
+82aace9, see [Removed plans](../README.md#removed-plans)) gives each type a QC
+against its own rule and
 the summaries its rule makes meaningful. The question was where that content
 hangs. The term is in `CONTEXT.md` (*Paradigm Family*).
 
