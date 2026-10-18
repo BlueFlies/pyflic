@@ -4,10 +4,11 @@ What each figure shows, when it is produced, and what to look for in it.
 
 ## QC plots
 
-Written to the member's `qc/` folder for every DFM whenever QC runs — the Hub's **QC
-reports** button, the `run_qc` script action, or `execute_basic_analysis()` from Python.
-The Hub's **Basic analysis** skips them; QC is the QC panel's job. These are diagnostics,
-not figures for a paper.
+Written to the member's `qc/` folder for every DFM whenever QC runs — the Hub's **Run QC**,
+the `run_qc` script action, the Project's **Analyze all**, or `execute_basic_analysis()`
+from Python. Each is an item of the QC panel's QC Set, so Run QC writes the ones ticked
+there (see [QC panel](app-hub.md#qc-panel)). These are diagnostics, not figures for a
+paper.
 
 | Plot | Saved as | Shows |
 |---|---|---|
@@ -26,7 +27,7 @@ plateau is a fly that stopped, a step is a burst. A well whose curve never leave
 inactive and should be excluded.
 
 **Light explained by licks** (`plot_opto_light`) is drawn for an optogenetic experiment of
-any type, by basic analysis as well. One row per linkage group. The left panel is its lit
+any type, by Run QC and by basic analysis. One row per linkage group. The left panel is its lit
 time per bin, stacked: grey-blue where a trigger-well lick or touch within the light's
 Hold explains it, red where nothing does, purple where it was lit while every threshold
 was `Off` (-1), and light grey where the light is not judged by licks (open loop,
@@ -42,7 +43,7 @@ is a drifting sensor. The strip carries the group's verdict. See
 
 **Program timeline** (`plot_program_timeline`) is drawn, in an optogenetic experiment, for
 every DFM that has something to draw: firmware 4.0.0 data, or a `Program.txt` section.
-**QC reports** write it for each such DFM, and basic analysis for each firmware 4.0.0 DFM. A
+**Run QC** writes it for each such DFM, and basic analysis for each firmware 4.0.0 DFM. A
 recording whose light never came on (every well Off) gets none.
 
 - **The band at the top** is the program, one block per Program Interval, coloured by
@@ -82,7 +83,7 @@ How to read it:
 On a recording older than firmware 4.0.0 the band is laid out from the program's clock
 times, approximate, and the lanes show the sampled `OptoCol1` light only: no Acclimation, no
 ticks, no `On` or `Off` shading and no restarts. The bin width is the plot action's
-`binsize` (10 minutes by default; the Hub uses its Analyze panel's **Bin size**). See
+`binsize` (10 minutes by default, and always 10 minutes from the Hub's Run QC). See
 [Optogenetic experiments](concepts-optogenetics.md#the-program-timeline).
 
 ### Rule figures
@@ -120,7 +121,7 @@ report is faulty. See
 
 Box-and-jitter panels grouped by treatment — or by factor combination when
 [factors](config-factors.md) are declared. Written to `analysis/feeding_summary.png` by
-basic analysis.
+the Plots panel's **Feeding summary** and by basic analysis.
 
 Which metrics are panelled depends on the experiment type:
 
@@ -152,6 +153,10 @@ and intervals, since summing two durations is meaningless. `A` and `B` isolate o
 Bin width is yours to choose. Narrow bins show structure but are noisy; wide bins are
 smooth but can hide a short-lived effect entirely. Try more than one before concluding
 there is nothing there.
+
+On the Hub this is the Plots panel's **Binned time course**, in the *Chosen metric* group:
+the group's **Metric** menu picks the metric, and the Analyze panel's **Bin size** the bin.
+The group's **Dot plot** draws the same metric, one point per chamber.
 
 ### Sliding-window plots
 
@@ -378,9 +383,10 @@ the analysis — stays in these three figures, its strip saying why; the result 
 
 ## Where plots are saved
 
-Every figure the Hub's Plots panel draws is also written to the member's `analysis/` folder
-(the file names are in [Script actions](scripts-actions.md#plot-actions)), and opens as a tab
-in the output area. The Hub shows figures as static images, which paint fast and hold no live
+**Generate plots** writes every figure ticked on the Hub's Plots panel to the member's
+`analysis/` folder (the file names are in the [Plots panel](app-hub.md#plots-panel) table and
+in [Script actions](scripts-actions.md#plot-actions)), and opens each as a tab in the output
+area, replacing a tab of the same title. The Hub shows figures as static images, which paint fast and hold no live
 canvas in memory. Publication figures are the [Plot Editor](app-plot-editor.md)'s, written
 to the Project's `figures/`.
 

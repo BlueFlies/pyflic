@@ -90,7 +90,7 @@ too few licks to be a fly at all, an implausible median bout duration or event c
 those cutoffs are enabled, or, in a Progressive Ratio experiment, a chamber group whose
 training never finished or whose light the fly did not earn (the light QC). Each of the
 three numeric cutoffs is optional: unset or YAML `null` skips that check; only NaN lick
-values are always removed. Basic analysis runs auto-removal once per member, before
+values are always removed. Basic analysis, and the Hub's Run analysis, run auto-removal once per member, before
 writing the summary, and its reasons are in the member's `removed_chambers.csv` and the
 Project Report's exclusions table alongside the declared ones. The sheet has nothing to do
 with it: one is a machine verdict, the other is the experimenter's.

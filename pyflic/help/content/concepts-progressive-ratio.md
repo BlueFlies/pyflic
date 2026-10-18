@@ -227,7 +227,7 @@ for deciding a cutoff by hand. The QC figures keep a failed group in view, its p
 saying why; the result figures and tables no longer contain it.
 
 The Hub's QC panel has the **Light QC table** and the two figures behind the verdict, in its
-*Optogenetics* group; see
+*Progressive Ratio* group, which **Run QC** writes while they are ticked; see
 [Plot catalogue](plots-catalog.md#did-the-paired-fly-earn-its-light-qc).
 
 This check asks whether the paired fly *earned* each light event. Every optogenetic
@@ -325,8 +325,8 @@ default, and censoring is judged against the capped window. `TestMinutes` in
 ### Choosing the gap
 
 The rule does not know the time of day: a long pause at night ends a count like any other.
-The number moves with the gap, so `summary.txt` and the **Breaking point CSV** log always
-tabulate every group's breaking point at 60, 120 and 240 minutes beside the configured
+The number moves with the gap, so `summary.txt` and the log of the Analyze panel's
+**Breaking point** always tabulate every group's breaking point at 60, 120 and 240 minutes beside the configured
 value. Read that table before settling on a gap, and set it once, in the Project's design,
 so every member is analysed under one rule.
 
@@ -345,7 +345,10 @@ would remove most groups.
 
 ## Outputs
 
-Basic analysis writes, into the member's `analysis/`:
+Basic analysis writes, into the member's `analysis/`, the files below. The Hub's **Run QC**,
+**Run analysis** and **Generate plots** write the same files, each its ticked items (see
+the [Analysis Hub](app-hub.md#analyze-panel)); the cumulative difference table and curves
+keep one-minute bins whatever the Bin size.
 
 | File | One row per | Holds |
 |---|---|---|
@@ -410,7 +413,8 @@ The type needs to know where Training ends and when the light came on:
   must be stated in the config.
 
 A member analysed before the breaking point existed has no `pr_breaking_point.csv`; re-run
-its basic analysis, and the Project Report says so until you do.
+its analysis (**Run analysis** with *Breaking point* ticked, or **Analyze all**), and the
+Project Report says so until you do.
 
 ---
 

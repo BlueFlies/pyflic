@@ -7,9 +7,11 @@ repeated, and figures drawn to fit their box under the report's own heading.
 
 ## The experiment report
 
-Written to the member's `analysis/experiment_report.pdf` by the Hub's **PDF report**
-button, by **Analyze all**, by the `pdf_report` script action and by
-`write_experiment_report(exp)`.
+Written to the member's `analysis/experiment_report.pdf` by the Hub's **Run analysis**,
+while its *Experiment report (PDF)* box is ticked (it is written last, so it reflects the
+run), by **Analyze all**, by the `run_analysis` and `pdf_report` script actions and by
+`write_experiment_report(exp)`. From Run analysis, its time courses use the Analyze panel's
+**Bin size**.
 
 The report describes the analysis the pipeline runs, so it first applies the design's
 auto-removal — once, exactly as basic analysis does — and every result after the Quality

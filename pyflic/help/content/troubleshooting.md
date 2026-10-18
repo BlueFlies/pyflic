@@ -176,13 +176,14 @@ resume — the sensitivity table shows what each choice gives.
 
 ### The Project Report says a member has no breaking point table
 
-That member was analysed before the breaking point existed. Re-run its basic analysis.
+That member was analysed before the breaking point existed. Re-run its analysis: **Run
+analysis** with *Breaking point* ticked, or the Project's **Analyze all**.
 
 ## Optogenetic recordings
 
 ### The optogenetic light QC failed a group I trust
 
-Open `qc/opto/opto_light_qc.csv` and the **Light explained by licks (QC)** figure. Red light
+Open `qc/opto/opto_light_qc.csv` and the **Light explained by licks** figure. Red light
 beside orange in the panel to its right is a trigger well the firmware read as touched while
 pyflic saw nothing: a drifting or leaking well, whose light is not evidence of feeding. Red
 light with no orange is light the firmware had no reason to switch on — check the lid and

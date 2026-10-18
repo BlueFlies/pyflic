@@ -13,6 +13,7 @@ global:
   facet_source: ...                      # optional: cutoffs (default), program or program_cycles
   experimental_design_factors: { ... }   # optional
   well_names: { ... }                    # required by Hedonic and ProgressiveRatio
+  omit: { ... }                          # optional: what Run QC, Run analysis and Generate plots leave out
 
 dfms:
   1:
@@ -117,8 +118,8 @@ Facets. See [Facets](concepts-facets.md#program-facets).
 ## `global.constants`
 
 Cutoffs used by automatic chamber removal. They are not applied at load: they take effect
-when `auto_remove_chambers()` runs, which **basic analysis does once, before it writes the
-summary** — the Hub's *Basic analysis*, *Analyze all*, a Batch Run and
+when `auto_remove_chambers()` runs, which **an analysis does once, before it writes the
+summary** — the Hub's *Run analysis* and *Analyze all*, a Batch Run and
 `execute_basic_analysis()` all apply them, and every output describes the filtered design.
 The QC Viewer's **Auto Filter** and the Python API run the same removal on demand.
 
@@ -194,6 +195,47 @@ Well A. That is `pi_direction`'s job; see
 
 Defines a factorial design so chambers can be labelled by several crossed factors at once.
 See [Factorial designs](config-factors.md).
+
+## `global.omit`
+
+What the member's runs leave out: the boxes unticked on the Hub's QC, Analyze and Plots
+panels. Three lists of item ids, one per set:
+
+```yaml
+global:
+  omit:
+    qc: [bleeding]                        # Run QC
+    analyses: [event_statistics]          # Run analysis
+    plots: [dot_plot, well_comparison]    # Generate plots
+```
+
+Leave it out, or any of its lists, and everything runs. It stores what is left *out*, so an
+item a later pyflic adds is included until someone leaves it out. The Hub writes it as you
+tick and untick, so you rarely write it by hand.
+
+- **Who reads it.** The Hub's **Run QC**, **Run analysis** and **Generate plots**, and a
+  script's `run_qc`, `run_analysis` and `run_plots` steps. The Project's **Analyze all**, a
+  Batch Run's `run_all_analyses`, `basic_analysis` and the single-output script actions do
+  not: they run what they always ran.
+- **Inside a Project** it belongs to the design, like every `global:` key: `project.yaml`
+  `design.global.omit`, shared by every member. Ticking a member's box writes there, and
+  removes an `omit:` a member's own `global:` stated, so that member inherits the design's.
+- **What it cannot leave out.** Run analysis always writes the core — the auto-removal and
+  `removed_chambers.csv`, `summary.txt`, `feeding_summary.csv` and, with Facets,
+  `feeding_summary_facet.csv` — because every other item reads it.
+- **Nothing is deleted.** An item left out keeps whatever an earlier run wrote; the log and
+  `summary.txt` say that this run left it out.
+- **`pyflic lint`** warns of an id no run produces: a misspelt id leaves nothing out.
+
+| List | Ids, in panel order |
+|---|---|
+| `qc` | `integrity`, `data_breaks`, `raw_signal`, `baselined_signal`, `cumulative_licks`, `simultaneous_feeding`, `bleeding`, `opto_light_qc`, `opto_light_figures`, `program_timeline`, `pr_light_qc`, `pr_light_event_figures`, `pr_resting_level_figures` |
+| `analyses` | `binned_summary`, `event_statistics`, `light_tables`, `yoked_comparison`, `paired_yoked_diff`, `cumulative_diff`, `breaking_point`, `weighted_duration`, `experiment_report` |
+| `plots` | `feeding_summary_plot`, `well_comparison`, `binned_time_course`, `dot_plot`, `pr_cumulative_diff_plot`, `pr_cumulative_licks`, `pr_still_responding`, `pr_breaking_point_plots`, `hedonic_plot` |
+
+What each item writes, and which members it is offered for, is in the Analysis Hub's
+[QC panel](app-hub.md#qc-panel), [Analyze panel](app-hub.md#analyze-panel) and
+[Plots panel](app-hub.md#plots-panel) tables.
 
 ## `dfms`
 

@@ -57,11 +57,12 @@ Three rules run through everything:
 
 | How | What it writes |
 |---|---|
-| **Hub → QC → QC reports** | the **QC bundle**, into the member's `qc/` folder: the integrity report, the data breaks, the three signal plots, the two-well crosstalk tables, and when the member is optogenetic the light QC and the Program timeline of each DFM that has one |
-| **Hub → Analyze → Basic analysis** | auto-removal, `summary.txt` and the feeding summaries. It skips the QC bundle, which is the slow part, but it writes the optogenetic light QC, the light table, the Program timeline of each firmware 4.0.0 DFM of an optogenetic member, and a Progressive Ratio experiment's own light QC |
-| **QC Viewer** | loading a member on its **Load** tab writes the QC bundle. Opened from the Hub, the viewer starts on the member the Hub already loaded, and **Run QC** in its top bar writes the bundle |
-| **PDF report** | nothing into `qc/`. The report computes its integrity and crosstalk tables from the loaded recording, never from an old `qc/` folder |
-| **Scripts** | `run_qc` writes the QC bundle. `basic_analysis` skips it, as on the Hub |
+| **Hub → QC → Run QC** | the **QC bundle**, into the member's `qc/` folder: the integrity report, the data breaks, the three signal plots, the two-well crosstalk tables, and when the member is optogenetic the light QC and the Program timeline of each DFM that has one; for a Progressive Ratio member, its own light QC into `analysis/`. Each is a checkbox on the QC panel, and Run QC writes the ticked ones; every box starts ticked |
+| **Hub → Analyze → Run analysis** | auto-removal, `summary.txt` (with the QC summary) and the feeding summaries, then the ticked analyses, among them the light table. It writes nothing into `qc/` |
+| **Hub → Project → Analyze all** | for every member, the QC bundle, Basic analysis (the optogenetic light QC, the light table, the Program timeline of each firmware 4.0.0 DFM of an optogenetic member, a Progressive Ratio experiment's own light QC) and the report, whatever the panels' ticks |
+| **QC Viewer** | loading a member on its **Load** tab writes the QC bundle. Opened from the Hub, the viewer starts on the member the Hub already loaded, and **Run QC** in its top bar writes the whole bundle, whatever the Hub's ticks |
+| **The experiment report** | nothing into `qc/`. The report computes its integrity and crosstalk tables from the loaded recording, never from an old `qc/` folder |
+| **Scripts** | `run_qc` writes the QC bundle minus the items the config leaves out (`global.omit.qc`), as on the Hub. `basic_analysis` skips it |
 
 From Python, `execute_basic_analysis()` writes the QC bundle too, unless you
 pass `skip_qc=True`.
@@ -99,9 +100,11 @@ Every file outside `qc/opto/` and `qc/program/` has one copy per DFM, named `DFM
 `summary.txt` always lists the chambers excluded and the chambers
 auto-removal took out, and it has a light QC section for an optogenetic or
 Progressive Ratio experiment. Its *QC summary* of integrity, data
-breaks and crosstalk appears only when the QC bundle ran as part of basic
-analysis, as it does from Python by default. The Hub's Basic analysis
-leaves that section out; the report and `qc/` hold the same information.
+breaks and crosstalk appears when the QC ran as part of the analysis: from
+Python by default, from the Project's **Analyze all**, and from the Hub's
+**Run analysis**, which computes it for `summary.txt`. A script's
+`basic_analysis` leaves that section out; the report and `qc/` hold the same
+information.
 
 ---
 
@@ -419,8 +422,8 @@ folder and apply it; pyflic writes its rows into each member's file. See
 
 ### Automatically, by the design's cutoffs
 
-Basic analysis applies the design's `constants:` cutoffs once, before it
-writes any summary. The defaults depend on the experiment type:
+Basic analysis, and the Hub's Run analysis, apply the design's `constants:`
+cutoffs once, before writing any summary. The defaults depend on the experiment type:
 
 | Setting | Removes a chamber when | Custom | Hedonic, Progressive Ratio |
 |---|---|---|---|
@@ -446,7 +449,8 @@ the same rule.
 
 **Declaring does not change results already on disk.** When a member's
 `remove_chambers.csv` is newer than its saved results, the Hub's Analyzed
-column reads **re-run needed**. Run the member's basic analysis again.
+column reads **re-run needed**. Run the member's analysis again (**Run
+analysis**, or the Project's **Analyze all**).
 
 ---
 
@@ -741,7 +745,7 @@ two instead.
 
 ### 6.6 Where to look
 
-Basic analysis and **QC reports** both write the light QC into `qc/opto/`:
+Basic analysis and the Hub's **Run QC** both write the light QC into `qc/opto/`:
 
 | File | One row per | Holds |
 |---|---|---|
@@ -766,7 +770,8 @@ and on an optogenetic member its `Role`, `LitSec` and `Activations`.
 in Quality control, with the program, the verdicts and the figure, and on
 firmware 4.0.0 a *Rule check* subsection per Paradigm (section 7.7).
 
-Beside the QC, basic analysis writes the **light table**,
+Beside the QC, basic analysis, and the Hub's Run analysis with *Light tables* ticked,
+write the **light table**,
 `analysis/light_summary.csv` (per chamber) and `light_wells.csv` (per well):
 what the light did, with the feeding summary's treatment and factor columns,
 and on firmware 4.0.0 each Paradigm Family's own measures. It is a result,
@@ -775,10 +780,11 @@ it, on firmware 4.0.0 one subsection per family. See *Optogenetic
 experiments* in the help.
 
 **On the Hub**, the QC panel shows an **Optogenetics** group whenever the
-loaded member is optogenetic: **Opto light QC table** writes the tables and
-logs every flagged group, **Light explained by licks (QC)** draws the
-figure, **Program timeline** draws section 6.8's figure, and **Light summary
-CSV** writes the light table.
+loaded member is optogenetic, and **Run QC** writes what is ticked in it:
+**Light QC tables** writes the tables and logs every flagged group, **Light
+explained by licks** draws the figure, and **Program timeline** draws section
+6.8's figure (greyed when no DFM has one to draw). The light table is the
+Analyze panel's **Light tables**.
 
 **In the QC Viewer**, the **Opto Light QC** tab lists every linkage group with
 its chambers' Roles, lit time, unexplained share, onset, contact with no lick
@@ -793,9 +799,8 @@ licks makes healthy light look unexplained.
 ### 6.7 Reading *Light explained by licks*
 
 One row per linkage group that was ever lit or touched, or was flagged, with
-the group's wells and verdict in each panel's strip. Basic analysis and the
-QC Viewer draw it in 10-minute bins; the Hub's button uses the bin size on
-its Analyze panel.
+the group's wells and verdict in each panel's strip. Basic analysis, the
+Hub's Run QC and the QC Viewer draw it in 10-minute bins.
 
 - **The left panel** is the group's lit time per bin, stacked: **grey-blue**
   where a trigger-well lick or touch explains it, **red** where nothing
@@ -825,12 +830,11 @@ How to read a row:
 ### 6.8 Reading the Program timeline
 
 The **Program timeline** (`qc/program/program_timeline_dfm<n>.png`) shows,
-for one DFM, what its program ran and what each well did. QC reports draw it
+for one DFM, what its program ran and what each well did. Run QC draws it
 for every DFM with a `Program.txt` section or firmware 4.0.0 data, and basic
-analysis for every firmware 4.0.0 DFM. It is in the report's Quality control
-section, behind the Hub's **Program timeline** button (which uses the
-Analyze panel's bin size), and in the QC Viewer's **Program** sub-tab of each
-DFM.
+analysis for every firmware 4.0.0 DFM, both in 10-minute bins. It is in the
+report's Quality control section, behind the QC panel's **Program timeline**
+box, and in the QC Viewer's **Program** sub-tab of each DFM.
 
 - **The band at the top** is the program: one block per Program Interval,
   coloured by Paradigm type and labelled with the Paradigm's name, and with
@@ -1445,8 +1449,9 @@ training end: the Test window ends at the restart, …*.
 | `analysis/pr_resting_level_dfm<n>.png` | **Sucrose Well resting level**: a well that creeps up is a sensor problem |
 | `analysis/pr_cumulative_licks_dfm<n>.png` | **Training-aligned traces**: light that keeps firing while the paired trace is flat is self-triggering |
 
-The Hub shows the checks' buttons in the same **Optogenetics** group of the
-QC panel, beside the optogenetic ones.
+The Hub lists the checks in the QC panel's **Progressive Ratio** group,
+under the optogenetic ones, and **Run QC** writes the ticked ones; the
+training-aligned traces are a Plots panel figure.
 
 **The two light QCs can disagree, and both are right.** The PR check counts
 light *events*; the optogenetic check measures lit *time*. On the first real
@@ -1497,7 +1502,8 @@ contributes light measures an older one cannot (section 6.2).
 
 For each recording, before you look at any result:
 
-1. **Load it and write the QC bundle**: Hub → QC → **QC reports**.
+1. **Load it and write the QC bundle**: Hub → QC → **Run QC**, every box
+   ticked.
 2. **Integrity**: every DFM *ok*, or every warning explained, lost records
    among them (section 3.1). Note each DFM's generation.
 3. **Data breaks**: none long enough to matter (section 3.2).
@@ -1522,7 +1528,7 @@ For each recording, before you look at any result:
     failure is first a question about `Program.txt`; settle it before
     anything else (section 7).
 11. **Progressive Ratio**: the training table and the PR light QC (section 8).
-12. **Exclusions**: declare them, run **Basic analysis** again, and check
+12. **Exclusions**: declare them, click **Run analysis** again, and check
     `removed_chambers.csv` and the report's *Excluded chambers* table
     (section 5).
 13. **Write the report** and read its Quality control section and cover
@@ -1537,7 +1543,7 @@ groups and the exclusion counts per treatment (section 9).
 
 | You see | Likely cause | What to do |
 |---|---|---|
-| The QC Viewer's DFM tabs show no integrity files or plots | the QC bundle has not been written | **Run QC** in the viewer, or **QC reports** on the Hub |
+| The QC Viewer's DFM tabs show no integrity files or plots | the QC bundle has not been written | **Run QC** in the viewer, or on the Hub's QC panel |
 | The baselined plot shows thresholds you changed | the QC bundle predates the change | write it again |
 | An integrity **warning** | data breaks, error flags, lost records or a skipping index | read the integrity text for which; look at the signal plots around that time |
 | **Lost records** in the integrity report | the DFM lost records while the MCU was not reading it; `Messages.csv` says *Lost N records* (older PyMCU: *Skipped index*) | a short gap changes little; treat results across a long one with care, as for a data break |
@@ -1548,7 +1554,7 @@ groups and the exclusion counts per treatment (section 9).
 | The simultaneous-feeding table's `Both` is zero everywhere | the dual-feeding correction is on, and `Both` is counted after it | read `Both_pre`, the count before it (section 3.4) |
 | A **bleeding** warning | one well's signal appears in another above `feeding_threshold` | look at the responding well's baselined trace while the signalling well is fed from |
 | Many chambers removed for too few licks | the flies fed little, or `min_untransformed_licks_cutoff` is high for this assay | check the cumulative licks; set the cutoff in the design, for every member |
-| The Hub says **re-run needed** | exclusions changed after the results were written | run the member's basic analysis again |
+| The Hub says **re-run needed** | exclusions changed after the results were written | run the member's analysis again (**Run analysis**) |
 | A linkage group failed for **unexplained light** | most of its lit time had no lick or touch behind it | open *Light explained by licks*: orange beside the red is a drifting well; no orange is a light the firmware had no reason to switch on |
 | Unexplained light only **warns**, never fails | no `Program.txt` in `data/` | copy the MCU's exported `Program.txt` into `data/` and run again |
 | "holds more than one Program.txt" | two program files in `data/` | keep only the one exported for this recording |

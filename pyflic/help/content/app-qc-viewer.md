@@ -11,10 +11,12 @@ what you would have called by eye.
 Do this before running statistics, not after. Detection parameters that are wrong for your
 data produce output that looks entirely plausible.
 
-Opened from the Hub's QC panel, the viewer starts directly on the member the Hub already
-loaded — no second load. The **Run QC** button in the top bar computes the QC bundle for
-that experiment (integrity, data breaks, bleeding, and the raw / baselined /
-cumulative-licks plots) and refreshes the DFM tabs in place, so the plots appear without a
+Opened from the Hub's QC panel (**Open QC Viewer**, on its *View* card), the viewer starts
+directly on the member the Hub already loaded — no second load. The **Run QC** button in the
+viewer's top bar computes the whole QC bundle for that experiment (integrity, data breaks,
+bleeding, and the raw / baselined / cumulative-licks plots), whatever the Hub's QC panel has
+ticked — the Hub's own **Run QC** writes only the ticked items — and refreshes the DFM tabs
+in place, so the plots appear without a
 round-trip back to the Hub; progress streams to the Load tab's log, and unsaved exclusion
 checkboxes survive the refresh. Loading from the Load tab runs the same QC as part of the
 load.
