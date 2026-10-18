@@ -74,11 +74,11 @@ figure never changes its colour.
 |---|---|---|
 | `faceted_<metric>` | x = Treatment, one panel per facet, points + mean ± SEM | facet inclusion, Roles (PR), free y |
 | `timecourse_<metric>` | x = time bin, one line per treatment, SEM ribbon | bin size, ribbon |
-| `scatter_pr_breaking_point` | x = BreakMin, y = Breaking Point (PR only) | treatments; Facets/Roles hidden |
-| `dot_pr_breaking_point` | x = Treatment, y = Breaking Point (PR only) | treatments; Facets/Roles hidden |
+| `scatter_pr_breaking_point` | x = BreakMin, y = Breaking Point (Progressive Ratio module) | treatments; Facets/Roles hidden |
+| `dot_pr_breaking_point` | x = Treatment, y = Breaking Point (Progressive Ratio module) | treatments; Facets/Roles hidden |
 
-The **Facets** group and the bin-size row swap places to match the selected plot's family;
-everything else is the same across families. The check boxes on the panel are *within* one
+The **Facets** group shows for a faceted figure, and the bin-size and ribbon rows for a
+time course; everything else is the same across families. The check boxes on the panel are *within* one
 figure — which facets it shows and which treatments it draws — not a choice between
 figures.
 

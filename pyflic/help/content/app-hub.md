@@ -81,8 +81,9 @@ folder (`Sept2026/ProjA`).
 
 - **Check** the Projects a Batch Run should touch. One with nothing usable starts
   unchecked, because it could only produce a failure.
-- **Red rows** hold blocked members; hover for the reasons, right-click to open the review
-  window focused on that Project.
+- **Red rows** hold blocked members; hover for the reasons. Right-click a row for **Fix
+  blocked members in …**, which opens the review window focused on that Project, or
+  **Open … as the Project…**.
 - **Double-click** a row to make it the working Project — the Project panel opens on it.
   There is no drill-in state and no up-button; the Batch panel keeps showing the batch it
   came from.
@@ -181,8 +182,9 @@ with nothing to conform to is not a member.
   is the config scaffolded and the config editor opened, because a recording left at the
   root would make the freshly configured member look empty. An ambiguous or unreadable
   folder is refused rather than guessed at. The count is how many candidates there are.
-- **Member configs…** — the bulk view: every folder with its config status, so the missing
-  ones can be created and the existing ones opened without hunting through the file system.
+- **Member configs… (n missing)** — the bulk view: every folder with its config status, so
+  the missing ones can be created and the existing ones opened without hunting through the
+  file system. See [The Member configs dialog](concepts-project.md#the-member-configs-dialog).
 
 **Double-click a blocked row** to fix it in place: a row with no config offers to scaffold
 one and open it; an unfiled recording offers to file itself.

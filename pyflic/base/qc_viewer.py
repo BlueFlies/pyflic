@@ -2249,8 +2249,7 @@ class MainWindow(QtWidgets.QMainWindow):
         """Add the top-bar ``?`` and bind F1 to the current tab's topic."""
         self._help_ref = "app-qc-viewer"
         try:
-            from ..help import open_help
-            from PyQt6.QtGui import QKeySequence, QShortcut
+            from ..help import install_help_shortcut, open_help
         except Exception:  # noqa: BLE001 - help is optional, the viewer is not
             return
         from .ui.icons import help_color
@@ -2263,10 +2262,7 @@ class MainWindow(QtWidgets.QMainWindow):
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
         btn.clicked.connect(lambda: open_help(self._help_ref))
         self._top_bar.add_right(btn)
-
-        sc = QShortcut(QKeySequence(Qt.Key.Key_F1), self)
-        sc.setContext(Qt.ShortcutContext.WindowShortcut)
-        sc.activated.connect(lambda: open_help(self._help_ref))
+        install_help_shortcut(self, lambda: self._help_ref)
 
     #: Top-level tab label → its help; a DFM tab's follows its sub-tab.
     _TAB_HELP: dict[str, str] = {

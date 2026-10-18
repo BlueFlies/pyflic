@@ -7,6 +7,8 @@ GUI → help, so removing this package breaks only its call sites.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from PyQt6.QtCore import QEvent, QSize, Qt
 from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import QToolButton, QWidget
@@ -126,10 +128,20 @@ class HelpButton(QToolButton):
         open_help(self._topic_id, self._anchor)
 
 
-def install_help_shortcut(widget: QWidget, ref: str) -> QShortcut:
-    """Bind F1 on *widget* to open help at *ref*."""
-    topic_id, anchor = _topics.parse_ref(ref)
+def install_help_shortcut(widget: QWidget, ref: str | Callable[[], str]) -> QShortcut:
+    """Bind F1 on *widget*'s window to open help at *ref*.
+
+    *ref* may be a callable returning the reference, for a window whose help
+    follows what it shows (the QC Viewer's tabs).  Bind F1 once per window:
+    a second binding — a menu action's shortcut, say — makes the key
+    ambiguous, and Qt then fires neither.
+    """
     sc = QShortcut(QKeySequence(Qt.Key.Key_F1), widget)
     sc.setContext(Qt.ShortcutContext.WindowShortcut)
-    sc.activated.connect(lambda: open_help(topic_id, anchor))
+
+    def activated() -> None:
+        topic_id, anchor = _topics.parse_ref(ref() if callable(ref) else ref)
+        open_help(topic_id, anchor)
+
+    sc.activated.connect(activated)
     return sc
