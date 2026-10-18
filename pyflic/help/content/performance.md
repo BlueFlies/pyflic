@@ -2,7 +2,7 @@
 
 Loading is the expensive step in pyflic: reading CSVs, subtracting baselines, and running
 detection across every well of every device. Everything after it is comparatively cheap.
-These are the three levers.
+These are the levers.
 
 ## Parallel loading
 
@@ -15,7 +15,9 @@ These are the three levers.
 exp = load_experiment_yaml(path, parallel=True)
 ```
 
-DFMs are loaded concurrently. Worth enabling on any experiment with more than one device.
+DFMs are loaded concurrently. It is on by default — in the loader, the Hub and a script's
+`load` step — and worth keeping on for any experiment with more than one device. Turn it off
+(`parallel: false`) only to debug a load, or on a machine with a slow disk.
 
 ## The disk cache
 
@@ -23,9 +25,11 @@ With `use_disk_cache=True` (the default), the computed feeding summary is cached
 `<experiment directory>/.pyflic_cache/`.
 
 The cache key is derived from the **SHA-256 hash of the configuration file** together with
-the **modification times and sizes of every DFM CSV**. Change a parameter, edit the
-configuration, or replace a data file, and the key changes and the cache is bypassed
-automatically.
+the **modification times and sizes of every DFM CSV** in `data/`, and of `Program.txt` and
+`Messages.csv` there when present, and from the time range and lick transform asked for.
+Change a parameter, edit the configuration, or replace a data file, and the key changes and
+the cache is bypassed automatically. A pyflic release that changes how the summary is
+computed retires the old entries the same way.
 
 That construction is why you almost never need to clear it: a stale entry cannot be
 served for changed inputs. Clearing is a disk-space operation, not a correctness one.
@@ -69,11 +73,11 @@ results there; to compare phases of one recording, use [Facets](concepts-facets.
 
 ## In the hub
 
-**Parallel** loading and the worker count sit in the Project panel beside the members
-table. Figures are embedded as static images, rasterised once and released, so many tabs
+**Load DFMs in parallel** and the **Workers** count (`auto` by default) sit under *Load
+options* on the Project panel's Experiments card, below the members table. Figures are embedded as static images, rasterised once and released, so many tabs
 cost little memory; **Clear Tabs** in the output area closes them all. During a Batch Run,
-**Suppress new plot / output tabs** stops them being created at all. **Clear cache** is on
-the Tools panel.
+**Suppress new plot / output tabs** stops them being created at all. **Clear cache** on the
+Tools panel clears the loaded member's cache; load the member first.
 
 ---
 

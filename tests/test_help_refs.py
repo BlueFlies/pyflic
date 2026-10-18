@@ -23,15 +23,23 @@ from pyflic.help.toc import GUIDES, TOC, all_topic_ids
 # GUI modules that may reference help topics.
 _GUI_ROOT = Path(__file__).resolve().parent.parent / "pyflic"
 
-# HelpButton("ref"), install_help_shortcut(x, "ref"), open_help("ref"),
-# and the editors' _add_help(widget, "ref", ...)
+# HelpButton("ref"), install_help_shortcut(x, "ref"), open_help("ref"), and
+# every GUI helper with "help" in its name that takes the ref first among its
+# strings: _add_help(card, "ref", ...), _add_row_help(row, "ref", ...),
+# _with_help(widget, "ref", ...), _help_button("ref", ...).
 _CALL_SITE_RE = re.compile(
-    r"""(?:HelpButton|install_help_shortcut|open_help|_add_help)\(
+    r"""(?:HelpButton|\w*help\w*)\(
         [^)"']*                       # leading args (widget, self, …)
         ["'](?P<ref>[a-z0-9\-]+(?:\#[^"']+)?)["']
     """,
     re.VERBOSE,
 )
+
+# Any string literal shaped like "topic-id#anchor", wherever it sits: in a
+# call, in a map of tab labels to refs, as a default.  Nothing else in the
+# GUI source has that shape.
+_ANCHORED_LITERAL_RE = re.compile(
+    r"""["'](?P<ref>[a-z][a-z0-9\-]*\#[A-Za-z0-9_\-]+)["']""")
 
 #: Parameter keys that GUI controls turn into ``reference-parameters#<key>``
 #: at runtime.  Sourced from the widgets themselves so the test tracks the
@@ -173,6 +181,30 @@ def test_gui_help_references_resolve():
 
     assert not problems, "dangling help references:\n  " + "\n  ".join(problems)
     assert seen > 0, "found no help call sites — has the regex drifted from the code?"
+
+
+def test_every_anchored_reference_literal_resolves():
+    """Every ``"topic#anchor"`` string in the GUI source resolves.
+
+    The call-site scan sees a reference only where it is passed straight to a
+    help call.  The QC Viewer's per-tab maps, the Script Editor's per-pane
+    map and the corner buttons' defaults hold theirs in dicts and arguments
+    it cannot see; this catches every one that names an anchor.
+    """
+    problems: list[str] = []
+    seen = 0
+    for path in _iter_gui_sources():
+        for m in _ANCHORED_LITERAL_RE.finditer(path.read_text(encoding="utf-8")):
+            seen += 1
+            topic_id, anchor = _topics.parse_ref(m.group("ref"))
+            topic = _topics.load(topic_id)
+            rel = path.relative_to(_GUI_ROOT.parent)
+            if topic is None:
+                problems.append(f"{rel}: unknown topic {topic_id!r} in {m.group('ref')!r}")
+            elif not topic.has_anchor(anchor):
+                problems.append(f"{rel}: {topic_id}#{anchor} — no such heading")
+    assert not problems, "dangling help references:\n  " + "\n  ".join(problems)
+    assert seen > 50, "found few anchored references — has the pattern drifted?"
 
 
 def test_hub_tile_help_map_resolves():

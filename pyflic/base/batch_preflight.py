@@ -52,6 +52,21 @@ _DIR_ROLE = Qt.ItemDataRole.UserRole + 1
 PROJECT_COLUMN_MAX_WIDTH = 280
 
 
+def _help_button(ref: str, tooltip: str):
+    """A ``?`` opening *ref*, or ``None`` when help is unavailable."""
+    try:
+        from ..help import HelpButton
+    except Exception:  # noqa: BLE001 - help is optional, the run is not
+        return None
+    return HelpButton(ref, tooltip=tooltip)
+
+
+def _add_row_help(row: QHBoxLayout, ref: str, tooltip: str) -> None:
+    button = _help_button(ref, tooltip)
+    if button is not None:
+        row.addWidget(button, 0, Qt.AlignmentFlag.AlignVCenter)
+
+
 def blocked_brush() -> QBrush:
     """The Blocked-Member red as a brush — one definition, in the theme."""
     from .ui import blocked_color
@@ -89,6 +104,16 @@ class BatchPreflightDialog(QDialog):
         self._sheet_choice = None
         self.setWindowTitle("Batch Run — review")
         self.setMinimumSize(760, 520)
+        ## Window-modal, like the Hub's other dialogs: the Hub behind it is
+        ## what it governs, but the help its F1 opens, and a config editor a
+        ## repair opens, must stay usable beside it.
+        self.setWindowModality(Qt.WindowModality.WindowModal)
+        try:
+            from ..help import install_help_shortcut
+
+            install_help_shortcut(self, "scripts-batch#the-review-window")
+        except Exception:  # noqa: BLE001 - help is optional, the run is not
+            pass
 
         outer = QVBoxLayout(self)
         outer.setSpacing(10)
@@ -96,7 +121,11 @@ class BatchPreflightDialog(QDialog):
         self._heading = QLabel("")
         self._heading.setWordWrap(True)
         self._heading.setStyleSheet("font-weight: 600;")
-        outer.addWidget(self._heading)
+        heading_row = QHBoxLayout()
+        heading_row.addWidget(self._heading, 1)
+        _add_row_help(heading_row, "scripts-batch#the-project-list",
+                      "The project list: checks, member counts and blocked rows  (F1)")
+        outer.addLayout(heading_row)
 
         self._tree = QTreeWidget()
         self._tree.setColumnCount(3)
@@ -138,6 +167,8 @@ class BatchPreflightDialog(QDialog):
                               "outside the app.")
         btn_rescan.clicked.connect(self.reload)
         actions.addWidget(btn_rescan)
+        _add_row_help(actions, "scripts-batch#repairing-blocked-members",
+                      "Repairing blocked members before the run")
         actions.addStretch(1)
         outer.addLayout(actions)
 
@@ -148,7 +179,16 @@ class BatchPreflightDialog(QDialog):
             "Write the sheet's rows into each member's remove_chambers.csv.  "
             "Unchecking skips it for this run only — the sheet and every "
             "standing declaration are left untouched.")
-        outer.addWidget(self._sheet_box)
+        sheet_row = QHBoxLayout()
+        sheet_row.addWidget(self._sheet_box)
+        ## Shown and hidden with the switch it explains (_refresh_sheet).
+        self._sheet_help = _help_button(
+            "scripts-batch#the-exclusion-sheet-switch",
+            "The exclusion sheet: what applying it does, and declining it")
+        if self._sheet_help is not None:
+            sheet_row.addWidget(self._sheet_help, 0, Qt.AlignmentFlag.AlignVCenter)
+        sheet_row.addStretch(1)
+        outer.addLayout(sheet_row)
         self._sheet_label = QLabel("")
         self._sheet_label.setWordWrap(True)
         self._sheet_label.setStyleSheet("color: palette(mid);")
@@ -285,6 +325,8 @@ class BatchPreflightDialog(QDialog):
         preview = batch_mod.preview_exclusion_sheet(
             self._root, projects=self.selected_keys)
         sheet = preview.get("sheet")
+        if self._sheet_help is not None:
+            self._sheet_help.setVisible(sheet is not None)
         if sheet is None:
             self._sheet_box.setVisible(False)
             self._sheet_label.setText(

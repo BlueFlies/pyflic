@@ -12,8 +12,10 @@ without anyone remembering which buttons were pressed in which order.
 
 ## Two levels
 
-There are two script levels with **separate action registries**. They cannot mix: a
-project-level step in an Experiment Script is an error, and vice versa.
+There are two script levels with **separate action registries**, and they cannot mix. A
+Project Script that names an Experiment Script action is refused before it starts, with
+the step named. An Experiment Script that names a project action skips that step as an
+unknown action.
 
 | Level | Lives in | Acts on | Run from |
 |---|---|---|---|
@@ -37,7 +39,6 @@ some of them.
 experiment_scripts:              # one recipe, serving every member
   - name: standard
     steps:
-      - action: load
       - action: basic_analysis
       - action: binned_csv
         binsize: 30
@@ -47,6 +48,7 @@ scripts:                         # Project Scripts
     steps:
       - action: run_in_experiments
         script: standard
+      - action: build_combined_analysis
       - action: project_report
       - action: render_publication_figures
 ```
@@ -54,6 +56,15 @@ scripts:                         # Project Scripts
 Putting a recipe in `experiment_scripts:` means one copy serves every member instead of
 being pasted into each of their configs. A member's own `scripts:` is the fallback when
 the name is not found centrally.
+
+Keep `build_combined_analysis` after the members' analyses. `project_report` builds the
+Combined Analysis only when there is none yet, so without that step the report pools
+whatever the last Combined Analysis held.
+
+A Project Script is checked before it runs: every step must be a project action, and
+`run_in_experiments` must name an Experiment Script that exists. It then stops at its first
+failing step. `run_in_experiments` itself carries on past a member that fails, and logs how
+many members ran.
 
 ### Built-in Project Scripts
 
@@ -63,9 +74,18 @@ Two pipelines every Project can run without authoring anything. Neither is writt
 - **Standard Pipeline** — validate design → project report → render figures
 - **Report Pipeline** — project report → render figures
 
-A Batch Run prefers the Report Pipeline's steps because they do not gate on
-`validate_design`, which would fail Projects mid-migration. That is what every new
-`project.yaml` is seeded with, under the name `batch`.
+Neither analyzes a member, and the report builds the Combined Analysis only when there is
+none yet.
+
+### The `batch` script every Project starts with
+
+Every new `project.yaml` is seeded with a Project Script named `batch`, which is what a
+Batch Run executes unless another script is designated:
+
+- analyze all members → build combined analysis → project report → render figures
+
+It has no `validate_design` step, which would fail Projects mid-migration. Edit or replace
+it like any other script.
 
 ## Defining an Experiment Script
 
@@ -74,10 +94,9 @@ Scripts live under a `scripts:` key:
 ```yaml
 scripts:
   - name: "Standard Analysis"
+    start: 0          # minutes; every step reads 0–240 unless it sets its own
+    end: 240
     steps:
-      - action: load
-        start: 0
-        end: 240
       - action: remove_chambers
       - action: write_summary
       - action: basic_analysis
@@ -93,7 +112,6 @@ scripts:
 
   - name: "Quick Overview"
     steps:
-      - action: load
       - action: basic_analysis
       - action: plot_feeding_summary
 ```
@@ -103,25 +121,20 @@ else is optional. Define as many scripts as you like — each appears in the Scr
 dropdown.
 
 You do not have to write this by hand. The [Script Editor](scripts-editor.md) builds it
-visually.
+visually. The one thing it has no field for is the script-level `start` and `end`: add
+those in the YAML, and the editor keeps them when it saves.
 
-## Start with `load`
+## The member is already loaded
 
-Every script should begin with a `load` step. It reads the CSVs, applies the time window,
-and prepares the experiment for every step that follows.
+A script runs on a member that is already loaded: the one you loaded in the Hub, or, for
+`run_in_experiments`, each member as the Project loads it. There is nothing to load first.
 
-```yaml
-- action: load
-  start: 0        # minutes; omit to inherit from the hub
-  end: 240        # 0 means "through the end of the recording"
-  parallel: true  # load DFMs concurrently
-```
+Scripts written for earlier versions begin with a `load` step. It still runs, and does
+nothing: its `start`, `end` and `parallel` change nothing. Put the time window on the
+script or on each step instead (see below). Parallel loading is the Project panel's
+**Load DFMs in parallel** option, used when you load a member.
 
-If a script has no `load` step, the hub loads with its current settings before the first
-step runs. Relying on that makes the script's behaviour depend on what the hub happened to
-be set to, which is exactly the reproducibility you were trying to buy. Be explicit.
-
-## Follow it with `remove_chambers` and `write_summary`
+## Start with `remove_chambers` and `write_summary`
 
 ```yaml
 - action: remove_chambers
@@ -129,11 +142,13 @@ be set to, which is exactly the reproducibility you were trying to buy. Be expli
 - action: write_summary
 ```
 
-`remove_chambers` applies exclusions from `remove_chambers.csv`. **When `group` is omitted
-it defaults to the script's name**, which is what lets one CSV serve several scripts with
+`remove_chambers` applies a group of exclusions from the member's `remove_chambers.csv`,
+on top of the group its load already applied (see
+[exclusions](config-dfms-chambers.md#excluding-chambers)). **When `group` is omitted it
+defaults to the script's name**, which is what lets one CSV serve several scripts with
 different exclusion sets. It also means a script name that does not match any group in the
-CSV applies no exclusions at all, silently — so if exclusions seem not to be taking
-effect, check that spelling first.
+CSV applies no exclusions at all, with only a log line saying the group lists no chambers —
+so if exclusions seem not to be taking effect, check that spelling first.
 
 `write_summary` records which chambers were excluded and what the experiment looked like
 afterwards. Putting it immediately after exclusions means your summary describes the data
@@ -146,9 +161,10 @@ For each step, a parameter is resolved in this order:
 1. **The step itself** — `binsize: 30` written on that step
 2. **The script level** — `start:` / `end:` set on the script
 3. **The default** — for `start` and `end`, the whole recording; for `binsize`, the Analyze
-   panel's **Bin size** box when the script runs from the Hub, else 30 minutes. The light
-   figure and the Program timeline (10 minutes) and the Progressive Ratio curves (1 minute)
-   keep their own defaults instead.
+   panel's **Bin size** box when an Experiment Script runs from the Scripts panel, else 30
+   minutes (in `run_in_experiments`, and so in a Batch Run). The light figure and the
+   Program timeline (10 minutes) and the Progressive Ratio curves (1 minute) keep their own
+   defaults instead.
 
 So a step-level value always wins. A blank `binsize` follows the Hub's Bin size box, which
 lets one script be re-run at another bin by changing it, while the values you *did* pin stay
@@ -158,6 +174,9 @@ and the script mean the whole recording.
 ## Time windows
 
 `start` and `end` are minutes, and `end: 0` means "through the end of the recording".
+`run_qc`, `run_analysis` and `run_plots` always read the whole recording, as the Hub's
+buttons do: a `start` or `end` does not reach them.
+
 Outputs always go to `analysis/`, whatever the window, so a second run over a different
 window overwrites the first. To compare phases of one recording, declare
 [Facets](concepts-facets.md) instead: every phase lands in one table, side by side.

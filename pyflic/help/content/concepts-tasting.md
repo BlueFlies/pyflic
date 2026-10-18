@@ -13,7 +13,9 @@ A sample is a **tasting lick** when both of these hold:
 
 The second condition is what keeps the two categories disjoint. Feeding detection runs
 first and takes precedence; tasting is identified from what remains. A sample can never be
-counted as both.
+counted as both. The feeding licks it checks against are those before
+[event linking](concepts-licks-events.md#event-linking-the-link-gap), so a sample in a gap
+that linking bridged can still be a tasting lick.
 
 Contiguous runs of tasting licks are grouped into **tasting events**, and runs shorter
 than `tasting_minevents` samples are discarded — the same minimum-length rule that applies
@@ -47,9 +49,17 @@ the tasting band. Always report which detection parameters produced a tasting re
 
 ## Where tasting appears
 
-Tasting events are counted per chamber and appear in the feeding summary alongside feeding
-metrics. In two-well experiments they are tracked per well, so you can ask whether a fly
-sampled one option and fed on the other — a distinction that lick counts alone would hide.
+Tasting is **not** in the feeding summary: its `Licks`, `Events` and durations are feeding
+only. Tasting appears in:
+
+- **The event statistics export** with `kind: tasting` — the
+  [script action](scripts-actions.md#analyse-actions) `tidy_export` writes
+  `analysis/tidy_tasting_events.csv`, one row per tasting event with its time, duration,
+  licks and intensity. In two-well experiments each row names its well, so you can ask
+  whether a fly sampled one option and fed on the other — a distinction that lick counts
+  alone would hide. The Hub's *Event statistics* item writes feeding events only.
+- **The optogenetic light QC**, which counts a tasting sample, like a feeding lick, as the
+  fly's contact with the well. See [Optogenetic experiments](concepts-optogenetics.md).
 
 ---
 

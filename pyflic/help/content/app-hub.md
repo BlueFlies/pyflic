@@ -49,9 +49,13 @@ would be pointing away from the only way forward.
 
 **Help is on every panel.** Each panel's cards carry a `?` beside their title, and each group
 box of the QC, Analyze and Plots panels (*QC reports*, *Optogenetics*, *Progressive Ratio*,
-*Chosen metric*, …) carries its own, opening this window at the topic for that area. The `?`
-at the right-hand end of the output area, beside **Clear Errors**, opens help at the start
-whatever is open, and **F1** opens this topic.
+*Chosen metric*, …) carries its own, opening this window at the topic for that area. A
+control that needs more than its card says has a `?` beside it too: the Batch panel's
+Project Script menu and AI narrative, the Experiments card's member buttons, repair row
+and load options, the Analysis card's script row, and the AI panel's provider. The `?` at the right-hand end of the output area, beside **Clear Errors**, opens
+help at the start whatever is open, and **F1** opens this topic. The Hub's dialogs —
+*Project design*, *Member configs* and the Batch Run review — open their own topics with
+**F1**.
 
 **One thing is open at a time.** Expanding the Experiment group closes a container
 panel and vice versa; a click in the background closes the open panel *and* folds the
@@ -77,13 +81,23 @@ folder (`Sept2026/ProjA`).
 
 - **Check** the Projects a Batch Run should touch. One with nothing usable starts
   unchecked, because it could only produce a failure.
-- **Red rows** hold blocked members; hover for the reasons, right-click to open the review
-  window focused on that Project.
+- **Red rows** hold blocked members; hover for the reasons. Right-click a row for **Fix
+  blocked members in …**, which opens the review window focused on that Project, or
+  **Open … as the Project…**.
 - **Double-click** a row to make it the working Project — the Project panel opens on it.
   There is no drill-in state and no up-button; the Batch panel keeps showing the batch it
   came from.
 - **Rescan** re-walks the folder, for changes made outside the app.
+- **Apply exclusion sheet…** writes the batch folder's `remove_chambers.csv` into the
+  members of the checked Projects now; a Batch Run applies it anyway. See
+  [Exclusion sheets](scripts-batch.md#exclusion-sheets).
+- **Project Script** chooses what a Batch Run executes in each Project, and remembers the
+  choice in `batch.yaml`; see [Which script runs](scripts-batch.md#which-script-runs).
 - **Run Batch** opens a review window stating exactly what will run, then runs it.
+- **AI narrative of the batch** asks an AI provider, after the run, to pool the Projects'
+  own narratives; see [AI narrative of the batch](scripts-batch.md#ai-narrative-of-the-batch).
+  **Suppress new plot / output tabs during Batch Runs** is described under
+  [Output, plots, and errors](#output-plots-and-errors).
 
 See [Running many projects at once](scripts-batch.md).
 
@@ -92,21 +106,6 @@ See [Running many projects at once](scripts-batch.md).
 Three cards, top to bottom, answering three questions: **Create/Load** (which Project?),
 **Experiments** (which members does it hold?), and **Analysis** (what to do with them —
 shown only while a Project is open).
-
-The Experiments card's members table is the centre of the Hub: one row per member, with its DFM count,
-chamber count, and whether it has been analysed and reported. Double-click a row to load
-it — once the load finishes, the Experiment group expands to its sub-strip (QC · Analyze ·
-Plots · Scripts · AI), because loading is only ever a step toward doing something with it.
-No panel is opened: the sub-strip is the menu of what you can now do, and which of those
-you want is your call.
-
-**Red rows are blocked members** — folders a run cannot use as they stand, including ones
-the Project cannot even see yet because they have no config. Hover for the reason. These
-used to be invisible here, which is exactly where the fix lives.
-
-The **Analyzed** column has three values, not two. **re-run needed** means the member's
-`remove_chambers.csv` is newer than its saved analysis: those results describe a chamber
-population you have since said was wrong.
 
 ### Getting a Project open — four buttons, three cases
 
@@ -136,7 +135,35 @@ Project's `project.yaml` and every member's `flic_config.yaml` and reports to th
 The loaded-project summary sits below the buttons, in this always-visible card, so a
 Project that fails to load is explained even while the sections below stay down.
 
+When the open Project uses a lab type whose copy beside `project.yaml` differs from the
+library's, the card says so, with **Update the type copy from the library**; the members'
+results then need a re-run. See
+[Where types live](concepts-experiment-types.md#where-types-live).
+
 See [Projects and members](concepts-project.md).
+
+### The members table
+
+The Experiments card's members table is the centre of the Hub: one row per member, with
+its DFM count, chamber count, and whether it has been analysed and reported. Double-click a
+row to load it — once the load finishes, the Experiment group expands to its sub-strip
+(QC · Analyze · Plots · Scripts · AI), because loading is only ever a step toward doing
+something with it. No panel is opened: the sub-strip is the menu of what you can now do,
+and which of those you want is your call.
+
+**Red rows are blocked members** — folders a run cannot use as they stand, including ones
+the Project cannot even see yet because they have no config. Hover for the reason. These
+used to be invisible here, which is exactly where the fix lives. See
+[Blocked members](concepts-project.md#blocked-members).
+
+The **Analyzed** column has three values, not two. **re-run needed** means the member's
+`remove_chambers.csv` is newer than its saved analysis: those results describe a chamber
+population you have since said was wrong.
+
+**Load options**, at the foot of the card, govern every load: **Load DFMs in parallel**
+(on by default) and the number of **Workers** (*auto* by default). See
+[Parallel loading](performance.md#parallel-loading).
+
 ### Adding a member — the same three cases, one level down
 
 All three inherit the design, so all three stay disabled until a Project is open: a member
@@ -155,8 +182,9 @@ with nothing to conform to is not a member.
   is the config scaffolded and the config editor opened, because a recording left at the
   root would make the freshly configured member look empty. An ambiguous or unreadable
   folder is refused rather than guessed at. The count is how many candidates there are.
-- **Member configs…** — the bulk view: every folder with its config status, so the missing
-  ones can be created and the existing ones opened without hunting through the file system.
+- **Member configs… (n missing)** — the bulk view: every folder with its config status, so
+  the missing ones can be created and the existing ones opened without hunting through the
+  file system. See [The Member configs dialog](concepts-project.md#the-member-configs-dialog).
 
 **Double-click a blocked row** to fix it in place: a row with no config offers to scaffold
 one and open it; an unfiled recording offers to file itself.
@@ -230,7 +258,8 @@ Project panel's **Analyze all** and a Batch Run do not read the ticks (see
 
 Two cards. **QC** lists the QC Set for the loaded member over **Run QC**, which writes each
 ticked item into the member's `qc/` folder (the Progressive Ratio light QC into
-`analysis/`). The QC is computed once per run and written item by item.
+`analysis/`). The QC is computed once per run and written item by item. The ticks are
+saved, as on Analyze and Plots: see [The ticks are configuration](#the-ticks-are-configuration).
 
 | Group | Item | Writes | Offered for |
 |---|---|---|---|
@@ -244,9 +273,9 @@ ticked item into the member's `qc/` folder (the Progressive Ratio light QC into
 | Optogenetics | Opto light QC tables | `qc/opto/`: the verdicts, the intervals, every light event and the program as read; the log names every linkage group that failed or warned | optogenetic |
 | | Light explained by licks | `qc/opto/opto_light_dfm<n>.png`, the figure behind the verdict | optogenetic |
 | | Program timeline | `qc/program/program_timeline_dfm<n>.png`: the Program Intervals by Paradigm, each well's Acclimation, Activations and light | optogenetic; greyed when no DFM has a `Program.txt` section or firmware 4.0.0 data |
-| Progressive Ratio | Light QC table | `analysis/pr_light_qc.csv` and `pr_light_events.csv`: did the paired fly earn its light? The log names every chamber group that failed or warned | Progressive Ratio |
-| | Licks per light event | `analysis/pr_light_events_dfm<n>.png` | Progressive Ratio |
-| | Sucrose Well resting level | `analysis/pr_resting_level_dfm<n>.png` | Progressive Ratio |
+| Progressive Ratio | Light QC table | `analysis/pr_light_qc.csv` and `pr_light_events.csv`: did the paired fly earn its light? The log names every chamber group that failed or warned | a type with the Progressive Ratio module |
+| | Licks per light event | `analysis/pr_light_events_dfm<n>.png` | Progressive Ratio module |
+| | Sucrose Well resting level | `analysis/pr_resting_level_dfm<n>.png` | Progressive Ratio module |
 
 The light figures and the Program timeline are drawn in 10-minute bins, whatever the
 Analyze panel's Bin size. See [Optogenetic experiments](concepts-optogenetics.md),
@@ -280,11 +309,11 @@ last.
 | Analyses | Binned summary | `binned_feeding_summary.csv`, in bins of the Bin size | every member |
 | | Event statistics | `tidy_feeding_events.csv`: one row per feeding event — its start minute, duration, licks and intensity | every member |
 | Optogenetics | Light tables | `light_summary.csv` per chamber and `light_wells.csv` per well — lit time, Activations, Acclimation, Firmware Events and the Paradigm type's own measures — and, with Facets, their `_facet` variants | optogenetic |
-| | Paired and yoked comparison | `yoked_comparison.csv` | optogenetic, not Progressive Ratio; greyed when no linkage group lights a Yoked chamber |
-| Progressive Ratio | Paired-Yoked Difference | `paired_yoked_diff.csv` | Progressive Ratio; greyed when every chamber group is solo |
-| | Cumulative difference table | `pr_cumulative_diff.csv`, in 1-minute bins | Progressive Ratio |
-| | Breaking point | `pr_breaking_point.csv`, and each group's breaking point with its sensitivity to the gap in the log | Progressive Ratio |
-| Hedonic | Weighted duration summary | `treatment_means.csv` | Hedonic |
+| | Paired and yoked comparison | `yoked_comparison.csv` | optogenetic, with a type that has the Paired and yoked module (Custom does); greyed when no linkage group lights a Yoked chamber |
+| Progressive Ratio | Paired-Yoked Difference | `paired_yoked_diff.csv` | a type with the Progressive Ratio module; greyed when every chamber group is solo |
+| | Cumulative difference table | `pr_cumulative_diff.csv`, in 1-minute bins | Progressive Ratio module |
+| | Breaking point | `pr_breaking_point.csv`, and each group's breaking point with its sensitivity to the gap in the log | Progressive Ratio module |
+| Hedonic | Weighted duration summary | `treatment_means.csv` | a type with the Hedonic module |
 | Report | Experiment report (PDF) | `experiment_report.pdf` ([Reports](reports.md)) | every member |
 
 The Analyze panel's old buttons, one per output, are gone; their script actions remain (see
@@ -302,11 +331,11 @@ into `analysis/` and opens it in a tab, replacing the tab of the same title.
 | | Well A vs B | `well_comparison_MedDuration.png`: median bout duration at well A beside well B | two-well |
 | Chosen metric | Binned time course | `binned_<metric>.png`, in bins of the Bin size | every member |
 | | Dot plot | `dot_<metric>.png`, one point per chamber (per Chamber Group under Progressive Ratio) | every member |
-| Progressive Ratio | Cumulative difference curve | `pr_cumulative_diff.png` | Progressive Ratio |
-| | Training-aligned traces | `pr_cumulative_licks_dfm<n>.png` | Progressive Ratio |
-| | Still-responding curve | `pr_still_responding.png` | Progressive Ratio |
-| | Breaking-point plots | `breaking_point_dfm<n>.png` | Progressive Ratio |
-| Hedonic | Hedonic feeding plot | `hedonic_feeding_plot.png` | Hedonic |
+| Progressive Ratio | Cumulative difference curve | `pr_cumulative_diff.png` | a type with the Progressive Ratio module |
+| | Training-aligned traces | `pr_cumulative_licks_dfm<n>.png` | Progressive Ratio module |
+| | Still-responding curve | `pr_still_responding.png` | Progressive Ratio module |
+| | Breaking-point plots | `breaking_point_dfm<n>.png` | Progressive Ratio module |
+| Hedonic | Hedonic feeding plot | `hedonic_feeding_plot.png` | a type with the Hedonic module |
 
 The **Metric** menu sits inside the *Chosen metric* group because it steers those two
 figures and no other. The Progressive Ratio curves keep 1-minute bins.
@@ -321,27 +350,38 @@ panel's Analysis card. See [Plot catalogue](plots-catalog.md) and
 ## Scripts panel
 
 **Experiment Scripts for the loaded member**, and nothing else — the tile is dimmed and
-its controls disabled until a member is loaded, like Analyze and Plots. Scripts named in
-the Project's `experiment_scripts:` appear here too, so one central recipe serves every
-member without being copied into each.
+its controls disabled until a member is loaded, like Analyze and Plots. Pick a script in
+the menu and **Run** it; **Open Script Editor** edits the member's `flic_config.yaml`
+scripts. Scripts named in the Project's `experiment_scripts:` appear here too, so one
+central recipe serves every member without being copied into each.
 
 Project Scripts are *not* here: they are in the Project panel, because they act on the
 Project and are runnable with no member loaded. See [Scripts](scripts-overview.md).
 
 ## AI panel
 
-An optional AI-written narrative of the Combined Analysis. Dimmed until an API key is
-present — and, like the rest of the Experiment group, until a member of an open Project
-is loaded; with just a Project open, use **AI narrative…** on the Project panel's
-Analysis card instead. See [AI summary](concepts-ai-summary.md).
+An optional AI-written narrative of the Combined Analysis: pick a **Provider** and a
+**Model**, then **Generate narrative**. Dimmed until an API key is present — and, like the
+rest of the Experiment group, until a member of an open Project is loaded; with just a
+Project open, use **AI narrative…** on the Project panel's Analysis card instead. See
+[AI summary](concepts-ai-summary.md) and, for the keys,
+[Providers and keys](concepts-ai-summary.md#providers-and-keys).
 
 ## Tools panel
 
-The config editor, **Validate every YAML here** (parses every
-`project.yaml`, `batch.yaml` and `flic_config.yaml` under the selection and reports what
-fails — the cheap way to find a hand-edited config three folders down before an unattended
-run finds it), the linter and its migration checks, opening the selected folder, cache
-clearing, the theme toggle, and this help.
+- **Config editor** — the [Config Editor](app-config-editor.md), on the selected folder's
+  `flic_config.yaml`.
+- **Experiment type editor** — the [Experiment Type Editor](app-type-editor.md), for your
+  lab's own types.
+- **Validate every YAML here** — parses every `project.yaml`, `batch.yaml` and
+  `flic_config.yaml` under the selection and reports what fails: the cheap way to find a
+  hand-edited config three folders down before an unattended run finds it.
+- **Lint / migration check** — the linter and its migration checks, as `pyflic lint`.
+- **Open this folder** — the selected folder in the system file browser.
+- **Clear cache** — removes the loaded member's cached feeding summaries; see
+  [The disk cache](performance.md#the-disk-cache).
+- **Toggle theme** — light or dark, remembered for next time.
+- **Help** — this help window, at its first page.
 
 ## Output, plots, and errors
 

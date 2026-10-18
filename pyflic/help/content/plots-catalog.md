@@ -6,8 +6,10 @@ What each figure shows, when it is produced, and what to look for in it.
 
 Written to the member's `qc/` folder for every DFM whenever QC runs — the Hub's **Run QC**,
 the `run_qc` script action, the Project's **Analyze all**, or `execute_basic_analysis()`
-from Python. Each is an item of the QC panel's QC Set, so Run QC writes the ones ticked
-there (see [QC panel](app-hub.md#qc-panel)). These are diagnostics, not figures for a
+from Python. Each is an item of the QC panel's QC Set: Run QC and `run_qc` write the ones
+ticked there (see [QC panel](app-hub.md#qc-panel)), while Analyze all and
+`execute_basic_analysis()` write them all. The QC panel's **View QC plots** opens the saved
+ones in the output area, one tab per DFM and kind. These are diagnostics, not figures for a
 paper.
 
 | Plot | Saved as | Shows |
@@ -43,14 +45,16 @@ is a drifting sensor. The strip carries the group's verdict. See
 
 **Program timeline** (`plot_program_timeline`) is drawn, in an optogenetic experiment, for
 every DFM that has something to draw: firmware 4.0.0 data, or a `Program.txt` section.
-**Run QC** writes it for each such DFM, and basic analysis for each firmware 4.0.0 DFM. A
-recording whose light never came on (every well Off) gets none.
+**Run QC** and **Analyze all** write it for each such DFM; the `basic_analysis` script
+action, which skips the QC reports, still writes it for each firmware 4.0.0 DFM. A recording
+whose light never came on (every well Off) gets none.
 
 - **The band at the top** is the program, one block per Program Interval, coloured by
   Paradigm type and labelled with the Paradigm's name (and `C<n>`, the Cycle, when the
   program repeats). Light grey is the baseline before the first instruction reached the DFM,
-  hatched white an instruction outside the program, and dark grey a Paradigm whose type
-  `Program.txt` does not give.
+  hatched white an instruction outside the program, the palest grey `Idle` (PyMCU's own
+  Paradigm, every well `Off`, known without a `Program.txt`), and dark grey a Paradigm whose
+  type `Program.txt` does not give.
 - **Below it, one lane per well**, labelled with its chamber and Role. Pale orange shading is
   Acclimation (Phase `A`), each black tick an Activation, and the blue strip the share of
   each bin the LED was on, from white (dark) to dark blue (lit throughout). On a firmware
@@ -73,7 +77,7 @@ How to read it:
 - **The band should match the program you meant to run.** A hatched block after the start
   is the DFM running something outside the program. A dark-grey block is a Paradigm the
   `Program.txt` in `data/` does not know, which usually means it is the wrong file; every
-  block is dark grey when there is no `Program.txt` at all.
+  block but `Idle` is dark grey when there is no `Program.txt` at all.
 - **A well set `On` should be lit through its hatching**, and a well set `Off` should have
   no light of its own in its grey: light there that its group's trigger well did not cause
   is a fault.
@@ -119,20 +123,23 @@ report is faulty. See
 
 ### Feeding summary
 
-Box-and-jitter panels grouped by treatment — or by factor combination when
-[factors](config-factors.md) are declared. Written to `analysis/feeding_summary.png` by
-the Plots panel's **Feeding summary** and by basic analysis.
+One panel per metric, with the treatments along the x axis — or the factor combinations
+when [factors](config-factors.md) are declared. Each point is a chamber; the black diamond
+and bars are the treatment mean ± SEM. Written to `analysis/feeding_summary.png` by the
+Plots panel's **Feeding summary** and by basic analysis, and drawn again as the experiment
+report's Appendix A. A metric no chamber has a value for, such as a bout duration when no
+feeding event was detected, is left out.
 
 Which metrics are panelled depends on the experiment type:
 
 - **Single-well:** `Licks`, `Events`, `MeanDuration`, `MedDuration`, `MeanTimeBtw`,
   `MedTimeBtw`, `MeanInt`, `MedianInt`
-- **Two-well, hedonic, progressive-ratio:** `PI`, `EventPI`, and A/B pairs of `Licks`,
-  `Events`, `MeanDuration`, `MedDuration`, `MeanTimeBtw`, `MedTimeBtw`, `MeanInt`,
-  `MedianInt`
+- **Two-well** (Hedonic, Progressive Ratio and any two-well type): `PI`, `EventPI`, and
+  A/B pairs of `Licks`, `Events`, `MeanDuration`, `MedDuration`, `MeanTimeBtw`,
+  `MedTimeBtw`, `MeanInt`, `MedianInt`
 
-Facet labels use your `well_names` when you have set them, so panels read `Sucrose` and
-`Yeast` rather than `A` and `B`.
+Panel titles use your `well_names` when you have set them, so a panel reads
+`Licks (Sucrose)` rather than `Licks (A)`.
 
 Because each point is a chamber, this is the plot that shows you your *spread*. A treatment
 difference resting on two outlying chambers is visible here and invisible in a bar chart.
@@ -177,20 +184,31 @@ treat them as such in a test.
 `..._chambers` is the diagnostic version — it shows whether an effect is consistent across
 flies or driven by a few. `..._treatment` is the version for a figure.
 
+They are script actions only; no Hub panel offers them. They save
+`analysis/moving_window_<metric>.png`, `moving_median_duration_chambers.png` and
+`moving_median_duration_treatments.png`.
+
 ## Choice-specific plots
 
-**Well A vs Well B duration jitter**, faceted — a direct visual comparison of the two
-options within each treatment.
+**Well A vs B** — median bout duration at well A beside well B, one panel per treatment: a
+direct visual comparison of the two options. The Plots panel's *Well A vs B* saves it as
+`analysis/well_comparison_MedDuration.png`; the `plot_well_comparison` action draws another
+metric.
 
-**Cumulative preference index**, per DFM — how a preference developed over the session. A PI
+**Cumulative preference index**, per DFM, from Python only
+(`exp.get_dfm(1).plot_cumulative_pi()`) — how a preference developed over the session. A PI
 that starts near zero and separates gradually is a different phenomenon from one that is
-established from the first minutes, and only a cumulative view distinguishes them.
+established from the first minutes, and only a cumulative view distinguishes them. The
+experiment report's *Preference over time* is the binned version: the treatment mean PI per
+bin.
 
 ## Hedonic plots
 
 **Hedonic feeding plot** — Well A against Well B median durations, faceted by treatment.
 Duration is the measure of interest in these designs; see
-[Experiment types](concepts-experiment-types.md).
+[Experiment types](concepts-experiment-types.md). It is the Plots panel's *Hedonic* group,
+offered under a type with the Hedonic module, and saves
+`analysis/hedonic_feeding_plot.png`; the experiment report shows it under *Hedonic feeding*.
 
 ## Light behaviour plots
 
@@ -223,8 +241,10 @@ its paired chambers only. A member without a firmware 4.0.0 recording keeps one 
 with the four metrics of before (Activations, Lit time, Firmware Events, Acclimation end),
 everything but lit time empty.
 
-**Feeding in light and dark** — in the open-loop subsection: each open-loop chamber's licks
-per minute in its own light and in the dark, as two points joined by a line, a panel per
+**Feeding in light and dark** — in the open-loop subsection, under a type with the Light
+and dark module (Custom and Progressive Ratio have it; see
+[Analysis Modules](concepts-experiment-types.md#analysis-modules)): each open-loop chamber's
+licks per minute in its own light and in the dark, as two points joined by a line, a panel per
 treatment (and per Facet), with each phase's treatment mean as a black diamond. Lines that
 fall from light to dark are a fly that fed more in the light. Only rows under a Program
 Interval count, so the baseline lead-in is not taken as dark, and a phase shorter than a
@@ -233,9 +253,10 @@ light feeding index; when no chamber was both lit and dark, the figure is a grey
 so.
 
 **Paired against yoked** — in the *Paired and yoked* subsection, for a design with a yoked
-group under any type but Progressive Ratio: one point per yoked group, its paired chamber's
-value against the mean of its yoked chambers', a panel per metric, over the dashed identity
-line; above it, the paired fly's value is the larger. See
+group under a type with the Paired and yoked module (Custom has it; Progressive Ratio keeps
+its own paired − yoked figures): one point per yoked group, its paired chamber's value
+against the mean of its yoked chambers', a panel per metric, over the dashed identity line;
+above it, the paired fly's value is the larger. There is one figure per Facet. See
 [Paired and yoked designs](concepts-optogenetics.md#paired-and-yoked-designs).
 
 **Light Publication Figures** — in a Project whose Combined Analysis has a light table, the
@@ -347,7 +368,8 @@ strip giving the group's breaking point (`n+` when censored). A dashed line mark
 the last light event the breaking point counts, on both chambers of the group; onsets past
 it are grey, and lick-free light events, which never count, are hollow red rings.
 
-All of these require light data (`OptoCol1`).
+All of these need the recording's light: `OptoCol1`, or on firmware 4.0.0 the LEDs'
+`OnMs`.
 
 ### Did the paired fly earn its light? (QC)
 
@@ -373,8 +395,9 @@ recording, against the median of the DFM's other Sucrose Wells (grey). Light ons
 rug along the bottom and the dashed line is training end. A well that creeps up while its
 rug thickens is the cause behind the red rings.
 
-Both are on the Hub's QC panel, in its *Optogenetics* group beside the **Light QC
-table**.
+Both are on the Hub's QC panel, in its *Progressive Ratio* group beside the **Light QC
+table**, and save `analysis/pr_light_events_dfm<n>.png` and
+`analysis/pr_resting_level_dfm<n>.png`.
 
 Every panel's strip carries the group's light QC verdict. A group that failed — and so left
 the analysis — stays in these three figures, its strip saying why; the result figures

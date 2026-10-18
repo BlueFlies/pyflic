@@ -36,7 +36,7 @@ exclusion group:
 from pyflic import Project
 
 project = Project("/path/to/project")
-project.member_names                  # the members, in folder order
+project.member_names                  # the members, in name order
 exp = project.load_member("rep1")     # a loaded Experiment, design applied
 project.build_combined_analysis()     # stack the members' saved summaries
 ```
@@ -57,15 +57,19 @@ Experiment (base)
 ```
 
 All subclasses share the same core API; the specialised methods — weighted durations,
-the Progressive Ratio tables below — live on the subclasses. See
-[Experiment types](concepts-experiment-types.md).
+the Progressive Ratio tables below — live on the subclasses. The class follows the
+Experiment Type: a type with the Hedonic analysis gives a `HedonicFeedingExperiment`, one
+with the Progressive Ratio analysis a `ProgressiveRatioExperiment`, and any other the class
+of its chamber layout. See [Experiment types](concepts-experiment-types.md).
 
 ## Working with an experiment
 
 ```python
 exp.dfms                      # {dfm_id: DFM}
 dfm = exp.get_dfm(1)
-exp.design                    # ExperimentDesign: treatments and factor levels
+exp.design                    # ExperimentDesign: each treatment and its chambers
+exp.design_factors            # the factor names, in declared order
+exp.chamber_factors           # {(dfm_id, chamber): {factor: level}}
 
 exp.write_qc_reports()        # write QC output to disk
 exp.compute_qc_results()      # the same results as Python dicts
@@ -211,8 +215,9 @@ the paired − yoked table basic analysis writes as `analysis/yoked_comparison.c
 label with one or more `(start, end)` windows.
 
 **Messages** (`pyflic.base.messages`): `read(data_dir)` returns `Messages.csv` as a table
-(`DFM, Time, Index, Message, MsgType`), empty when there is none; `for_dfm(frame, dfm_id)`
-and `errors(frame)` filter it.
+(`DFM, Time, Index, Message, MsgType, Repeats`), empty when there is none;
+`for_dfm(frame, dfm_id)` keeps one DFM's messages and the MCU's own, and `errors(frame)`
+the errors.
 
 **The Program timeline** (`pyflic.base.program_timeline`): `plot_dfm(exp, dfm_id,
 binsize_min=10)` returns the figure, `well_table(exp, dfm_id)` the state of each well at the
@@ -259,8 +264,10 @@ events means counting non-zero entries, not summing them.
 
 ## Analytics functions
 
-Each of these is also a hub button and a [script action](scripts-actions.md). They take a
-loaded experiment.
+Most of these are also [script actions](scripts-actions.md) — `tidy_export`, `bootstrap`,
+`compare`, `light_phase_summary`, `param_sensitivity` and `transition_matrix` — and
+`tidy_events` is the Hub's *Event statistics* item in the Analyze panel. All but
+`compare_configs` and `lint_flic_config` take a loaded experiment.
 
 ```python
 from pyflic import (
@@ -274,10 +281,11 @@ from pyflic import (
 `WellLabel`, `WellName`, `Treatment`, factor columns, `StartMin`, `Licks`, `Duration`,
 `AvgIntensity`, `MaxIntensity`. The right starting point for analysis in another tool.
 
-**`bootstrap_metric(exp, metric="PI", n_boot=5000, ci=0.95, seed=42)`** — percentile
+**`bootstrap_metric(exp, metric="PI", n_boot=2000, ci=0.95, seed=0)`** — percentile
 confidence intervals, resampling **at the chamber level** because chambers are the
 independent biological units. Use it for `PI` and other bounded or skewed metrics, where a
-parametric standard error is misleading. `res.summary` has `group`, `n`, `mean`, `sem`,
+parametric standard error is misleading. `res.summary` has the group column
+(`res.group_col`: `Treatment`, or `_Group` when factors are declared), `n`, `mean`, `sem`,
 `ci_low`, `ci_high`.
 
 **`compare_treatments(exp, metric="MedDuration", model="aov", posthoc="tukey")`** — Type II
@@ -298,8 +306,9 @@ parameter, `Group`, `n_chambers`, and mean/SEM for each metric.
 a single option — a distinction the preference index cannot make, since both can give the
 same PI.
 
-**`compare_configs("a/", "b/", metrics=(...))`** — per-treatment means from two projects
-side by side: `Group`, `Metric`, `mean_a`, `mean_b`, `delta`, `pct_change`.
+**`compare_configs("a/", "b/", metrics=(...))`** — per-treatment means from two standalone
+experiment directories side by side: `Group`, `Metric`, `mean_a`, `mean_b`, `delta`,
+`pct_change`.
 
 **`lint_flic_config("project/flic_config.yaml")`** — validation results as objects:
 
@@ -307,6 +316,30 @@ side by side: `Group`, `Metric`, `mean_a`, `mean_b`, `delta`, `pct_change`.
 for issue in lint_flic_config("project/flic_config.yaml"):
     print(issue.format())
 ```
+
+## Batches and folder layout
+
+A Batch is a folder with Projects anywhere beneath it; these are what the Hub's Batch panel
+runs:
+
+```python
+from pyflic import apply_exclusion_sheet, discover_projects, run_batch
+
+discover_projects("/path/to/batch")       # every Project under it, in run order
+apply_exclusion_sheet("/path/to/batch")   # the batch's remove_chambers.csv into each member
+run_batch("/path/to/batch")               # {project: "ok" or its error}
+```
+
+`run_batch(batch_dir, script_name=None, project_names=None, apply_exclusions=True)` runs
+one Project Script in every Project, carrying on past a failure: `script_name=None` takes
+the designation in `batch.yaml`, and with none each Project runs its own default. It
+applies the exclusion sheet first unless `apply_exclusions=False`. See
+[Running many projects at once](scripts-batch.md).
+
+`members_in(project_dir)` says what each folder of a Project is — a healthy or a Blocked
+Member — and `classify(directory)` the same for one folder; `file_recording(directory)`
+moves a member's loose recording into `data/`, as the Hub's *File unfiled recordings* does.
+See [Blocked members](concepts-project.md#blocked-members).
 
 ## Jupyter notebooks
 

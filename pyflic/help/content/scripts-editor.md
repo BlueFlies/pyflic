@@ -6,25 +6,56 @@ one takes, so you cannot invent an action that does not exist or misspell a para
 
 Open it from the Hub: **Open Script Editor** on the Scripts panel edits the loaded
 member's `flic_config.yaml`, and **Edit scripts…** on the Project panel edits the
-Project's `project.yaml`. Press **F1**, or the `?` in its top bar, for this topic.
+Project's `project.yaml`. The Config Editor opens it too, on the config it has open:
+**File → Script Editor…** (Ctrl+E) or the scripts button in its top bar, once the config
+has been saved. Press **F1**, or the `?` in its top bar, for this topic.
 
 ## Layout
 
-Three panes side by side, with a YAML preview beneath:
-
-| Pane | Purpose |
-|---|---|
-| **Palette** (left) | Every available action, grouped by category. Add one to the script from here. |
-| **Canvas** (centre) | The steps of the current script, in order. Reorder and remove them here. |
-| **Inspector** (right) | The parameters of the selected step, with its defaults and notes. |
-| **YAML preview** (bottom) | Live view of the YAML being written. |
-
-Above them sits the **script switcher**: a dropdown of the scripts in this configuration,
-with buttons to create, rename, and delete.
+The script switcher sits in the top bar. Below it, three panes side by side — the palette,
+the canvas and the inspector — with the YAML preview beneath them.
 
 Watch the preview while you work. It is the fastest way to build an accurate mental model
 of the file format, and it means the editor never becomes a black box — you can always see
 exactly what will be saved.
+
+### The script switcher
+
+**Script:** is a dropdown of the scripts in this file. The buttons beside it create a new
+script, rename the current one and delete it. A deleted script stays recoverable until you
+save: **Reload from disk** brings it back.
+
+### The palette
+
+The left pane, **Actions**: every action, grouped under LOAD, ANALYZE, QC and PLOTS, each
+tile with its name and one line on what it does. Type in **Search actions…** to narrow the
+list. Click a tile to add that step to the end of the script; with no script yet, the
+editor asks for a name first. A dimmed tile does not fit this configuration's Experiment
+Type — see [Actions for one Experiment Type](#actions-for-one-experiment-type).
+
+### The canvas
+
+The centre pane: the script's **Name:**, then its steps in order. Each step card shows the
+action, the parameters set on it and, when something is wrong, a warning sign whose tooltip
+says what.
+
+- Select a step to edit it in the inspector.
+- **Move up** and **Move down** reorder the selected step.
+- The **⋯** on a card offers **Duplicate** (the copy goes to the end) and the same moves.
+- The **✕** on a card deletes the step.
+
+### The inspector
+
+The right pane, **Step parameters**: the selected step's action and one field per
+parameter, each with a note on what it does. A required parameter is marked `*`. A field
+with **inherit from UI / script** ticked is left out of the YAML and inherits — see
+[Inherited parameters](#inherited-parameters). Problems with the step, such as a missing
+required parameter or an Experiment Type it does not fit, are listed at the bottom.
+
+### The YAML preview
+
+The bottom pane: the current script as it will be written. Tick **Show full scripts:
+block** to see every script in the file instead.
 
 ## Working in it
 
@@ -32,35 +63,49 @@ exactly what will be saved.
 2. Click an action in the palette to append it to the canvas.
 3. Select a step on the canvas; set its parameters in the inspector.
 4. Reorder steps until the sequence is right — order matters; see below.
-5. **Save**.
+5. **Save to config**.
 
-A dirty indicator next to the file path shows unsaved changes. **Reload** discards them and
-re-reads the file from disk, which is what you want if you have also edited the YAML in a
-text editor.
+**● unsaved changes**, at the right of the file path, shows there is something to save,
+and **Save to config** works only then. **Reload from disk** discards your changes and
+re-reads the file, which is what you want if you have also edited the YAML in a text
+editor. Closing the window with unsaved changes asks whether to save them.
+
+Saving rewrites the whole file, so **comments and formatting in it are not kept**. Keys the
+editor does not show — a script's `notes:` or its `start:` and `end:`, a Project's
+`experiment_scripts:` — are kept.
 
 ## Order matters
 
 The canvas is a sequence, not a set, and several steps depend on what came before:
 
-- `load` must come first — everything else operates on the loaded experiment.
 - `remove_chambers` must precede any analysis whose results should exclude those chambers.
 - `write_summary` after `remove_chambers` records what was actually excluded.
 - Plot and analysis steps can be in any order among themselves.
 
-## Blank parameters inherit
+A `load` step, which older scripts begin with, does nothing wherever it sits: the member is
+already loaded when a script starts. See
+[The member is already loaded](scripts-overview.md#the-member-is-already-loaded).
 
-A parameter left blank in the inspector is not an error and is not zero — it inherits, from
-the script level and then from the hub. The inspector shows each parameter's default and a
-note describing it, so you can tell an inherited blank from a value you meant to set.
+## Inherited parameters
 
-This is why a script can be re-run over a different time window just by changing a spinbox
-in the hub: leave `start` and `end` blank on the steps and they follow the hub. Pin them on
-the step when the window is part of the analysis rather than a thing you vary.
+`start`, `end` and, on most steps that take it, `binsize` have an **inherit from UI /
+script** box in the inspector, ticked on a new step. Ticked, the parameter is left out of
+the step and inherits: `start` and `end` from the script's own `start:` and `end:`, else
+the whole recording; `binsize` from the Analyze panel's **Bin size** box when the script
+runs from the Scripts panel, else 30 minutes. The light figure, the Program timeline and
+the Progressive Ratio curves have no such box: their `binsize` has its own default. See
+[Where values come from](scripts-overview.md#where-values-come-from).
+
+This is why a script can be re-run at another bin just by changing the Bin size box: leave
+`binsize` inherited on the steps and they follow it. Untick the box and set a value when the
+bin is part of the analysis rather than a thing you vary. The editor has no field for the
+script's own `start:` and `end:`; write those in the YAML.
 
 ## Naming scripts
 
-A script's name is the default exclusion group for a bare `remove_chambers` step, so pick
-names deliberately and keep them consistent with the groups in your `remove_chambers.csv`.
+A script's name — set in the switcher or in the canvas's **Name:** field — is the default
+exclusion group for a bare `remove_chambers` step, so pick names deliberately and keep them
+consistent with the groups in your `remove_chambers.csv`.
 
 An Experiment Script named `batch` has no special meaning any more — subdir-batch mode is
 retired, and `pyflic lint` reports such scripts so you can rename them. The Project Script
@@ -70,11 +115,27 @@ named `batch` is different: it is what a Batch Run executes by default. See
 ## Actions for one Experiment Type
 
 The palette offers every action, but some need a particular layout or Experiment Type —
-`plot_well_comparison` a two-well layout, `plot_hedonic` a Hedonic experiment, the
-`pr_*` and breaking-point actions a Progressive Ratio one. The palette dims those that do
-not match the configuration's type, with the reason in the tooltip, and the inspector
-repeats it for a step already on the canvas. At run time a step on the wrong kind of
-experiment is skipped with a log line.
+`plot_well_comparison` and `transition_matrix` a two-well layout, `plot_hedonic` and
+`weighted_duration` a type with the Hedonic module, the `pr_*` and breaking-point actions a
+type with the Progressive Ratio module. The palette dims those that do not match the
+configuration's type, with the reason in the tooltip; you can still add one. The canvas
+marks such a step with a warning sign, and the inspector repeats the reason. At run time a
+step on the wrong kind of experiment is skipped with a log line.
+
+The optogenetic actions — `opto_light_qc`, `plot_opto_light`, `light_summary` and
+`plot_program_timeline` — are not dimmed, because whether a member is optogenetic depends on
+its data. On one that is not, they are skipped with a log line too.
+
+## Project Scripts in the editor
+
+On a `project.yaml` the editor edits the Project Scripts in its `scripts:`, but its palette
+still lists the Experiment Script actions, which a Project Script cannot use: a Project
+Script holding one is refused when it runs. The project steps already in the file show on
+the canvas with a warning sign and no parameters in the inspector. You can reorder, delete
+and duplicate them, and saving keeps them as they are. To add a project action, or to
+change one's parameters, edit `project.yaml` in a text editor — see
+[Project actions](scripts-actions.md#project-actions). The Project's `experiment_scripts:`
+are not shown either; edit those in the YAML too.
 
 ---
 

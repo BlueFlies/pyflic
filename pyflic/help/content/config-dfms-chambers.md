@@ -23,16 +23,33 @@ dfms:
       2: Paired,Chrim
 ```
 
+The same block may be written as a list, one entry per device with its number as `id:` —
+the form the Config Editor writes, and the one the examples below use for a single entry:
+
+```yaml
+dfms:
+  - id: 1
+    params: {pi_direction: left}
+    chambers:
+      1: Paired,WCS
+      2: Unpaired,WCS
+```
+
 **`params`** accepts the same keys as `global.params` and takes precedence for that device.
 This is how counterbalancing works — see
-[Two-well choice and the preference index](concepts-two-well-pi.md).
+[Two-well choice and the preference index](concepts-two-well-pi.md). Inside a Project only
+the physical keys `pi_direction` and `chamber_sets` may be overridden here.
 
 **`chambers`** maps chamber number to treatment name, or to comma-separated factor levels
 when [factors](config-factors.md) are defined.
 
+**`well_names`** on a DFM entry overrides `global.well_names`, well by well, for that
+device.
+
 ## Progressive Ratio: `paired_chambers` and `chamber_groups`
 
-A Progressive Ratio DFM's chambers form **chamber groups**, each lit by one light circuit:
+Under a type with the Progressive Ratio analysis, a DFM's chambers form **chamber groups**,
+each lit by one light circuit:
 a pair of a **paired** and a **yoked** chamber, or a **solo** group of one paired chamber
 with no yoked control. Three ways to say which, per DFM entry:
 
@@ -88,8 +105,8 @@ and light, not to a DFM. pyflic never reads it as one:
 - a new member's `dfms:` block never gets an entry for it;
 - a config that names `99` under `dfms:` is refused, and `pyflic lint` reports it, with
   *DFM 99 is the Environmental Monitor, not a DFM*. Remove the entry;
-- its file is left alone. PyMCU names it `EnvMon_<n>.csv`, and a `DFM99_<n>.csv` is not read
-  either.
+- its file is never read as a DFM. PyMCU names it `EnvMon_<n>.csv`, and a `DFM99_<n>.csv`
+  is not read either.
 
 Each DFM's own rows already carry the monitor's readings (`Temp`, `Humid`, `LUX`).
 
@@ -163,7 +180,9 @@ It does not run at load. An analysis runs it once, before writing the summary, s
 Hub's *Run analysis* and *Analyze all*, and a Batch Run, all apply it; the QC Viewer's **Auto
 Filter** and the Python API run it on demand. For a Progressive Ratio experiment
 it also takes out the chamber groups that fail the light QC — see
-[Progressive Ratio experiments](concepts-progressive-ratio.md#light-qc).
+[Progressive Ratio experiments](concepts-progressive-ratio.md#light-qc). With
+`exclude_failed_opto_chambers` on, it takes out every chamber of a linkage group that fails
+the optogenetic light QC — see [Optogenetic experiments](concepts-optogenetics.md#thresholds).
 
 ---
 

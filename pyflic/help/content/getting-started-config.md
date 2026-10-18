@@ -45,9 +45,11 @@ dfms:
 Three things are doing the work:
 
 - **The assay.** Either name an `experiment_type` — `Hedonic`, `ProgressiveRatio`, or one
-  your lab built — which fixes the chamber layout for you, or leave it out (a **Custom**
-  experiment) and say `chamber_layout: single_well` or `two_well`. See
-  [Experiment types](concepts-experiment-types.md).
+  your lab built — which usually fixes the chamber layout for you, or leave it out (a
+  **Custom** experiment) and say `chamber_layout: single_well` or `two_well`. See
+  [Experiment types](concepts-experiment-types.md). Your lab's own types are built in the
+  [Experiment Type Editor](app-type-editor.md): run `pyflic-types`, or use the Hub's Tools
+  panel.
 - **The layout decides what a chamber is**: 12 one-well chambers per DFM, or 6 two-well
   ones. pyflic derives `chamber_size` from it; you never write that yourself.
 - **`chambers`** maps each chamber number to the treatment that chamber received. This is
@@ -60,7 +62,9 @@ or the linkage of the `Program.txt` in `data/`
 ([Progressive Ratio experiments](concepts-progressive-ratio.md)).
 
 Everything else has a default. See [Parameter reference](reference-parameters.md) for what
-those defaults are and when to change them.
+those defaults are and when to change them. Only the `params:` section itself must be there,
+under `global:` or under each DFM, even when it sets a single value as `pi_direction` does
+above: a config with no `params` section at all does not load.
 
 ## Checking it before you run
 

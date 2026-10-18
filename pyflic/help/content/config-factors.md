@@ -15,6 +15,12 @@ global:
 
 Each key is a factor name; its value is the list of levels that factor can take.
 
+An [Experiment Type](concepts-experiment-types.md#building-your-own-type) may name factors
+of its own, such as `Genotype`. Every config of that type must declare them, with the
+levels of its own study, and may add more. A type with a **Treatment control** also needs
+`control_level:`, one of the levels of its control factor — see
+[Control comparisons](concepts-experiment-types.md#control-comparisons).
+
 ## Assigning chambers
 
 Once factors are declared, chamber assignments become **comma-separated levels, in the
@@ -56,8 +62,9 @@ which is the normal way to present a two-factor design.
 - Levels are matched exactly, so `WCS` and `wcs` are different levels and one of them is
   almost certainly a typo.
 - Adding a factor means editing every chamber assignment in the file. Decide your design
-  before you write the configuration, or use the [Config Editor](app-config-editor.md),
-  which regenerates the assignments for you.
+  before you write the configuration, or use the [Config Editor](app-config-editor.md):
+  its chamber table has one column per factor, each a dropdown of that factor's levels, and
+  it writes the comma-separated assignments in the right order.
 
 ## Progressive Ratio: roles are not factors
 
@@ -69,6 +76,8 @@ the type refuses. Use factors for what varies *between* chamber groups, such as 
 or dose. A design of single chambers, with no yoked controls, has only paired chambers:
 there is nothing to declare either. See
 [Progressive Ratio experiments](concepts-progressive-ratio.md#chamber-groups-paired-and-yoked).
+The same holds for the Roles of any optogenetic DFM — see
+[Roles are read, not written](config-dfms-chambers.md#roles-are-read-not-written).
 
 ## Without factors
 

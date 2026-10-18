@@ -222,6 +222,7 @@ class Canvas(QWidget):
         move_bar.addWidget(self._btn_up)
         move_bar.addWidget(self._btn_down)
         move_bar.addStretch()
+        self._move_bar = move_bar
         outer.addLayout(move_bar)
 
         # Step list
@@ -255,6 +256,11 @@ class Canvas(QWidget):
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+
+    def add_title_widget(self, widget: QWidget) -> None:
+        """Add *widget* (the window's help button) at the end of the step
+        toolbar — the pane has no title of its own to sit beside."""
+        self._move_bar.addWidget(widget, 0, Qt.AlignmentFlag.AlignVCenter)
 
     def set_experiment_type(self, et: str | None) -> None:
         self._experiment_type = et

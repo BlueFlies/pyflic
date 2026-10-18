@@ -117,6 +117,8 @@ class ScriptEditorWindow(QMainWindow):
         self._canvas = Canvas()
         self._inspector = Inspector()
 
+        self._install_pane_help(self._palette, self._canvas, self._inspector)
+
         self._palette.actionRequested.connect(self._on_palette_action)
         self._canvas.stepSelected.connect(self._on_step_selected)
         self._canvas.stepsChanged.connect(self._on_canvas_changed)
@@ -141,6 +143,7 @@ class ScriptEditorWindow(QMainWindow):
 
         self._preview = Preview()
         self._preview.showFullToggled.connect(lambda _v: self._refresh_preview())
+        self._install_pane_help(self._preview)
         bot_lay.addWidget(self._preview)
 
         action_row = QHBoxLayout()
@@ -529,6 +532,29 @@ class ScriptEditorWindow(QMainWindow):
         btn.setToolTip("Help for the script editor  (F1)")
         btn.clicked.connect(lambda: open_help("scripts-editor"))
         self._top_bar.add_right(btn)
+
+    #: Each pane's help: its section of the editor's topic.
+    _PANE_HELP: dict[type, tuple[str, str]] = {
+        Palette: ("scripts-editor#the-palette",
+                  "The palette: adding a step, and why a tile is dimmed"),
+        Canvas: ("scripts-editor#the-canvas",
+                 "The canvas: a script's steps, in order"),
+        Inspector: ("scripts-editor#the-inspector",
+                    "The inspector: a step's parameters, and inheriting them"),
+        Preview: ("scripts-editor#the-yaml-preview",
+                  "The YAML preview: what Save to config writes"),
+    }
+
+    def _install_pane_help(self, *panes) -> None:
+        """A ``?`` beside each pane's title, opening that pane's section.
+        Silently skipped if help is unavailable."""
+        try:
+            from ...help import HelpButton
+        except Exception:  # noqa: BLE001 - help is optional, the editor is not
+            return
+        for pane in panes:
+            ref, tooltip = self._PANE_HELP[type(pane)]
+            pane.add_title_widget(HelpButton(ref, pane, tooltip=tooltip))
 
     def _install_help_shortcut(self) -> None:
         try:

@@ -43,7 +43,9 @@ dfms:
 ```
 
 In the [Config Editor](app-config-editor.md) the setting is on the Experiment tab and each
-DFM tab has its own *Optogenetics* picker, which inherits by default.
+DFM tab has its own *Optogenetics* picker, which inherits by default. In the Project Design
+dialog it is the *Optogenetics* field, with the light QC's thresholds in the *Optogenetic
+light QC* group below it.
 
 ## Generations
 
@@ -67,7 +69,8 @@ but no training information at all, and pyflic says so wherever training would s
 
 `summary.txt` names each DFM's generation and where its light seconds came from. The
 report's cover has a **Generation** line and, for an optogenetic member, a **Lit time from**
-line. Every light table and QC table carries a `Generation` column.
+line. `opto_light_qc.csv` and the light table (`light_summary.csv`, `light_wells.csv`)
+carry a `Generation` column.
 
 ## Program.txt
 
@@ -255,7 +258,8 @@ The Role is a column beside the Treatment, never a Treatment level. It appears o
 `feeding_summary.csv` rows, in the [light table](#the-light-table), in the lane labels of
 the [Program timeline](#the-program-timeline), and per group in `opto_light_qc.csv`'s
 `Roles` column (`1 Paired, 2 Yoked`). A [Progressive Ratio](concepts-progressive-ratio.md)
-experiment keeps its own `paired` and `yoked` everywhere, from its chamber groups.
+experiment (a type with the Progressive Ratio module) keeps its own `paired` and `yoked`
+everywhere, from its chamber groups.
 
 ## What the light QC checks
 
@@ -453,8 +457,9 @@ the column is `NA`.
 ## Thresholds
 
 The thresholds are design `constants:`, shared by every experiment type, with fields in the
-Project Design dialog and the Config Editor. The Config Editor shows them once the
-experiment is known to be optogenetic.
+Project Design dialog and the Config Editor. The dialog shows them unless `optogenetics` is
+no; the Config Editor once the experiment is known to be optogenetic (`optogenetics: yes`,
+a `Program.txt` in `data/`, or light QC files from a run).
 
 | Constant | Default | What it does |
 |---|---|---|
@@ -493,8 +498,8 @@ rows (`OptoLightQC`, `OptoUnexplainedFraction`) until you exclude it by hand or 
 
 ## Outputs
 
-Basic analysis and the Hub's **Run QC** (its *Opto light QC tables* item) write, into the
-member's `qc/opto/`:
+Basic analysis and the Hub's **Run QC** write, into the member's `qc/opto/` (the four
+tables are Run QC's *Opto light QC tables* item, the figure its *Light explained by licks*):
 
 | File | One row per | Holds |
 |---|---|---|
@@ -618,11 +623,15 @@ Activation as the [rule checks](#each-paradigms-own-rule) do, with
 
 The experiment report's **Light behaviour** section has one subsection per family the
 program runs, each with its own metrics, from the chambers whose window ran that family; a
-chamber that ran several shows under each. Open loop adds *Feeding in light and dark*. A
-Project pools the members' tables the same way. A member without a firmware 4.0.0 recording
-or a program keeps the four metrics of before in one section: `Activations`, `LitSec`,
-`FirmwareEvents` and `AcclimationEndMin` (`light_summary.HEADLINE_METRICS`). Every column is
-also a faceted Publication Figure in the [Plot Editor](app-plot-editor.md).
+chamber that ran several shows under each. Open loop adds *Feeding in light and dark* under
+a type with the Light and dark [module](concepts-experiment-types.md#analysis-modules)
+(Custom and ProgressiveRatio include it). A Project pools the members' tables the same way.
+A member without a firmware 4.0.0 recording or a program keeps the four metrics of before in
+one section: `Activations`, `LitSec`, `FirmwareEvents` and `AcclimationEndMin`
+(`light_summary.HEADLINE_METRICS`). See [Light behaviour plots](plots-catalog.md#light-behaviour-plots).
+Each numeric column is also a faceted Publication Figure in the
+[Plot Editor](app-plot-editor.md), offered once the Project's Combined Analysis has a light
+table.
 
 **Only chambers that earn light are compared on Activations.** A Yoked chamber's light is
 its partner's, an Open one's is given regardless, and an Unlit one has none, so their
@@ -630,7 +639,8 @@ Activations are 0 by construction and would dilute the comparison. In the statis
 rows keep their Role and their lit time (`LitSec`, `LitFraction`), so a yoked fly's light is
 seen beside its partner's, and lose every Activation measure: `Activations` and the
 Acclimation, ratio, closed-loop and FixedInterval columns, `Suppressions` and
-`MedianSuppressionSec`. Paired, Self and Mutual chambers keep them. A Progressive Ratio
+`MedianSuppressionSec`. Paired, Self and Mutual chambers keep them, and so does a chamber
+whose Role is blank, since nothing says its light is not its own. A Progressive Ratio
 experiment compares its paired chambers only, as before. A metric that is the same in every
 chamber, such as an open-loop chamber's lit time, is named once as not compared.
 
@@ -643,27 +653,32 @@ with `Experiment` first.
 
 A linkage group whose chambers are one **Paired** chamber and one or more **Yoked** ones is
 a yoked group: the paired fly's feeding lights its partners at the same moments, whatever
-they do. Under any experiment type but Progressive Ratio, which has its own
-[paired − yoked difference](concepts-progressive-ratio.md#statistics), pyflic then asks
-Progressive Ratio's question of it: does the paired fly feed differently from a fly that
-got the same light for free?
+they do. Under a type with the **Paired and yoked**
+[module](concepts-experiment-types.md#analysis-modules) (Custom includes it), pyflic then
+asks Progressive Ratio's question of it: does the paired fly feed differently from a fly
+that got the same light for free? A Progressive Ratio experiment has its own
+[paired − yoked difference](concepts-progressive-ratio.md#statistics) instead, and a type
+without the module, such as Hedonic, has neither.
 
 - **`analysis/yoked_comparison.csv`**, written by basic analysis and by Run analysis's
   *Paired and yoked comparison* beside the light table, only when a yoked group exists (the
-  Hub greys the box otherwise). One row per yoked group and window (`Whole recording`,
-  then each Facet): `DFM`, `Group` (the linkage group), `PairedChamber`, `YokedChambers`,
+  Hub greys the box otherwise, and does not offer it under a type without the module). One
+  row per yoked group and window: `Facet` (`Whole recording`, then each Facet) and
+  `FacetRange`, `DFM`, `Group` (the linkage group), `PairedChamber`, `YokedChambers`,
   the paired chamber's `Treatment` and factor levels, then per metric `Paired<m>`,
   `Yoked<m>` (the mean of its yoked chambers) and `d<m>`, the difference. The metrics are
   the feeding summary's licks, events and median duration, per well on a two-well layout
   (`LicksA`, `LicksB`, …). An excluded chamber is left out; a group without its paired
   chamber or any yoked one has no row.
 - **`<project>_YokedComparison.csv`**: a Project's Combined Analysis stacks the members'.
-- **Paired and yoked**, the last subsection of both reports' Results: the differences by
+- **Paired and yoked**, in both reports after the light results: the differences by
   treatment, each tested against zero with the paired t-test (a one-sample t-test on the
   differences) and the Wilcoxon signed-rank test beside it, then compared between
   treatments, one observation per group; a Project adds the mixed models. A figure plots
   each group's paired value against its yoked mean over the identity line. With one
-  treatment, the one-treatment note replaces the comparison between treatments.
+  treatment, the one-treatment note replaces the comparison between treatments. When the
+  type's [control comparison](concepts-experiment-types.md#control-comparisons) is Paired
+  against Yoked, this subsection opens the Results instead, and is not repeated.
 
 A design with no yoked group writes no such file and has no such subsection. From Python,
 `pyflic.base.analytics.yoked_comparison(exp)` returns the table.
@@ -672,9 +687,10 @@ A design with no yoked group writes no such file and has no such subsection. Fro
 
 With `facet_source: program` in the design, every **Program Interval** of a DFM's program is
 a [Facet](concepts-facets.md#program-facets), labelled by its Paradigm's name: every metric
-is split by what the program ran. `program_cycles` separates the passes of a Repeating
-program. On a generation-3 recording the Facets come from the rows themselves; on an older
-one from the program's clock schedule, noted as approximate.
+is split by what the program ran. `facet_source: program_cycles` separates the passes of a
+Repeating program. On a generation-3 recording the Facets come from the rows themselves; on
+an older one from the program's clock schedule, noted as approximate. Either way every DFM
+needs its `Program.txt` section: without one, the member does not load.
 
 ## The Program timeline
 
@@ -682,8 +698,9 @@ One figure per DFM: what its program ran, and what each well did.
 
 - **The top band** is the Program Intervals, coloured by Paradigm type and labelled by
   Paradigm name, with the Cycle of a repeating program. Light grey is the baseline before
-  the first instruction, hatched white an unknown instruction, and dark grey a Paradigm
-  whose type is unknown, because `Program.txt` does not define it or is missing.
+  the first instruction, the palest grey PyMCU's own `Idle` (no light), hatched white an
+  unknown instruction, and dark grey a Paradigm whose type is unknown, because
+  `Program.txt` does not define it or is missing.
 - **Below it, one lane per well**, its chamber and Role in the label: its Acclimation
   (Phase `A`) shaded, each Activation as a tick, and the share of each bin its LED was on as
   a blue strip. On generation 3 a lane is also hatched where `Program.txt` sets the well
@@ -723,10 +740,13 @@ both:
 - **Hold-aware lick-free events.** A light event is lick-free only when it is credited
   with no Sucrose Well licks *and* has no lick or touch within its Hold, the program's or
   `opto_default_decay_ms`. A light the fly touched for is never counted against it.
-- **Both ratio Paradigms.** The type covers ProgressiveRatio and FixedRatio.
-- **A type mismatch is reported.** A program running a ratio Paradigm under another
-  experiment type, or a Progressive Ratio experiment whose program runs none, is noted in
-  `summary.txt` and the report.
+- **Both ratio Paradigms.** The Progressive Ratio module covers ProgressiveRatio and
+  FixedRatio.
+- **A type mismatch is reported.** A program running a ratio Paradigm under a type without
+  the Progressive Ratio module (Custom, say), or a type with that module whose program runs
+  no ratio Paradigm, is noted in `summary.txt` and the report. A type that lists the
+  Paradigm types it expects refuses to load a program that runs another; see
+  [The light a type expects](concepts-experiment-types.md#the-light-a-type-expects).
 
 ---
 

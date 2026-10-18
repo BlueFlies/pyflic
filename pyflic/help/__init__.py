@@ -14,7 +14,7 @@ Typical use from a GUI::
 
     from pyflic.help import HelpButton, install_help_shortcut
 
-    card.add_title_widget(HelpButton("app-hub#load"))
+    card.add_title_widget(HelpButton("app-hub#batch-panel"))
     install_help_shortcut(self, "app-hub")
 
 The Qt-dependent names are imported lazily so that ``import pyflic.help`` from a

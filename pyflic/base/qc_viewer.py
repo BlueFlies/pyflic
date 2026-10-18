@@ -434,6 +434,7 @@ class LoadTab(QtWidgets.QWidget):
 
         # ── Settings card ─────────────────────────────────────────────
         settings_card = Card("Load Experiment", Category.LOAD)
+        _add_card_help(settings_card, "app-qc-viewer#the-load-tab")
         form = QtWidgets.QFormLayout()
         form.setFieldGrowthPolicy(QtWidgets.QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
@@ -447,7 +448,7 @@ class LoadTab(QtWidgets.QWidget):
         dir_row.setContentsMargins(0, 0, 0, 0)
         dir_row.addWidget(self._project_edit, stretch=1)
         dir_row.addWidget(browse_btn)
-        form.addRow("Project directory:", dir_row)
+        form.addRow("Experiment directory:", dir_row)
 
         # ── Time range ────────────────────────────────────────────────
         self._start_spin = QtWidgets.QDoubleSpinBox()
@@ -683,8 +684,8 @@ class FeedingSummaryTab(QtWidgets.QWidget):
         clear_all_btn.clicked.connect(lambda: self._set_all_and_sync(False))
         auto_filter_btn = ActionButton("Auto Filter", Category.QC, icon_name="qc")
         auto_filter_btn.setToolTip(
-            "Apply thresholds from global_constants in flic_config.yaml to automatically "
-            "exclude chambers that fail QC criteria."
+            "Apply the auto-removal cutoffs under global.constants in flic_config.yaml "
+            "(or the type's defaults) to tick the chambers that fail them."
         )
         auto_filter_btn.clicked.connect(self.auto_filter_requested)
         criteria_btn = ActionButton("View Criteria", Category.TOOLS, icon_name="info")
@@ -703,6 +704,11 @@ class FeedingSummaryTab(QtWidgets.QWidget):
         btn_bar.addWidget(criteria_btn)
         btn_bar.addWidget(export_btn)
         btn_bar.addWidget(save_btn)
+        help_btn = _help_button(
+            "app-qc-viewer#the-feeding-summary-tab",
+            "The Feeding Summary tab: its columns, exclusions and Auto Filter")
+        if help_btn is not None:
+            btn_bar.addWidget(help_btn)
         btn_bar.addStretch()
 
         self._root.addLayout(btn_bar)
@@ -919,9 +925,11 @@ class DfmTab(QtWidgets.QWidget):
         outer = QtWidgets.QHBoxLayout(self)
         outer.setContentsMargins(4, 4, 4, 4)
 
-        # Left: QC sub-tabs
+        # Left: QC sub-tabs, with one ``?`` that follows the sub-tab showing
         self._tabs = QtWidgets.QTabWidget()
         outer.addWidget(self._tabs, stretch=1)
+        self._help_corner = _follow_tabs(self._tabs, _DFM_SUBTAB_HELP,
+                                         "app-qc-viewer#the-dfm-tabs")
         self._build_qc_tabs(dfm_id, qc_dir)
 
         # Right: exclusion panel
@@ -1090,6 +1098,17 @@ class DfmTab(QtWidgets.QWidget):
             layout.addStretch(1)
         return panel
 
+    def help_ref(self) -> str:
+        """The help for the sub-tab showing, as its corner ``?`` has it."""
+        index = self._tabs.currentIndex()
+        label = self._tabs.tabText(index) if index >= 0 else ""
+        return _DFM_SUBTAB_HELP.get(label, "app-qc-viewer#the-dfm-tabs")
+
+    def sync_help(self) -> None:
+        """Re-point the corner ``?`` after a sub-tab set with signals blocked."""
+        if self._help_corner is not None:
+            self._help_corner.set_ref(self.help_ref())
+
     def refresh_program(self) -> None:
         """Recompute the Program sub-tab from the experiment as it now
         stands (after a Params recompute replaced the DFMs)."""
@@ -1098,7 +1117,10 @@ class DfmTab(QtWidgets.QWidget):
 
     def _build_exclusion_panel(self, excluded_wells: list[int]) -> Card:
         panel = Card("Exclude Wells", Category.QC)
-        panel.setFixedWidth(160)
+        _add_card_help(panel, "app-qc-viewer#the-exclude-wells-panel")
+        ## Narrow, but never narrower than the title and its ``?`` side by
+        ## side: a fixed 160 px clipped the title once the ``?`` joined it.
+        panel.setFixedWidth(max(160, panel.minimumSizeHint().width()))
 
         excluded_set = set(excluded_wells)
         for well_num in range(1, 13):
@@ -1226,6 +1248,11 @@ class OptoTab(QtWidgets.QWidget):
         self._btn_exclude_selected.clicked.connect(self._exclude_selected)
         head.addWidget(self._btn_exclude_selected)
         head.addWidget(self._btn_exclude_failed)
+        help_btn = _help_button(
+            "app-qc-viewer#the-opto-light-qc-tab",
+            "The Opto Light QC tab: its columns, panes and buttons")
+        if help_btn is not None:
+            head.addWidget(help_btn)
         root.addLayout(head)
 
         splitter = QtWidgets.QSplitter(Qt.Orientation.Vertical)
@@ -1243,6 +1270,7 @@ class OptoTab(QtWidgets.QWidget):
 
         lower = QtWidgets.QSplitter(Qt.Orientation.Horizontal)
         self._details = QtWidgets.QTabWidget()
+        _follow_tabs(self._details, _OPTO_DETAIL_HELP, "concepts-optogenetics#the-checks")
         self._why = QtWidgets.QTextEdit()
         self._why.setReadOnly(True)
         self._details.addTab(self._why, "Why")
@@ -1280,6 +1308,11 @@ class OptoTab(QtWidgets.QWidget):
         self._only_selected.setChecked(True)
         self._only_selected.toggled.connect(self._render_figure)
         controls.addWidget(self._only_selected)
+        help_btn = _help_button(
+            "concepts-optogenetics#explained-light",
+            "Reading the Light explained by licks figure")
+        if help_btn is not None:
+            controls.addWidget(help_btn)
         controls.addStretch(1)
         figure_layout.addLayout(controls)
         self._figure_host = QtWidgets.QVBoxLayout()
@@ -1521,6 +1554,53 @@ def _add_card_help(card: Card, ref: str) -> None:
     except Exception:  # noqa: BLE001
         return
     card.add_title_widget(HelpButton(ref, card))
+
+
+def _help_button(ref: str, tooltip: str, parent: QtWidgets.QWidget | None = None):
+    """A ``?`` opening *ref* for a row or a tab bar, or ``None``."""
+    try:
+        from ..help import HelpButton
+    except Exception:  # noqa: BLE001 - help is optional, the viewer is not
+        return None
+    return HelpButton(ref, parent, tooltip=tooltip)
+
+
+#: A DFM tab's sub-tab label → its help.  The three signal plots share one.
+_DFM_SUBTAB_HELP: dict[str, str] = {
+    "Integrity": "app-qc-viewer#the-integrity-sub-tab",
+    "Sim. Feeding": "app-qc-viewer#the-sim-feeding-sub-tab",
+    "Bleeding": "app-qc-viewer#the-bleeding-sub-tab",
+    "Raw Signal": "app-qc-viewer#the-signal-plot-sub-tabs",
+    "Baselined": "app-qc-viewer#the-signal-plot-sub-tabs",
+    "Cumulative Licks": "app-qc-viewer#the-signal-plot-sub-tabs",
+    "Program": "app-qc-viewer#the-program-sub-tab",
+}
+
+#: The Opto Light QC tab's detail-pane label → its help.
+_OPTO_DETAIL_HELP: dict[str, str] = {
+    "Why": "concepts-optogenetics#the-checks",
+    "Intervals": "concepts-optogenetics#outputs",
+    "Light events": "concepts-optogenetics#outputs",
+    "Program": "concepts-optogenetics#what-pyflic-takes-from-it",
+}
+
+
+def _follow_tabs(tabs: QtWidgets.QTabWidget, refs: dict[str, str],
+                 default: str):
+    """One ``?`` in *tabs*' corner that opens the help of the tab showing;
+    the button, or ``None``.  A tab set with its signals blocked is not
+    followed: the caller re-points the button itself."""
+    button = _help_button(default, "Help for the tab showing", tabs)
+    if button is None:
+        return None
+    tabs.setCornerWidget(button, Qt.Corner.TopRightCorner)
+
+    def follow(index: int) -> None:
+        button.set_ref(refs.get(tabs.tabText(index), default) if index >= 0
+                       else default)
+
+    tabs.currentChanged.connect(follow)
+    return button
 
 
 class ParamsTab(QtWidgets.QWidget):
@@ -1772,6 +1852,7 @@ class MainWindow(QtWidgets.QMainWindow):
             tab = DfmTab(dfm_id, qc_dir, excluded_wells=excl_wells, exp=exp)
             tab.exclusion_changed.connect(self._on_dfm_exclusion_changed)
             tab._tabs.currentChanged.connect(self._on_subtab_changed)
+            tab._tabs.currentChanged.connect(self._on_tab_changed_for_help)
             self._dfm_tab_widgets[dfm_id] = tab
             self._tabs.addTab(tab, icon("qc", category=Category.QC), f"DFM {dfm_id}")
 
@@ -1824,6 +1905,8 @@ class MainWindow(QtWidgets.QMainWindow):
             tab._tabs.blockSignals(True)
             tab._tabs.setCurrentIndex(target)
             tab._tabs.blockSignals(False)
+            tab.sync_help()
+        self._on_tab_changed_for_help()
 
     # ------------------------------------------------------------------
     # Live parameter recompute
@@ -1980,13 +2063,22 @@ class MainWindow(QtWidgets.QMainWindow):
         if not summary:
             summary = (
                 "Auto filter has not been run yet.\n\n"
-                "Click 'Auto Filter Chambers' to apply the thresholds defined\n"
-                "under global_constants in flic_config.yaml."
+                "Click 'Auto Filter' to apply the auto-removal cutoffs\n"
+                "under global.constants in flic_config.yaml."
             )
 
         dlg = QtWidgets.QDialog(self)
         dlg.setWindowTitle("Auto Filter Criteria")
         dlg.resize(520, 320)
+        ## Window-modal, like the Hub's dialogs, so the help its F1 opens
+        ## stays usable beside it.
+        dlg.setWindowModality(Qt.WindowModality.WindowModal)
+        try:
+            from ..help import install_help_shortcut
+
+            install_help_shortcut(dlg, "app-qc-viewer#auto-filter")
+        except Exception:  # noqa: BLE001 - help is optional, the viewer is not
+            pass
         layout = QtWidgets.QVBoxLayout(dlg)
 
         text = QtWidgets.QPlainTextEdit()
@@ -2000,6 +2092,10 @@ class MainWindow(QtWidgets.QMainWindow):
         close_btn = QtWidgets.QPushButton("Close")
         close_btn.clicked.connect(dlg.accept)
         btn_row = QtWidgets.QHBoxLayout()
+        help_btn = _help_button("app-qc-viewer#auto-filter",
+                                "What Auto Filter applies  (F1)", dlg)
+        if help_btn is not None:
+            btn_row.addWidget(help_btn)
         btn_row.addStretch()
         btn_row.addWidget(close_btn)
         layout.addLayout(btn_row)
@@ -2035,7 +2131,7 @@ class MainWindow(QtWidgets.QMainWindow):
             constants = (self._exp.global_constants or {})
             if not constants:
                 self.statusBar().showMessage(
-                    "Auto filter: no global_constants defined in flic_config.yaml — "
+                    "Auto filter: no cutoffs under global.constants in flic_config.yaml — "
                     "no chambers removed."
                 )
             else:
@@ -2043,7 +2139,7 @@ class MainWindow(QtWidgets.QMainWindow):
         else:
             self.statusBar().showMessage(
                 f"Auto filter: {n} chamber(s) marked excluded. "
-                f"Click 'Save removed chambers…' to persist."
+                f"Click 'Save Exclusions…' to keep them."
             )
 
     # ------------------------------------------------------------------
@@ -2153,8 +2249,7 @@ class MainWindow(QtWidgets.QMainWindow):
         """Add the top-bar ``?`` and bind F1 to the current tab's topic."""
         self._help_ref = "app-qc-viewer"
         try:
-            from ..help import open_help
-            from PyQt6.QtGui import QKeySequence, QShortcut
+            from ..help import install_help_shortcut, open_help
         except Exception:  # noqa: BLE001 - help is optional, the viewer is not
             return
         from .ui.icons import help_color
@@ -2167,24 +2262,26 @@ class MainWindow(QtWidgets.QMainWindow):
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
         btn.clicked.connect(lambda: open_help(self._help_ref))
         self._top_bar.add_right(btn)
+        install_help_shortcut(self, lambda: self._help_ref)
 
-        sc = QShortcut(QKeySequence(Qt.Key.Key_F1), self)
-        sc.setContext(Qt.ShortcutContext.WindowShortcut)
-        sc.activated.connect(lambda: open_help(self._help_ref))
+    #: Top-level tab label → its help; a DFM tab's follows its sub-tab.
+    _TAB_HELP: dict[str, str] = {
+        "Load": "app-qc-viewer#the-load-tab",
+        "Feeding Summary": "app-qc-viewer#the-feeding-summary-tab",
+        "Opto Light QC": "app-qc-viewer#the-opto-light-qc-tab",
+        "Params": "app-qc-viewer#the-params-tab",
+    }
 
-    def _on_tab_changed_for_help(self, index: int) -> None:
-        """Point the help button at the topic for the tab now showing."""
+    def _on_tab_changed_for_help(self, _index: int = -1) -> None:
+        """Point the top-bar ``?`` and F1 at the help for the tab showing —
+        for a DFM tab, at its sub-tab's."""
+        tab = self._tabs.currentWidget()
+        if isinstance(tab, DfmTab):
+            self._help_ref = tab.help_ref()
+            return
+        index = self._tabs.currentIndex()
         label = self._tabs.tabText(index) if index >= 0 else ""
-        if label.startswith("DFM"):
-            self._help_ref = "app-qc-viewer#what-to-look-for"
-        elif label == "Params":
-            self._help_ref = "app-qc-viewer#the-params-tab"
-        elif label == "Feeding Summary":
-            self._help_ref = "concepts-metrics"
-        elif label == "Opto Light QC":
-            self._help_ref = "concepts-optogenetics"
-        else:
-            self._help_ref = "app-qc-viewer"
+        self._help_ref = self._TAB_HELP.get(label, "app-qc-viewer")
 
 
 # ───────────────────────────────────────────────────────────────────────────

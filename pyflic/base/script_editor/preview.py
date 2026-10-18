@@ -41,6 +41,8 @@ class Preview(QWidget):
         title = QLabel("YAML preview", self)
         title.setStyleSheet("font-size: 11pt; font-weight: 600;")
         header_row.addWidget(title)
+        self._header_row = header_row
+        self._title_at = header_row.count()
 
         self._full_cb = QCheckBox("Show full scripts: block", self)
         self._full_cb.setToolTip(
@@ -69,6 +71,13 @@ class Preview(QWidget):
         self._text.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._text.setMinimumHeight(120)
         outer.addWidget(self._text, 1)
+
+    def add_title_widget(self, widget: QWidget) -> None:
+        """Add *widget* (the window's help button) right after the pane's
+        title, as the other panes do."""
+        self._header_row.insertWidget(self._title_at, widget, 0,
+                                      Qt.AlignmentFlag.AlignVCenter)
+        self._title_at += 1
 
     def is_show_full(self) -> bool:
         return self._full_cb.isChecked()

@@ -267,7 +267,7 @@ def test_the_config_editor_copies_a_standalone_lab_type(app, lab, tmp_path):
     assert editor._experiment_type_combo.currentData() == "HedonicClosedLoop"
     assert editor._new_type_btn.isEnabled()
     assert editor._control_level_edit.text() == "w1118"
-    assert not editor._control_level_edit.isHidden()
+    assert editor._exp_form.isRowVisible(editor._control_level_row)
     editor._confirm_save_with_problems = lambda problems: True
     editor._write_yaml(path)
     assert yaml.safe_load(path.read_text())["global"]["control_level"] == "w1118"
@@ -276,7 +276,7 @@ def test_the_config_editor_copies_a_standalone_lab_type(app, lab, tmp_path):
     ## Switching to a shipped type removes the copy.
     editor._experiment_type_combo.setCurrentIndex(
         editor._experiment_type_combo.findData("Hedonic"))
-    assert editor._control_level_edit.isHidden()
+    assert not editor._exp_form.isRowVisible(editor._control_level_row)
     editor._write_yaml(path)
     assert not (root / library.COPY_NAME).exists()
     editor.close()

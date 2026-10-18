@@ -188,7 +188,7 @@ def test_an_optogenetic_experiment_gets_the_tab(opto_window):
     tabs = [win._tabs.tabText(i) for i in range(win._tabs.count())]
     assert tabs == ["Load", "Feeding Summary", "DFM 1", "Opto Light QC", "Params"]
     win._tabs.setCurrentIndex(tabs.index("Opto Light QC"))
-    assert win._help_ref == "concepts-optogenetics"
+    assert win._help_ref == "app-qc-viewer#the-opto-light-qc-tab"
 
 
 def test_the_tab_opens_on_the_worst_group_and_says_why(opto_window):

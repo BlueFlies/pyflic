@@ -3,8 +3,9 @@
 Every detection parameter, what it does, and which way your results move when you change
 it. These go under `global.params`, and any DFM may override any of them for itself.
 Inside a Project they belong to the design, and only the physical keys `pi_direction` and
-`chamber_sets` may vary per DFM. The auto-removal cutoffs and the Progressive Ratio
-light QC and breaking-point settings are not detection parameters; they live under
+`chamber_sets` may vary per DFM. The auto-removal cutoffs, the optogenetic light QC's
+thresholds and the Progressive Ratio light QC and breaking-point settings are not detection
+parameters; they live under
 `global.constants` — [see there](config-structure.md#globalconstants).
 
 ```yaml
@@ -122,9 +123,12 @@ parameter that decides how brief "briefly" is.
 
 It has a **substantial** effect on your results, larger than most users expect:
 
-- **Larger** merges more events → **fewer, longer** bouts, and **more** licks (bridged
-  gaps are filled with licks).
+- **Larger** merges more events → **fewer, longer** bouts.
 - **Smaller** preserves interruptions → **more, shorter** bouts.
+
+It changes events, durations, intervals and the event PI, not the feeding summary's lick
+counts or the lick PI: the samples in a bridged gap stay non-lick samples. `0` turns
+linking off.
 
 Only gaps with a real event on both sides are bridged; runs at the start or end of a
 recording are never converted. Any comparison of event counts or durations between
@@ -173,9 +177,9 @@ anything else to `right`.
 
 **Default `true` for two-well experiments, `false` for single-well.**
 
-Detects samples where both wells of a chamber register feeding at once, adjusts the
-baseline of the non-preferred well to remove electrical crosstalk, and re-runs detection on
-the corrected signal.
+Finds samples where both wells of a chamber register a feeding lick at once, sets the
+weaker of the two signals to zero at each of them (both, when they are equal) to remove
+electrical crosstalk, and re-runs detection on the corrected signal.
 
 Because it is on by default for choice assays, your results depend on it whether or not you
 chose it — state it in your methods. Uncorrected crosstalk biases every preference index

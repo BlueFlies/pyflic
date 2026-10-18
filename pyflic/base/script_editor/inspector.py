@@ -50,7 +50,12 @@ class Inspector(QWidget):
 
         title = QLabel("Step parameters", self)
         title.setStyleSheet("font-size: 12pt; font-weight: 600;")
-        outer.addWidget(title)
+        self._title_row = QHBoxLayout()
+        self._title_row.setContentsMargins(0, 0, 0, 0)
+        self._title_row.setSpacing(6)
+        self._title_row.addWidget(title)
+        self._title_row.addStretch(1)
+        outer.addLayout(self._title_row)
 
         # Header card (shows the action name + blurb)
         self._header = QFrame(self)
@@ -101,6 +106,13 @@ class Inspector(QWidget):
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+
+    def add_title_widget(self, widget: QWidget) -> None:
+        """Add *widget* (the window's help button) right after the pane's
+        title.  The pane knows nothing about help; it offers the slot, as
+        :meth:`pyflic.base.ui.widgets.Card.add_title_widget` does."""
+        self._title_row.insertWidget(self._title_row.count() - 1, widget, 0,
+                                     Qt.AlignmentFlag.AlignVCenter)
 
     def set_experiment_type(self, et: str | None) -> None:
         self._experiment_type = et

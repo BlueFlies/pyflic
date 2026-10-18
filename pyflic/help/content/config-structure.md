@@ -1,6 +1,7 @@
 # Configuration file structure
 
-`flic_config.yaml` has three top-level keys. Only `global` and `dfms` are required.
+`flic_config.yaml` has three top-level keys. `dfms` is always required. A standalone
+experiment states `global` too; a member of a Project takes it from the design (below).
 
 ```yaml
 global:
@@ -10,10 +11,12 @@ global:
   constants: { ... }                     # optional
   params: { ... }                        # optional
   facet_cutoffs: [ ... ]                 # optional
+  facet_labels: [ ... ]                  # optional: names for the facet_cutoffs windows
   facet_source: ...                      # optional: cutoffs (default), program or program_cycles
-  experimental_design_factors: { ... }   # optional
-  well_names: { ... }                    # required by Hedonic and ProgressiveRatio
-  control_level: ...                     # under a type with a Treatment control
+  experimental_design_factors: { ... }   # optional, unless the type names factors
+  well_names: { ... }                    # required by a type that names its wells
+  control_level: ...                     # required under a type with a Treatment control
+  exclusion_group: ...                   # optional, in a Project's design
   omit: { ... }                          # optional: what Run QC, Run analysis and Generate plots leave out
 
 dfms:
@@ -49,26 +52,36 @@ The Experiment Type — `Hedonic`, `ProgressiveRatio`, or a type your lab built 
 `chamber_layout: single_well` or `two_well` instead (two-well when omitted). A config whose
 type fixes the layout states neither `chamber_layout` nor `params.chamber_size`: the type
 owns them. A lab type is read from `experiment_type.yaml` beside the config (or beside
-`project.yaml`), which the editors write. When `data/Program.txt` runs light the type does
-not expect, the recording fails to load. A Progressive Ratio config also says, per DFM, how its chambers form chamber groups:
+`project.yaml`), which the editors write.
+
+The type also decides what else the config must say:
+
+- the `well_names` it requires (Hedonic and Progressive Ratio name both wells);
+- the design factors it names, in `experimental_design_factors`;
+- a `control_level`, when it has a Treatment control;
+- the light it expects: when `data/Program.txt` runs light the type does not expect, the
+  recording fails to load, unless `optogenetics: false` keeps pyflic from reading the
+  program.
+
+A Progressive Ratio config also says, per DFM, how its chambers form chamber groups:
 `paired_chambers` for pairs, `chamber_groups: single` for single chambers, or neither when
 `data/Program.txt`'s linkage gives them (see [DFMs and chambers](config-dfms-chambers.md)).
-See
-[Experiment types](concepts-experiment-types.md).
+See [Experiment types](concepts-experiment-types.md).
 
 ## `global.control_level`
 
 Under a type whose report leads with a **Treatment control**, the level of that factor
-every other level is compared with, for example `control_level: w1118`. It must be one of
-the factor's levels, and it is an error under a type without a Treatment control. See
+every other level is compared with, for example `control_level: w1118`. Such a type
+requires it: a config without one does not load. It must be one of the factor's levels,
+and it is an error under a type without a Treatment control. See
 [Control comparisons](concepts-experiment-types.md#control-comparisons).
 
 ## `global.optogenetics`
 
 Whether the optogenetic light QC runs: `auto` (the default) on every DFM with a section in
-`data/Program.txt` or a lit LED, `true` on every DFM, `false` on none. A DFM entry may
-override it for that DFM. Its thresholds are more `constants:`, shared by every type. See
-[Optogenetic experiments](concepts-optogenetics.md).
+`data/Program.txt` or a lit LED, `true` on every DFM, `false` on none (`yes` and `no` mean
+the same). A DFM entry may override it for that DFM. Its thresholds are more `constants:`,
+shared by every type. See [Optogenetic experiments](concepts-optogenetics.md).
 
 ```yaml
 global:
@@ -98,9 +111,11 @@ of them for itself; inside a Project only the physical keys `pi_direction` and
 
 ## `global.facet_cutoffs`
 
-Minutes at which the recording is split into named phases, with optional `facet_labels`.
-Progressive Ratio owns its facets (Training and Test, split at each chamber group's
-training end) and must not state them. See [Facets](concepts-facets.md).
+Minutes at which the recording is split into named phases, with optional `facet_labels`,
+one name per window. A type may suggest cutoffs of its own, used when the config states
+none. Progressive Ratio owns its facets (Training and Test, split at each chamber group's
+training end), and so does a lab type that fixes its cutoffs: their configs must not state
+them. See [Facets](concepts-facets.md).
 
 ## `global.facet_source`
 
@@ -147,7 +162,8 @@ cutoff's **Use** checkbox is unchecked). An omitted key still inherits the type'
 A Custom Experiment has no defaults, and there an unset or null key means the check is not
 performed — pyflic reports it as "not configured" rather than substituting a number.
 
-A Progressive Ratio experiment adds its own, all with defaults:
+A type with the Progressive Ratio analysis (the shipped `ProgressiveRatio`, or a lab type
+built with it) adds its own, all with defaults:
 
 | Key | Default | Effect |
 |---|---|---|
@@ -162,17 +178,21 @@ A Progressive Ratio experiment adds its own, all with defaults:
 | `pr_test_window_min` | unset (off) | Minutes. Caps every chamber group's Test window at this long after its own training end, so a group that trained late is not measured over less time; `0` or unset means no cap |
 
 What the light QC checks, and how the breaking point is defined, is in
-[Progressive Ratio experiments](concepts-progressive-ratio.md).
+[Progressive Ratio experiments](concepts-progressive-ratio.md). The Project Design dialog
+and the [Config Editor](app-config-editor.md) show these as fields under such a type, the
+type's default in grey.
 
 Every optogenetic experiment, of any type, reads the optogenetic light QC's constants too —
 `exclude_failed_opto_chambers` (off by default: failed linkage groups are flagged, not
 excluded) and twenty thresholds whose names start `opto_`, thirteen of which apply only to
 firmware 4.0.0 recordings. They are listed in
-[Optogenetic experiments](concepts-optogenetics.md#thresholds). The Project Design
-dialog and the [Config Editor](app-config-editor.md) show these as fields for a
-Progressive Ratio experiment, the type's default in grey. A value of the wrong kind or out
-of range — a switch that is not `true` or `false`, a gap of 0, a rho above 1 — is a
-validation error: `pyflic lint` reports it and the experiment does not load.
+[Optogenetic experiments](concepts-optogenetics.md#thresholds). Both editors show them as
+fields too, in an *Optogenetic light QC* group, for an experiment whose optogenetics is not
+off, the default in grey.
+
+A value of the wrong kind or out of range — a switch that is not `true` or `false`, a gap
+of 0, a rho above 1 — is a validation error: `pyflic lint` reports it and the experiment
+does not load.
 
 One rule applies regardless of configuration: a chamber whose lick value is `NaN` or
 undefined is always removed by `auto_remove_chambers()`, because it produced no usable
@@ -200,12 +220,16 @@ global:
 
 Purely cosmetic — it does not affect detection, the preference index, or which well is
 Well A. That is `pi_direction`'s job; see
-[Two-well choice and the preference index](concepts-two-well-pi.md).
+[Two-well choice and the preference index](concepts-two-well-pi.md). A type may still
+require them: Hedonic and Progressive Ratio refuse a config that does not name both wells.
+A DFM entry may state its own `well_names:`, which override these, well by well, for that
+DFM.
 
 ## `global.experimental_design_factors`
 
 Defines a factorial design so chambers can be labelled by several crossed factors at once.
-See [Factorial designs](config-factors.md).
+An Experiment Type may name factors that every config of it declares; the config gives
+their levels and may add factors of its own. See [Factorial designs](config-factors.md).
 
 ## `global.omit`
 
@@ -230,7 +254,8 @@ tick and untick, so you rarely write it by hand.
   not: they run what they always ran.
 - **Inside a Project** it belongs to the design, like every `global:` key: `project.yaml`
   `design.global.omit`, shared by every member. Ticking a member's box writes there, and
-  removes an `omit:` a member's own `global:` stated, so that member inherits the design's.
+  removes any `omit:` a member's own `global:` states, so every member inherits the
+  design's.
 - **What it cannot leave out.** Run analysis always writes the core — the auto-removal and
   `removed_chambers.csv`, `summary.txt`, `feeding_summary.csv` and, with Facets,
   `feeding_summary_facet.csv` — because every other item reads it.
@@ -247,6 +272,13 @@ tick and untick, so you rarely write it by hand.
 What each item writes, and which members it is offered for, is in the Analysis Hub's
 [QC panel](app-hub.md#qc-panel), [Analyze panel](app-hub.md#analyze-panel) and
 [Plots panel](app-hub.md#plots-panel) tables.
+
+## `global.exclusion_group`
+
+The `remove_chambers.csv` group every member of a Project is loaded with: `general` when
+it is left out. It belongs in the Project's design, where the Project Design dialog's
+**Exclusion group** field writes it. A standalone experiment is always loaded with
+`general`. See [Excluding chambers](config-dfms-chambers.md#excluding-chambers).
 
 ## `dfms`
 

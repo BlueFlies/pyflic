@@ -57,15 +57,20 @@ Two details are easy to miss and both matter:
 - **Only interior gaps are bridged.** A gap must have a real event on *both* sides.
   Non-lick runs at the very start or end of a recording are never converted, because there
   is nothing to link them to.
-- **The gap is filled with licks.** Bridging does not merely join two events in a list —
-  the samples in the gap become licks. Merged bouts therefore have a duration spanning the
-  gap, and the total lick count rises.
+- **Linking joins events; it does not add licks.** A merged bout spans the gap, so its
+  duration includes the bridged samples, and the interval across the gap disappears. The
+  lick record keeps the gap as non-lick samples, so the lick counts in the feeding summary
+  (`Licks`, `LicksA`, `LicksB`) and the lick preference index are the same whatever the
+  link gap. Each bout's own `Licks` in the event statistics export, and the QC's
+  Cumulative licks curves built from them, are the exception: they count the bout's whole
+  length, gap included.
 
 The link gap has a **substantial** effect on your results, larger than most users expect.
-A larger gap merges more events, giving you **fewer but longer** bouts and more licks. A
-smaller gap preserves brief interruptions as separate events, giving you **more but
-shorter** bouts. Any comparison of event counts or bout durations between conditions is
-only meaningful if both were analysed with the same link gap.
+A larger gap merges more events, giving you **fewer but longer** bouts and longer
+intervals between them. A smaller gap preserves brief interruptions as separate events,
+giving you **more but shorter** bouts. A link gap of `0` turns linking off. Any
+comparison of event counts, the event PI or bout durations between conditions is only
+meaningful if both were analysed with the same link gap.
 
 If you are unsure what value to use, run a
 [sensitivity sweep](scripts-actions.md#analyse-actions) across several link gaps and see
@@ -75,7 +80,8 @@ where your effect is and is not stable.
 
 After linking, the merged lick vector is scanned once more to produce the final event
 list. Each event is recorded as a start position and a duration in samples. Those events
-are what everything downstream is built from.
+are what event counts, durations, intervals and intensities are built from; lick counts
+come from the licks before linking.
 
 ## The order of operations
 
@@ -86,7 +92,8 @@ The sequence is fixed, and it explains results that otherwise look strange:
 3. Candidate licks (above `feeding_minimum`)
 4. Surviving events (runs containing at least one sample above `feeding_threshold`)
 5. Discard events shorter than `feeding_minevents`
-6. Bridge gaps of `feeding_event_link_gap` samples or fewer
+6. Bridge gaps of `feeding_event_link_gap` samples or fewer (the licks counted are those
+   from step 5)
 7. Extract the final event list
 
 Note that step 5 happens **before** step 6. Two brief contacts that would together exceed

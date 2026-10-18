@@ -1,4 +1,5 @@
-"""The help window — one modeless, shared window for every help button.
+"""The help window — one shared window for every help button, modeless
+except when it is opened over an application-modal dialog (:func:`open_help`).
 
 Qt's ``QTextBrowser.setMarkdown()`` renders GitHub-dialect markdown (tables
 included) but emits **no anchors** for headings, so ``scrollToAnchor()`` cannot
@@ -564,8 +565,36 @@ def open_help(
     if topic_id and anchor is None:
         topic_id, anchor = _topics.parse_ref(topic_id)
     win = help_window()
+    _match_modality(win)
     win.show_topic(topic_id or _first_topic_id(), anchor, guide_id)
     win.show()
     win.raise_()
     win.activateWindow()
     return win
+
+
+def _match_modality(win: HelpWindow) -> None:
+    """Make *win* usable over whatever modal dialog asked for it.
+
+    An application-modal dialog (any ``QDialog.exec()`` that sets no modality
+    of its own) blocks input to every other window, and the help window is
+    parentless, so help opened from such a dialog came up looking alive but
+    ignoring clicks, keys and the scroll wheel.  Opened from one, the help
+    window is application-modal itself, on top of the dialog's block, until it
+    is next opened from outside a modal dialog.  A window-modal dialog blocks
+    only its own parent chain and needs nothing.  Changing a visible window's
+    modality takes effect only on its next ``show``, hence the ``hide``, which
+    (unlike ``close``) saves nothing.
+    """
+    modal = QApplication.activeModalWidget()
+    if modal is win:
+        return
+    blocked = (modal is not None
+               and modal.windowModality() == Qt.WindowModality.ApplicationModal)
+    want = (Qt.WindowModality.ApplicationModal if blocked
+            else Qt.WindowModality.NonModal)
+    if win.windowModality() == want:
+        return
+    if win.isVisible():
+        win.hide()
+    win.setWindowModality(want)

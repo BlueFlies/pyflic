@@ -11,8 +11,9 @@ Directory" for the same reason. See
 
 ### A DFM in my config has no data
 
-CSV filenames must match the DFM numbers in your configuration. A DFM keyed `3` needs
-`DFM3_0.csv` (v3) or `DFM_3.csv` (v2) in `data/`. Check for a leading zero, a different
+The load stops with *DFM data file(s) not found for id=3*. CSV filenames must match the DFM
+numbers in your configuration. A DFM keyed `3` needs `DFM3_0.csv` (v3) or `DFM_3.csv` (v2)
+in `data/`. Check for a leading zero, a different
 separator, or a file left in the folder's root instead of `data/` — inside a Project the Hub
 shows that as a blocked member, **unfiled recording**, and offers to file it.
 
@@ -28,6 +29,27 @@ owns. Delete the key; the value is derived. An old `experiment_type: two_well` o
 
 Hedonic and Progressive Ratio experiments must name both wells under `global.well_names`.
 
+### "Unknown experiment_type"
+
+The config names a type pyflic cannot find: it is not shipped, there is no
+`experiment_type.yaml` copy of it beside the data, and the lab's type library has none. The
+message lists the types it knows. Check the spelling, point the Experiment Type Editor at
+your lab's library, or copy the type's file in. See
+[Where types live](concepts-experiment-types.md#where-types-live).
+
+### "was read from the lab library: the data carries no copy of it"
+
+A note, not an error: the type was found in your lab's library, but the data has no copy of
+it, so another machine could not analyse it the same way. Save the Project design (or the
+standalone config) again, and the copy is written.
+
+### "the Opto Program runs … and experiment_type … expects …"
+
+The recording's `Program.txt` runs a Paradigm type the experiment type does not take — for
+example ClosedLoop light under `Hedonic`, which expects no light. The member does not load.
+Choose a type that expects that light, or build one. See
+[The light a type expects](concepts-experiment-types.md#the-light-a-type-expects).
+
 ### A member fails to load inside its Project
 
 The Project's design owns every `global:` key. A member whose own `global:` block
@@ -37,8 +59,9 @@ every member at once. See [Projects and members](concepts-project.md).
 
 ### Only part of my recording loaded
 
-Check the start and end minute controls. `end: 0` means through the end of the recording;
-any other value truncates. Multi-segment experiments stitch in filename order, so a
+Check the start and end minutes: a script's `start` and `end` (on the script or on its
+steps), or the QC Viewer's **Start time** and **End time**. An end of `0` means through the
+end of the recording; any other value truncates. Multi-segment experiments stitch in filename order, so a
 misnamed segment can land out of sequence.
 
 ### "DFM 99 is the Environmental Monitor, not a DFM"
@@ -74,8 +97,9 @@ Three common causes, in the order worth checking:
 
 They are probably fourth-root transformed — that is the default. A `Licks` value of `6.2`
 means about 1478 licks. Set `global.transform_licks: false` to turn it off, and note that
-`summary.txt` reports untransformed counts while `feeding_summary.csv` reports transformed
-ones. See [the lick transform](concepts-metrics.md#the-lick-transform).
+the automatic removal's reasons, in `summary.txt` and `removed_chambers.csv`, quote
+untransformed counts — `min_untransformed_licks_cutoff` is on that scale — while
+`feeding_summary.csv` reports transformed ones. See [the lick transform](concepts-metrics.md#the-lick-transform).
 
 ### Far too many, or too few, events
 
@@ -174,10 +198,13 @@ The rule does not know the time of day: a pause at night longer than `pr_break_g
 ends the count. Raise the gap in the design if your flies routinely pause that long and then
 resume — the sensitivity table shows what each choice gives.
 
-### The Project Report says a member has no breaking point table
+### A member is missing from the Project's breaking point
 
-That member was analysed before the breaking point existed. Re-run its analysis: **Run
-analysis** with *Breaking point* ticked, or the Project's **Analyze all**.
+The Project pools each member's `analysis/pr_breaking_point.csv`, and a member without one
+is left out rather than guessed at: it was analysed before the breaking point existed, or
+with *Breaking point* unticked. Count the chamber groups pooled in the Project Report against
+what you expect. Re-run that member's analysis — **Run analysis** with *Breaking point*
+ticked, or the Project's **Analyze all** — then **Create report** again.
 
 ## Optogenetic recordings
 
@@ -292,25 +319,63 @@ the firmware's own record:
 
 See [Each Paradigm's own rule](concepts-optogenetics.md#each-paradigms-own-rule).
 
+### "open loop not lit"
+
+A warning: an open-loop interval, whose wells are set to light whatever the fly does, was lit
+for less than `opto_open_loop_min_lit_fraction` (95%) of its time. On firmware 4.0.0 the
+reason names the group's darkest open-loop window, so one dark Program Interval shows.
+Check the lid and its LEDs, and that `Program.txt` is this recording's. See
+[The checks](concepts-optogenetics.md#the-checks).
+
 ### No Role, or every Role blank
 
 A chamber's Role comes from `Program.txt`, or on a firmware 4.0.0 recording from the data. A
 recording from older firmware without `Program.txt` cannot tell a trigger well from a yoked
 one, so its Roles are blank. See [Roles](concepts-optogenetics.md#roles).
 
+## The QC, Analyze and Plots panels
+
+### A file I expected was not written
+
+Look at the log line the run printed, and for Run analysis at `summary.txt`: each item is
+listed as run, *Left out* (its box is unticked) or *Not applicable* (the member cannot have
+it, or its data cannot answer it). A box missing from the panel is one the member cannot
+have; a greyed box is one its data cannot answer, with the reason in its tooltip. See
+[The ticks are configuration](app-hub.md#the-ticks-are-configuration).
+
+No run removes a file, so a file dated before the run is left from an earlier one, for an
+item this run left out.
+
+### Unticking a box on one member changed every member
+
+Inside a Project the ticks belong to the Project's design, `design.global.omit` in
+`project.yaml`, so every member is analysed alike; the log line says so. There is no
+Selection of one member's own: a member that must be analysed differently belongs in another
+Project.
+
+### Analyze all did not follow my ticks
+
+It is not meant to. The Project panel's **Analyze all**, and a script's
+`run_all_analyses` step (which a Batch Run's default script uses), run each member's Basic
+analysis, whatever the panels' ticks. Use **Run QC**, **Run
+analysis** and **Generate plots** on a loaded member, or a script's `run_qc`,
+`run_analysis` and `run_plots` steps, to run the Selection. See
+[The Analysis card](app-hub.md#the-analysis-card).
+
 ## Batch runs
 
 ### A Project did not run
 
 The scan reports every folder it skipped — a `project.yaml` with no member directory, an
-unreadable folder, a symlink — in the Output tab at the start of the run. A Project with
-nothing usable starts unchecked in the review window. See
-[Running many projects at once](scripts-batch.md).
+unreadable folder, a symlink — in the Output tab at the start of the run, and in the Errors
+tab too when you **Rescan**. A Project with nothing usable starts unchecked in the review
+window. See [Where Projects are found](scripts-batch.md#where-projects-are-found).
 
 ### An old folder is not treated as a batch
 
 Subdir-batch mode, keyed on a script named `batch`, is retired. A Batch is now any folder
-with Projects beneath it; `pyflic lint` reports the old constructs.
+with Projects beneath it; `pyflic lint` reports the old constructs. See
+[Migrating from the old batch modes](scripts-batch.md#migrating-from-the-old-batch-modes).
 
 ## Performance
 
@@ -328,6 +393,7 @@ changed inputs. Clear it to reclaim disk space, not to fix results.
 
 - `pyflic lint <folder>` validates every configuration and reports line numbers.
 - **Validate every YAML here** on the Hub's Tools panel parses every `project.yaml`,
-  `batch.yaml` and `flic_config.yaml` under the selection.
+  `batch.yaml` and `flic_config.yaml` under the selection. **Validate YAMLs** on the Project
+  panel does the same for the open Project and all its members.
 - The Hub's Output tab carries the full message from any failure, and the Errors tab
   collects the warnings and failures on their own.

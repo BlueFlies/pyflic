@@ -10,8 +10,10 @@ general,2,5,fly escaped
 ```
 
 The `group` column lets one member carry several exclusion sets; the Project's Design
-names the active one with `exclusion_group:`, so every member is filtered by the same rule.
-That file is the audit trail, and everything below only ever writes into it.
+names the active one with `exclusion_group:` (default `general`), so every member is
+filtered by the same rule. That file is the audit trail, and everything below only ever
+writes into it — as does the QC Viewer's **Save Exclusions…**, for one member at a time
+(see [Saving exclusions](app-qc-viewer.md#saving-exclusions)).
 
 ## The problem this solves
 
@@ -31,7 +33,7 @@ Sept2026/ProjA,Feb_dose_high,2,5,general,fly escaped
 Archive/2025/ProjC,pilot,1,1,general,noisy signal
 ```
 
-`.xlsx` works too. Column names are matched loosely — `Experiment` or `Replicate` are
+`.xlsx` (or `.xls`) works too; when both are present the `.csv` is read. Column names are matched loosely — `Experiment` or `Replicate` are
 accepted for `member`, `Note` for `reason` — and `project`, `group` and `reason` are all
 optional. A sheet at a **project** root needs no `project` column at all. `project` uses
 the same path-shaped name the Batch table shows.
@@ -85,12 +87,22 @@ Re-run the member's analysis to clear it.
 
 ## Automatic exclusions are separate
 
-`auto_remove_chambers()` removes chambers that fail the Design's `constants:` cutoffs —
-too few licks to be a fly at all, an implausible median bout duration or event count when
-those cutoffs are enabled, or, in a Progressive Ratio experiment, a chamber group whose
-training never finished or whose light the fly did not earn (the light QC). Each of the
-three numeric cutoffs is optional: unset or YAML `null` skips that check; only NaN lick
-values are always removed. Basic analysis, and the Hub's Run analysis, run auto-removal once per member, before
-writing the summary, and its reasons are in the member's `removed_chambers.csv` and the
-Project Report's exclusions table alongside the declared ones. The sheet has nothing to do
-with it: one is a machine verdict, the other is the experimenter's.
+`auto_remove_chambers()` removes chambers that fail the `constants:` cutoffs (the
+Design's, in a Project):
+
+- too few licks to be a fly at all (`min_untransformed_licks_cutoff`, on untransformed
+  licks);
+- in a two-well experiment, an implausible median bout duration or event count at either
+  well (`max_med_duration_cutoff`, `max_events_cutoff`);
+- in an optogenetic experiment with `exclude_failed_opto_chambers` on (it is off by
+  default), every chamber of a linkage group that failed the light QC;
+- in a Progressive Ratio experiment, a chamber group whose training never finished
+  (`require_training_complete`) or whose light the fly did not earn
+  (`exclude_failed_pr_groups`).
+
+Each of the three numeric cutoffs is optional: unset or YAML `null` skips that check; only
+NaN lick values are always removed. Basic analysis, and the Hub's **Run analysis**, run
+auto-removal once per member, before writing the summary, and its reasons are in the
+member's `analysis/removed_chambers.csv`, in `summary.txt`, and in the Project Report's
+exclusions table alongside the declared ones. The sheet has nothing to do with it: one is
+a machine verdict, the other is the experimenter's.
