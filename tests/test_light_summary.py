@@ -1,5 +1,5 @@
 """The light table (docs/v4-data-plan.md, stream 5: decisions 6, 9, 16, 17,
-24 and 31).
+24 and 31; docs/paradigm-analyses-plan.md, stream S2: decisions 8 to 11).
 
 Generation 3 from the firmware 4.0.0 simulator (``v4_fixtures``), whose
 truth the table must reproduce; generation 1 from the existing optogenetic
@@ -7,31 +7,43 @@ and Progressive Ratio fixtures; generation 2 from the simulator's
 un-updated-firmware writer.  Then everything that shows the table: the
 feeding summary's Role / LitSec / Activations, basic analysis and the
 script action, the experiment report, the Combined Analysis and the
-Project Report, and the per-chamber light-phase summary.
+Project Report, and the per-chamber light-phase summary.  Last, the
+Paradigm Families' own columns, against the simulator's truth on each
+family's spec and against PyMCU's simulator.
 """
 
 from __future__ import annotations
 
+import math
+from dataclasses import replace
 from functools import lru_cache
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 import yaml
 
+from pyflic.base import activation_ledger as al
 from pyflic.base import light_summary as ls
 from pyflic.base import report_layout as rl
 from pyflic.base.yaml_config import load_experiment_yaml
 
 from opto_fixtures import make_opto_dir
 from pr_fixtures import make_pr_experiment_dir
+from test_pymcu_simulator import analysed, simulated  # noqa: F401 - fixtures
 from v4_fixtures import (
+    CHOICE_LINKAGE,
+    IntervalSpec,
     choice_pr_spec,
+    family_specs,
     fixed_ratio_spec,
     one_of_each_spec,
+    repeating_open_loop_spec,
     simulate,
     write_gen2_recording,
     write_v4_recording,
+    yoked_controls_spec,
 )
 
 RECORD_S = 0.2
@@ -640,3 +652,566 @@ def test_the_light_figures_draw_from_the_stacked_table(gen3_project):
     assert "Role" not in data.columns
     spec = pubfigures.default_spec("faceted_activations")
     pubfigures.build_figure("faceted_activations", data, spec, pubfigures.PlotStyle())
+
+
+# ---------------------------------------------------------------------------
+# Stream S2: the Paradigm Families' columns (docs/paradigm-analyses-plan.md)
+# ---------------------------------------------------------------------------
+# Each column against a computation from the simulator's truth: its own
+# Activations (onset, the Well's own light, Phase, the Paradigm in force),
+# its Acclimation end and its schedule.  Which Activations are judgeable
+# (not Overlap, no Boundary) is the ledger's call, as the plan defines it;
+# the truth gives their times.  pyflic's licks are the one input the truth
+# does not have (LockedOutContactSec).
+
+#: The new columns, and the two decision 10 redefines.
+FAMILY_NEW = ("MainActivations", "MedianActivationSec", "CutOffs", "MaxActivations",
+              "RewardEfficiency", "MedianReturnSec", "MedianSuppressionSec",
+              "LicksPerMinLit", "LicksPerMinDark", "LightFeedingIndex")
+REDEFINED = ("LockedOutContactSec", "Suppressions")
+#: The columns computed per well from the truth.
+TRUTH_COLUMNS = ("MainActivations", "MedianActivationSec", "CutOffs", "MaxActivations",
+                 "RewardEfficiency", "MedianReturnSec", "LockedOutContactSec",
+                 "Suppressions", "MedianSuppressionSec")
+#: The chamber's medians pool its wells' values.
+POOLED = ("MedianActivationSec", "MedianReturnSec", "MedianSuppressionSec")
+TOL_MS = ls.DEFAULT_ACTIVATION_TOLERANCE_MS
+RECORD_MS = 200
+S2_MINUTES = 12.0
+ACCLIMATION_TYPES = ("FixedInterval", "ProgressiveRatio", "FixedRatio")
+
+
+def _mutual_fixed_interval_spec():
+    """family_specs' FI10s DFM with both wells of each chamber Trigger
+    Wells, linked: a well's partner lights it, during its own lockout too,
+    which the old LockedOutContactSec could not see (decision 10)."""
+    spec = family_specs(S2_MINUTES)["fixed_interval"]
+    dfm = spec.dfms[0]
+    both = IntervalSpec(dfm.intervals[0].paradigm, True, (20,) * 12, S2_MINUTES)
+    return replace(spec, dfms=(replace(dfm, intervals=(both,), linkage=CHOICE_LINKAGE),))
+
+
+#: The specs the truth is computed on: every family_specs entry,
+#: fixed_ratio_spec and yoked_controls_spec, and the linked FixedInterval.
+S2_SPECS = {
+    **{key: (lambda key=key: family_specs(S2_MINUTES)[key])
+       for key in ("closed_max", "fixed_interval", "non_feeding", "exponential", "restart")},
+    "fixed_ratio": lambda: fixed_ratio_spec(minutes=S2_MINUTES),
+    "yoked_controls": lambda: yoked_controls_spec(minutes=S2_MINUTES),
+    "mutual_fixed_interval": _mutual_fixed_interval_spec,
+}
+
+
+@lru_cache(maxsize=None)
+def _s2_simulated(name: str):
+    spec = S2_SPECS[name]()
+    return spec, simulate(spec)
+
+
+@pytest.fixture(scope="module")
+def s2_loaded(tmp_path_factory):
+    """``get(name) -> (spec, results, experiment)``, each loaded once."""
+    cache: dict[str, tuple] = {}
+
+    def get(name: str):
+        if name not in cache:
+            spec, results = _s2_simulated(name)
+            root = _recording(tmp_path_factory.mktemp(name), spec, results)
+            cache[name] = (spec, results, _load(root))
+        return cache[name]
+
+    return get
+
+
+def _linked(linkage) -> dict[int, tuple[int, ...]]:
+    groups: dict[int, list[int]] = {}
+    for well, label in enumerate(linkage, start=1):
+        groups.setdefault(label, []).append(well)
+    return {well: tuple(groups[label]) for well, label in enumerate(linkage, start=1)}
+
+
+def _resets(truth) -> list[int]:
+    """The ms the firmware reset every Well: an instruction naming another
+    Paradigm than the last, and a restart."""
+    resets, last = [], None
+    for ms, _interval, _cycle, name in truth.schedule:
+        if name != last:
+            resets.append(ms)
+        last = name
+    for down, resume, _missing in truth.restarts_ms:
+        resets += [down, resume]
+    return sorted(resets)
+
+
+def _truth_activations(spec, truth, well: int) -> pd.DataFrame:
+    """The truth's Activations of *well*, in order: onset, the end of its
+    own light (its lit span, cut at the next onset), its length, Phase,
+    state run and the Paradigm in force at the onset."""
+    onsets = list(truth.activation_onset_ms[well])
+    starts = np.array([a for a, _b in truth.lit_spans_ms[well]], dtype=np.int64)
+    ends = np.array([b for _a, b in truth.lit_spans_ms[well]], dtype=np.int64)
+    resets = _resets(truth)
+    rows = []
+    for k, t0 in enumerate(onsets):
+        end = int(ends[np.searchsorted(starts, t0, side="right") - 1])
+        if k + 1 < len(onsets):
+            end = min(end, onsets[k + 1])
+        name = [n for ms, _i, _c, n in truth.schedule if ms <= t0][-1]
+        rows.append({"onset": t0, "end": end, "length": end - t0,
+                     "phase": truth.activation_phase[well][k],
+                     "run": int(np.searchsorted(resets, t0, side="right")),
+                     "paradigm": spec.paradigms[name]})
+    return pd.DataFrame(rows, columns=["onset", "end", "length", "phase", "run", "paradigm"])
+
+
+def _truth_columns(spec, dfm_spec, result, e, book, well: int) -> tuple[dict, dict, dict]:
+    """``(values, pools, slack)``: :data:`TRUTH_COLUMNS` of *well* over the
+    whole recording from the truth, ``NaN`` off its family; the values its
+    chamber's medians pool (ms); and how far pyflic may be from each.
+
+    pyflic is exact but where the ledger can time an onset only to the
+    record: the LED already lit when the Activation began, by the well's own
+    last one (held contact under a lockout shorter than ``ActivationMs``) or
+    by its partner's.  Then a return time is good to one record, and the
+    ends of its lockout and its own light, so LockedOutContactSec to two
+    lick samples per such Activation."""
+    truth = result.truth
+    acts = _truth_activations(spec, truth, well)
+    mine = book[book["Well"] == well].reset_index(drop=True)
+    assert len(mine) == len(acts), (dfm_spec.dfm_id, well)
+    judged = (~mine["Overlap"].to_numpy(bool)) & (mine["Boundary"] == al.BOUNDARY_NONE).to_numpy(bool)
+    slack = TOL_MS + np.where(mine["Timing"] == al.TIMING_RECORD, RECORD_MS, 0)
+    types = np.array([p.type for p in acts["paradigm"]], dtype=object)
+    max_on = np.array([p.max_on_ms for p in acts["paradigm"]], dtype=float)
+    length = acts["length"].to_numpy(float)
+    onset = acts["onset"].to_numpy(float)
+    end = acts["end"].to_numpy(float)
+    main = (acts["phase"] == "M").to_numpy(bool)
+    runs = acts["run"].to_numpy()
+    levels = [spec.paradigms[iv.paradigm] for iv in dfm_spec.intervals
+              if isinstance(iv.thresholds[well - 1], int)]
+    acclimating = any(p.acclimation > 0 and p.type in ACCLIMATION_TYPES for p in levels)
+    out = dict.fromkeys(TRUTH_COLUMNS, np.nan)
+    pools = {c: np.zeros(0) for c in POOLED}
+    slack_of = dict.fromkeys(TRUTH_COLUMNS, 0.0)
+    record_timed = mine["OnsetMs"].to_numpy(float) != acts["onset"].to_numpy(float)
+
+    def median_s(values) -> float:
+        return float(np.median(values)) / 1000.0 if len(values) else np.nan
+
+    if acclimating or any(p.type == "ClosedLoop" for p in levels):
+        pools["MedianActivationSec"] = length[judged & ((types == "ClosedLoop") | ~main)]
+        out["MedianActivationSec"] = median_s(pools["MedianActivationSec"])
+    if any(p.type == "ClosedLoop" and p.max_on_ms > 0 for p in levels):
+        cut = judged & main & (types == "ClosedLoop") & (max_on > 0) \
+            & (np.abs(length - max_on) <= slack)
+        out["CutOffs"] = float(cut.sum())
+    if acclimating:
+        out["MainActivations"] = float(main.sum())
+    fixed = [p for p in levels if p.type == "FixedInterval"]
+    if fixed:
+        (p,) = fixed
+        spacing = max(p.lockout_ms, p.activation_ms)
+        n_rec = int(round(spec.duration_min * 60 * 1000 / RECORD_MS))
+        ## Main from the instruction, or the well's Acclimation end, as the
+        ## record's last millisecond shows it (no restart on these specs, so
+        ## record n is row n - 1).
+        start = truth.acclimation_end_ms[well] if p.acclimation else truth.schedule[0][0]
+        main_records = np.arange(1, n_rec + 1) * RECORD_MS - 1 >= start
+        out["MaxActivations"] = float(math.floor(main_records.sum() * RECORD_MS / spacing))
+        earned = main & (types == "FixedInterval")
+        out["RewardEfficiency"] = earned.sum() / out["MaxActivations"]
+        pairs = earned[1:] & earned[:-1] & (runs[1:] == runs[:-1])
+        pools["MedianReturnSec"] = (np.diff(onset) - spacing)[pairs]
+        out["MedianReturnSec"] = median_s(pools["MedianReturnSec"])
+        locked = np.zeros(n_rec, dtype=bool)
+        for t0 in onset[earned]:
+            locked[int(t0) // RECORD_MS: math.ceil((t0 + p.lockout_ms) / RECORD_MS)] = True
+        own = np.zeros(n_rec, dtype=bool)
+        for a, b in truth.lit_spans_ms[well]:
+            own[a // RECORD_MS: math.ceil(b / RECORD_MS)] = True
+        licks = e.dfms[dfm_spec.dfm_id].lick_df[f"W{well}"].to_numpy(bool)
+        out["LockedOutContactSec"] = float((licks & locked & main_records & ~own).sum()) / 5.0
+        untimed = int((earned & record_timed).sum())
+        slack_of["MedianReturnSec"] = RECORD_MS / 1000.0 if untimed else 0.0
+        slack_of["LockedOutContactSec"] = 2 * untimed / 5.0
+    if any(p.type == "NonFeeding" for p in levels):
+        by_max = (max_on > 0) & (np.abs(length - max_on) <= slack)
+        suppressed = judged & (types == "NonFeeding") & ~by_max
+        out["Suppressions"] = float(suppressed.sum())
+        then = np.append(runs[1:] == runs[:-1], False)
+        pools["MedianSuppressionSec"] = (np.append(onset[1:], np.nan) - end)[suppressed & then]
+        out["MedianSuppressionSec"] = median_s(pools["MedianSuppressionSec"])
+    return out, pools, slack_of
+
+
+def _close(ours, expected, tolerance: float) -> bool:
+    if pd.isna(ours) or pd.isna(expected):
+        return bool(pd.isna(ours) and pd.isna(expected))
+    return abs(float(ours) - float(expected)) <= tolerance + 1e-9
+
+
+#: The columns each spec defines somewhere (its family's), so that a spec
+#: that stopped exercising its family shows.
+S2_DEFINED = {
+    "closed_max": {"MedianActivationSec", "CutOffs"},
+    "fixed_interval": {"MainActivations", "MedianActivationSec", "MaxActivations",
+                       "RewardEfficiency", "MedianReturnSec", "LockedOutContactSec"},
+    "non_feeding": {"Suppressions", "MedianSuppressionSec"},
+    "exponential": {"MainActivations", "MedianActivationSec"},
+    "restart": {"MainActivations", "MedianActivationSec"},
+    "fixed_ratio": {"MainActivations", "MedianActivationSec"},
+    "yoked_controls": {"MedianActivationSec", "CutOffs"},
+    "mutual_fixed_interval": {"MaxActivations", "RewardEfficiency", "MedianReturnSec",
+                              "LockedOutContactSec"},
+}
+
+
+@pytest.mark.parametrize("name", list(S2_SPECS))
+def test_the_family_columns_are_the_truths(s2_loaded, name):
+    """Per well over the whole recording, then per chamber: its wells'
+    counts summed and their values pooled for the medians.  Exact, but for
+    the onsets the ledger times to the record (:func:`_truth_columns`)."""
+    spec, results, e = s2_loaded(name)
+    wells = ls.light_wells(e).set_index(["DFM", "Well"])
+    chambers = ls.light_summary(e).set_index(["DFM", "Chamber"])
+    misses, defined = [], set()
+    loose = 0
+    for dfm_spec in spec.dfms:
+        d = dfm_spec.dfm_id
+        book = al.ledger(e.dfms[d].paradigm, linked=_linked(dfm_spec.linkage))
+        per_chamber: dict[int, list] = {}
+        for well in range(1, 13):
+            values, pools, slack = _truth_columns(spec, dfm_spec, results[d], e, book, well)
+            per_chamber.setdefault((well + 1) // 2, []).append((values, pools, slack))
+            loose += sum(v > 0 for v in slack.values())
+            for column, expected in values.items():
+                ours = wells.loc[(d, well), column]
+                if not _close(ours, expected, slack[column]):
+                    misses.append(f"DFM {d} W{well} {column}: pyflic {ours}, truth {expected}")
+                if pd.notna(expected):
+                    defined.add(column)
+        for chamber, parts in per_chamber.items():
+            row = chambers.loc[(d, chamber)]
+            for column in ("MainActivations", "CutOffs", "MaxActivations",
+                           "LockedOutContactSec", "Suppressions"):
+                present = [v[column] for v, _p, _s in parts if pd.notna(v[column])]
+                expected = float(sum(present)) if present else np.nan
+                tolerance = sum(s[column] for _v, _p, s in parts)
+                if not _close(row[column], expected, tolerance):
+                    misses.append(f"DFM {d} chamber {chamber} {column}: {row[column]}, {expected}")
+            for column in POOLED:
+                pooled = np.concatenate([p[column] for _v, p, _s in parts])
+                expected = float(np.median(pooled)) / 1000.0 if pooled.size else np.nan
+                tolerance = max(s[column] for _v, _p, s in parts)
+                if not _close(row[column], expected, tolerance):
+                    misses.append(f"DFM {d} chamber {chamber} {column}: {row[column]}, {expected}")
+    assert not misses, "\n".join(misses)
+    assert defined == S2_DEFINED[name]
+    ## Only the specs built to hold the light on time onsets to the record.
+    assert (loose > 0) == (name in ("fixed_interval", "mutual_fixed_interval")), loose
+
+
+def test_most_activations_are_judgeable(s2_loaded):
+    """The judgeable Activations the medians and counts rest on are most of
+    them where the light goes out between Activations, so the comparison
+    with the truth is not of a few.  Under FI500 held contact keeps the
+    light on through Activation after Activation, as designed."""
+    for name, dfm_id in (("closed_max", 1), ("fixed_interval", 1), ("non_feeding", 1),
+                         ("non_feeding", 2), ("yoked_controls", 1)):
+        spec, _results, e = s2_loaded(name)
+        dfm_spec = next(d for d in spec.dfms if d.dfm_id == dfm_id)
+        book = al.ledger(e.dfms[dfm_id].paradigm, linked=_linked(dfm_spec.linkage))
+        judged = ~book["Overlap"] & (book["Boundary"] == al.BOUNDARY_NONE)
+        assert judged.mean() > 0.5, (name, dfm_id, judged.mean())
+
+
+# -- decision 10: the two redefinitions --------------------------------------
+
+def test_linked_light_no_longer_hides_lockout_feeding(s2_loaded):
+    """Before, LockedOutContactSec was lick time in FixedInterval Main rows
+    with OnMs 0, so a linked partner's light hid the well's feeding during
+    its own lockout.  With both wells of each chamber triggering and
+    linked, the old definition misses feeding the new one counts."""
+    _spec, _results, e = s2_loaded("mutual_fixed_interval")
+    state = e.dfms[1].paradigm
+    licks = e.dfms[1].lick_df
+    main = (state.program_interval.to_numpy(dtype=float, na_value=0) > 0)[:, None] \
+        & ~state.phase_a
+    new = ls.light_wells(e).set_index("Well")["LockedOutContactSec"]
+    old = pd.Series({w: float((main[:, w - 1] & licks[f"W{w}"].to_numpy(bool)
+                               & (state.on_ms[:, w - 1] == 0)).sum()) / 5.0
+                     for w in range(1, 13)})
+    assert (new >= old).all() and (new > old).sum() >= 6, pd.DataFrame({"old": old, "new": new})
+    ## On a well its partner never lights the two agree (fixed_interval's FI10s).
+    _spec, _results, solo = s2_loaded("fixed_interval")
+    state = solo.dfms[1].paradigm
+    licks = solo.dfms[1].lick_df
+    wells = ls.light_wells(solo).set_index(["DFM", "Well"])
+    for w in (1, 3, 5, 7, 9, 11):
+        before = float((~state.phase_a[:, w - 1] & licks[f"W{w}"].to_numpy(bool)
+                        & (state.on_ms[:, w - 1] == 0)).sum()) / 5.0
+        assert wells.loc[(1, w), "LockedOutContactSec"] == before
+
+
+def test_suppressions_no_longer_count_max_on_ends(s2_loaded):
+    """Before, Suppressions counted the records whose light went out under
+    NonFeeding, which counts each MaxOnMs end too.  Now they are the light
+    periods contact ended: on NFMax5s (MaxOnMs 5000), fewer by the periods
+    MaxOnMs ended."""
+    spec, results, e = s2_loaded("non_feeding")
+    wells = ls.light_wells(e).set_index(["DFM", "Well"])
+    state = e.dfms[2].paradigm
+    for w in (1, 3, 5, 7, 9, 11):
+        lit = state.on_ms[:, w - 1] > 0
+        before = int((~lit[1:] & lit[:-1]).sum())
+        acts = _truth_activations(spec, results[2].truth, w)
+        at_max = int((acts["length"] == 5000).sum())
+        assert at_max > 0
+        assert wells.loc[(2, w), "Suppressions"] <= before - at_max, w
+
+
+# -- decision 11: feeding in light and dark, open loop only --------------------
+
+def _phase_rates(e) -> pd.DataFrame:
+    """light_phase_summary's licks per minute of each phase, per chamber
+    (``Both`` wells summed) and per well (``A``, ``B``), indexed by (DFM,
+    Chamber), columns (what, phase)."""
+    from pyflic.base.analytics import light_phase_summary
+
+    df = light_phase_summary(e, transform_licks=False)
+    minutes = df["PhaseSeconds"] / 60.0
+    out = df[["DFM", "Chamber", "Phase"]].copy()
+    for name, licks in (("Both", df["LicksA"] + df["LicksB"]), ("A", df["LicksA"]),
+                        ("B", df["LicksB"])):
+        out[name] = (licks / minutes).where(minutes > 0)
+    return out.set_index(["DFM", "Chamber", "Phase"]).unstack("Phase")
+
+
+def _index(lit, dark):
+    return np.nan if pd.isna(lit) or pd.isna(dark) or lit + dark == 0 else (lit - dark) / (lit + dark)
+
+
+def test_the_open_loop_rates_are_light_phase_summarys(each, tmp_path):
+    """LicksPerMinLit and LicksPerMinDark are light_phase_summary's licks per
+    minute of the chamber's own light and dark (they share one
+    computation), for an Open chamber only: one_of_each's OpenLoop DFM, and
+    repeating_open_loop_spec (On for 3 minutes, Off for 12)."""
+    spec = repeating_open_loop_spec(minutes=20.0)
+    repeating = _load(_recording(tmp_path / "rep", spec, simulate(spec)))
+    for e, open_dfms in ((each[0], {1}), (repeating, {1})):
+        rates = _phase_rates(e)
+        chambers = ls.light_summary(e).set_index(["DFM", "Chamber"])
+        wells = ls.light_wells(e).set_index(["DFM", "Well"])
+        for (dfm, chamber), row in chambers.iterrows():
+            if dfm not in open_dfms:
+                assert row[list(ls.OPEN_LOOP_COLUMNS)].isna().all(), (dfm, chamber)
+                continue
+            assert row.Role == "Open"
+            lit, dark = rates.loc[(dfm, chamber), ("Both", "light")], \
+                rates.loc[(dfm, chamber), ("Both", "dark")]
+            assert row.LicksPerMinLit == pytest.approx(lit)
+            assert row.LicksPerMinDark == pytest.approx(dark)
+            assert row.LightFeedingIndex == pytest.approx(_index(lit, dark))
+            ch = next(c for c in e.dfms[dfm].chambers if int(c.index) == chamber)
+            for well, side in ((int(ch.well_a), "A"), (int(ch.well_b), "B")):
+                assert wells.loc[(dfm, well), "LicksPerMinLit"] == pytest.approx(
+                    rates.loc[(dfm, chamber), (side, "light")])
+                assert wells.loc[(dfm, well), "LicksPerMinDark"] == pytest.approx(
+                    rates.loc[(dfm, chamber), (side, "dark")])
+    ## The Repeating program's dark is its Off Intervals: a real comparison.
+    table = ls.light_summary(repeating)
+    assert (table["LicksPerMinDark"] > 0).all() and table["LightFeedingIndex"].notna().all()
+    ## A Program Facet on an Off Interval alone is all dark: no index.
+    off = ls.light_summary(repeating, range_minutes=(4.0, 14.0))
+    assert off["LicksPerMinLit"].isna().all() and off["LightFeedingIndex"].isna().all()
+
+
+# -- NA off the family, and on generations 1 and 2 ---------------------------
+
+#: one_of_each_spec: each DFM's family columns (decision 8), per chamber.
+EACH_FAMILY_COLUMNS = {
+    1: set(ls.OPEN_LOOP_COLUMNS),
+    2: {"MedianActivationSec", "CutOffs"},
+    3: {"MaxActivations", "RewardEfficiency", "MedianReturnSec", "LockedOutContactSec"},
+    4: {"Suppressions", "MedianSuppressionSec"},
+    5: {"MedianActivationSec", "CutOffs", "MainActivations"},   # Closed (MaxOnMs), PR10
+    6: set(),                                                    # FR5, no Acclimation
+}
+
+
+def test_each_family_column_is_na_off_its_family(each):
+    e, _results = each
+    columns = (*FAMILY_NEW, *REDEFINED)
+    for row in ls.light_summary(e).itertuples(index=False):
+        defined = {c for c in columns if pd.notna(getattr(row, c))}
+        assert defined == EACH_FAMILY_COLUMNS[row.DFM], (row.DFM, row.Chamber)
+    for row in ls.light_wells(e).itertuples(index=False):
+        defined = {c for c in columns if pd.notna(getattr(row, c))}
+        ## The B wells are Off: only the chamber's open-loop rates reach them.
+        expected = EACH_FAMILY_COLUMNS[row.DFM] if row.Well % 2 or row.DFM == 1 else set()
+        assert defined == expected, (row.DFM, row.Well)
+
+
+def test_a_yoked_chamber_has_no_family_columns(s2_loaded):
+    _spec, _results, e = s2_loaded("yoked_controls")
+    table = ls.light_summary(e).set_index("Chamber")
+    for chamber in (4, 5, 6):
+        assert table.loc[chamber, "Role"] == "Yoked"
+        assert table.loc[chamber, list(FAMILY_NEW + REDEFINED)].isna().all()
+    assert table.loc[[1, 2, 3], "CutOffs"].notna().all()
+
+
+def test_the_family_columns_are_na_on_generations_1_and_2_and_without_a_program(tmp_path):
+    spec, results = _choice()
+    experiments = {
+        "generation 1": _load(make_opto_dir(tmp_path / "g1")),
+        "generation 2": _load(_recording(tmp_path / "g2", spec, results,
+                                         writer=write_gen2_recording)),
+        "no program": _load(_recording(tmp_path / "np", spec, results, program=False)),
+    }
+    for label, e in experiments.items():
+        for table in (ls.light_wells(e), ls.light_summary(e)):
+            assert not table.empty
+            assert table[list(FAMILY_NEW + REDEFINED)].isna().all().all(), label
+        ## Without generation 3 or a program, the light table's old four.
+        assert ls.experiment_headline_metrics(e) == list(ls.HEADLINE_METRICS), label
+
+
+# -- windows, Facets and the Project -----------------------------------------
+
+@pytest.mark.parametrize("name", ["fixed_interval", "non_feeding", "closed_max"])
+def test_the_family_counts_partition_over_facets(s2_loaded, monkeypatch, name):
+    """An Activation belongs to the window holding its onset, and lick time
+    to its row: the counts over Facets that partition the recording sum to
+    the whole."""
+    _spec, _results, e = s2_loaded(name)
+    whole = ls.light_summary(e).set_index(["DFM", "Chamber"])
+
+    def facet_windows_for(self, dfm_id):
+        ## (a, b] windows: from below 0, so the first row (minute 0) is in.
+        return [("Early", (-1.0, 5.0)), ("Late", (5.0, float("inf")))]
+
+    monkeypatch.setattr(type(e), "facet_windows_for", facet_windows_for, raising=False)
+    facet = ls.light_summary_facet(e)
+    assert list(dict.fromkeys(facet["Facet"])) == ["Early", "Late"]
+    for column in ("MainActivations", "CutOffs", "LockedOutContactSec", "Suppressions"):
+        if whole[column].isna().all():
+            assert facet[column].isna().all(), column
+            continue
+        summed = facet.groupby(["DFM", "Chamber"])[column].sum(min_count=1)
+        assert (summed - whole[column]).abs().max() < 1e-9, column
+    for column in ls.FIXED_INTERVAL_COLUMNS[:1]:            # MaxActivations: floored per window
+        if whole[column].notna().any():
+            summed = facet.groupby(["DFM", "Chamber"])[column].sum()
+            assert ((whole[column] - summed) >= 0).all() and ((whole[column] - summed) <= 1).all()
+
+
+def test_the_project_stacks_carry_every_family_column(gen3_project):
+    """Decision 8's columns reach the Combined Analysis' stacked light
+    tables as each member wrote them, and the Project's headline metrics
+    are its families' (decision 9)."""
+    project = gen3_project
+    project.build_combined_analysis()
+    analysis = Path(project.analysis_path)
+    columns = [*FAMILY_NEW, *REDEFINED]
+    for stacked, own, expected in (("proj_LightSummary.csv", "light_summary.csv",
+                                    ls.LIGHT_CHAMBER_COLUMNS),
+                                   ("proj_LightWells.csv", "light_wells.csv",
+                                    ls.LIGHT_WELL_COLUMNS),
+                                   ("proj_LightSummary_Facet.csv", "light_summary_facet.csv",
+                                    ls.LIGHT_CHAMBER_COLUMNS),
+                                   ("proj_LightWells_Facet.csv", "light_wells_facet.csv",
+                                    ls.LIGHT_WELL_COLUMNS)):
+        frame = pd.read_csv(analysis / stacked)
+        assert set(expected) <= set(frame.columns), stacked
+        for name in project.member_names:
+            mine = frame[frame["Experiment"] == name].reset_index(drop=True)
+            theirs = pd.read_csv(Path(project.member_dir(name)) / "analysis" / own)
+            pd.testing.assert_frame_equal(mine[columns], theirs[columns], check_dtype=False)
+        ## FR5 with Acclimation 3: closed loop in Acclimation, then ratio.
+        assert frame["MainActivations"].notna().any() and \
+            frame["MedianActivationSec"].notna().any(), stacked
+    assert project.light_headline_metrics() == [
+        "Activations", "LitSec", "MedianActivationSec", "LastRequirementMet", "FirmwareEvents",
+        "AcclimationEndMin"]
+    rows = project.light_comparison_rows()
+    assert "MedianActivationSec" in {r["metric"] for r in rows}
+    ## Members whose light tables have no generation-3 row keep the old four.
+    old = pd.DataFrame({"Experiment": ["rep1", "rep2"], "DFM": [1, 1], "Generation": [1, 2]})
+    assert project.light_headline_metrics(old) == list(ls.HEADLINE_METRICS)
+
+
+# -- the headline metrics and the figures ------------------------------------
+
+def test_the_headline_metrics_follow_the_families(each, tmp_path):
+    """Decision 9: one_of_each runs every family and branch, ClosedLoop with
+    MaxOnMs and PR10 with Acclimation; a generation-1 member keeps the old
+    four."""
+    from pyflic.base import report_content as rc
+    from pyflic.base.pdf_report import build_experiment_report
+
+    e, _results = each
+    headline = ["LitSec", "LightFeedingIndex", "Activations", "MedianActivationSec", "CutOffs",
+                "RewardEfficiency", "MedianReturnSec", "LastRequirementMet", "FirmwareEvents",
+                "LitFraction", "Suppressions", "AcclimationEndMin"]
+    assert ls.experiment_headline_metrics(e) == headline
+    doc = build_experiment_report(e, metrics=())
+    blocks = list(doc.blocks)
+    start = next(i for i, b in enumerate(blocks)
+                 if isinstance(b, rl.Heading) and b.text == "Light behaviour")
+    titles = [p.title for b in blocks[start:] if isinstance(b, rl.PlotRow) for p in b.plots]
+    assert titles == [rc.metric_label(m) for m in headline]
+    assert ls.experiment_headline_metrics(_load(make_opto_dir(tmp_path / "g1"))) == \
+        list(ls.HEADLINE_METRICS)
+    assert ls.program_headline_metrics([]) == list(ls.HEADLINE_METRICS)
+
+
+def test_every_family_column_is_a_light_figure():
+    from pyflic.base import paradigm_families as pfam
+    from pyflic.base import pubfigures
+
+    labels = dict(pubfigures.LIGHT_METRICS)
+    for column in (*FAMILY_NEW, *REDEFINED):
+        assert labels.get(column), column
+        info = pubfigures.PLOT_TYPES[f"faceted_{column.lower()}"]
+        assert info["metric"] == column and info["source"] == pubfigures.SOURCE_LIGHT
+    ## Every headline metric of every family can be drawn by the Project report.
+    every = pfam.headline_metrics(pfam.FAMILY_ORDER, max_on=True, acclimation=True)
+    assert all(f"faceted_{m.lower()}" in pubfigures.PLOT_TYPES for m in every)
+    assert pubfigures.PLOT_TYPES["faceted_lightfeedingindex"]["y_limits"] == (-1.0, 1.0)
+    ## And every family column is declared in the registry's summary columns.
+    declared = {c for f in pfam.FAMILIES.values() for c in f.summary_columns}
+    assert declared <= set(ls.LIGHT_CHAMBER_COLUMNS) and declared <= set(ls.LIGHT_WELL_COLUMNS)
+
+
+def test_the_tolerance_is_the_design_constant(s2_loaded, monkeypatch):
+    class Constants:
+        def __init__(self, constants):
+            self.global_constants = constants
+
+    assert ls.activation_tolerance_ms(Constants({})) == 25
+    assert ls.activation_tolerance_ms(Constants({"opto_activation_tolerance_ms": 60})) == 60
+    assert ls.activation_tolerance_ms(Constants({"opto_activation_tolerance_ms": "x"})) == 25
+    ## A tolerance wider than every Activation makes each judgeable one a cut-off.
+    _spec, _results, e = s2_loaded("closed_max")
+    before = ls.light_summary(e)["CutOffs"].sum()
+    monkeypatch.setitem(e.global_constants, "opto_activation_tolerance_ms", 10 ** 6)
+    after = ls.light_summary(e)["CutOffs"].sum()
+    book = al.ledger(e.dfms[1].paradigm, linked=_linked(CHOICE_LINKAGE))
+    assert before < after == (~book["Overlap"] & (book["Boundary"] == al.BOUNDARY_NONE)).sum()
+
+
+# -- PyMCU's simulator ---------------------------------------------------------
+
+@pytest.mark.slow
+def test_main_activations_are_pymcus(analysed):  # noqa: F811 - the imported fixture
+    """On PyMCU's simulator recording (``test_pymcu_simulator``'s fixtures),
+    MainActivations is the truth's on every Trigger Well."""
+    truth = analysed.truth
+    merged = truth.merge(analysed.light_wells, on=["DFM", "Well"], how="left",
+                         suffixes=("_truth", ""), validate="one_to_one")
+    assert len(merged) == 12
+    assert merged["MainActivations"].tolist() == merged["MainActivations_truth"].astype(float).tolist()
+    ## Some flies never finish Acclimation on seed 1; most earn Main ones.
+    assert (merged["MainActivations"] > 0).sum() >= 8

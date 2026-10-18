@@ -727,7 +727,9 @@ def _light_results(experiment: Experiment, options: ReportOptions) -> list[Any]:
         frames = [(label, kept[kept["Facet"].astype(str) == label]) for label in labels]
     else:
         frames = [("Whole recording", kept)]
-    metrics = [m for m in ls.HEADLINE_METRICS
+    ## The headline metrics of the families the program runs (decision 9).
+    headline = ls.experiment_headline_metrics(experiment)
+    metrics = [m for m in headline
                if m in kept.columns and pd.to_numeric(kept[m], errors="coerce").notna().any()]
     per = "per Facet" if facet_col else "over the whole recording"
     blocks.append(rl.Paragraph(
@@ -738,9 +740,9 @@ def _light_results(experiment: Experiment, options: ReportOptions) -> list[Any]:
         f"Acclimation.  The diamond and bars are the treatment mean ± SEM."
         + ("  Paired chambers only: a yoked fly's light is its partner's."
            if len(kept) < len(frame) else "")
-        + ("" if len(metrics) == len(ls.HEADLINE_METRICS) else
+        + ("" if len(metrics) == len(headline) else
            f"  Not defined here: "
-           f"{', '.join(m for m in ls.HEADLINE_METRICS if m not in metrics)}.")))
+           f"{', '.join(m for m in headline if m not in metrics)}.")))
     pending: list[rl.Plot] = []
     for metric in metrics:
         label = rc.metric_label(metric)

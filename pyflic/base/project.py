@@ -1307,15 +1307,44 @@ class Project:
         out.append("")
         return out
 
+    def light_headline_metrics(self, light: pd.DataFrame | None = None) -> list[str]:
+        """The light table's headline metrics for this Project (decision 9
+        of ``docs/paradigm-analyses-plan.md``), pooled per Paradigm Family:
+        those of the families every Member's ``data/Program.txt`` runs on
+        the DFMs its saved light table records as generation 3
+        (:func:`~pyflic.base.light_summary.program_headline_metrics`).
+        :data:`~pyflic.base.light_summary.HEADLINE_METRICS` when no Member
+        has such a DFM.  *light* is the stacked ``LightSummary``, read when
+        not given."""
+        from . import opto_program as op
+        from .light_summary import program_headline_metrics
+        from .paradigm_state import GENERATION_PARADIGM
+
+        if light is None:
+            light = self.combined_light_frames().get("LightSummary")
+        programs = []
+        if light is not None and {"Experiment", "DFM", "Generation"} <= set(light.columns):
+            generation = pd.to_numeric(light["Generation"], errors="coerce")
+            current = light[generation == GENERATION_PARADIGM]
+            for name, rows in current.groupby("Experiment", sort=False):
+                try:
+                    path = op.find_program(os.path.join(self.member_dir(str(name)), "data"))
+                    program = op.read_program(path) if path is not None else None
+                except (op.ProgramError, OSError, ValueError):
+                    program = None
+                ids = sorted({int(d) for d in pd.to_numeric(rows["DFM"], errors="coerce").dropna()})
+                programs.append((program, ids))
+        return program_headline_metrics(programs)
+
     def light_comparison_rows(self, light: pd.DataFrame | None = None,
                               light_facet: pd.DataFrame | None = None) -> list[dict]:
-        """Treatment comparisons of the light table's
-        :data:`~pyflic.base.light_summary.HEADLINE_METRICS`, one observation
-        per chamber, per Facet as the feeding metrics are (pooled test beside
-        the mixed model).  A Progressive Ratio table keeps its paired
-        chambers (:func:`~pyflic.base.light_summary.behaviour_rows`).  Reads
-        the stacked tables when not given; empty without a light table."""
-        from .light_summary import HEADLINE_METRICS, behaviour_rows
+        """Treatment comparisons of the light table's headline metrics
+        (:meth:`light_headline_metrics`), one observation per chamber, per
+        Facet as the feeding metrics are (pooled test beside the mixed
+        model).  A Progressive Ratio table keeps its paired chambers
+        (:func:`~pyflic.base.light_summary.behaviour_rows`).  Reads the
+        stacked tables when not given; empty without a light table."""
+        from .light_summary import behaviour_rows
 
         if light is None and light_facet is None:
             frames = self.combined_light_frames()
@@ -1325,7 +1354,7 @@ class Project:
         if light is None or light.empty:
             return []
         frames = self._facet_frames(light, behaviour_rows(light_facet))
-        return self._compare_frames(frames, list(HEADLINE_METRICS))
+        return self._compare_frames(frames, self.light_headline_metrics(light))
 
     def stats_text(self, summary: pd.DataFrame,
                    facet: pd.DataFrame | None,

@@ -414,12 +414,14 @@ def _light_blocks(project, specs, *, compare: bool = True) -> list[Any]:
     """"Light behaviour": the stacked light table pooled as the feeding
     metrics are — a faceted figure per headline metric and the treatment
     comparisons — for a Project with optogenetic Members; nothing otherwise."""
-    from .light_summary import HEADLINE_METRICS, behaviour_rows
+    from .light_summary import behaviour_rows
 
     frames = project.combined_light_frames()
     light = frames.get("LightSummary")
     if light is None:
         return []
+    ## The headline metrics of the families the Members run (decision 9).
+    headline = project.light_headline_metrics(light)
     paired_only = len(behaviour_rows(light)) < len(light)
     blocks: list[Any] = [
         rl.Heading("Light behaviour", level=2),
@@ -433,7 +435,7 @@ def _light_blocks(project, specs, *, compare: bool = True) -> list[Any]:
                "partner's." if paired_only else "")),
     ]
     pending: list[rl.Plot] = []
-    for metric in HEADLINE_METRICS:
+    for metric in headline:
         plot_id = f"faceted_{metric.lower()}"
         info = pubfigures.PLOT_TYPES[plot_id]
         try:
