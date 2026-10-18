@@ -636,6 +636,7 @@ class ProjectDesignDialog(QDialog):
 
     def _prefill_from_dir(self) -> None:
         directory = self.dir_edit.text().strip()
+        self._loaded_omit = None                # the Selection of the folder read below
         if not directory or not os.path.isdir(directory):
             self.setWindowTitle("Initialize existing directory"
                                 if self._initialize else "New Project")
@@ -722,6 +723,8 @@ class ProjectDesignDialog(QDialog):
         self.params_form.load_values(params, chamber_size)
         constants = g.get("constants") or {}
         self._loaded_constants = dict(constants)
+        ## The Selection (ADR-0018) has no field here: the Hub's ticks write it.
+        self._loaded_omit = g.get("omit")
         defaults = self._experiment_type().default_constants or {}
         for key, edit in self.constant_edits.items():
             check = self.constant_checks[key]
@@ -870,6 +873,9 @@ class ProjectDesignDialog(QDialog):
         opto = self.opto_combo.currentData()
         if isinstance(opto, bool):
             g["optogenetics"] = opto
+        ## Kept as project.yaml says, or a save would undo every untick.
+        if getattr(self, "_loaded_omit", None):
+            g["omit"] = self._loaded_omit
 
         problems = item.validate(g)
         if problems:

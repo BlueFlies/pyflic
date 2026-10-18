@@ -51,26 +51,37 @@ its `?` help.
   single-well layout, optogenetic items on a run without light, a type's
   items under another type.
 
-The **Project panel's *Analyze all*** runs Run QC, Run analysis and Generate
-plots for every member, each honouring its selection, without opening tabs.
+The **Project panel's *Analyze all*** is unchanged. It and a Batch Run's
+`run_all_analyses` step run each member's Basic analysis, and its report
+unless `reports: false`, and they do not read the Selection.
+
+**No run removes a file.** An item left out keeps whatever an earlier run
+wrote. The log and `summary.txt` say that this run left it out.
+
+Two parts of the first version of this plan were considered and dropped by
+the user's choice:
+
+- *Analyze all* and `run_all_analyses` running Run QC, Run analysis and
+  Generate plots for every member, each honouring its Selection;
+- a run removing a left-out item's earlier outputs.
 
 ## The three sets
 
-Ids are what `global.omit:` names. *Writes* gives the outputs a run removes
-when the item is left out. A `*` is a DFM id or a metric.
+Ids are what `global.omit:` names. *Writes* gives the outputs the item
+writes, as the code names them. A `*` is a DFM id or a metric.
 
 ### QC Set (`omit: qc:`), run by *Run QC*
 
 | Group | Id | Label | Requires | Writes |
 |---|---|---|---|---|
-| QC reports | `integrity` | Data integrity | | `qc/integrity/` |
-| | `data_breaks` | Data breaks | | `qc/data_breaks/` |
-| | `raw_signal` | Raw signal plots | | `qc/raw_signal/` |
-| | `baselined_signal` | Baselined signal plots | | `qc/baselined/` |
-| | `cumulative_licks` | Cumulative licks plots | | `qc/cumulative_licks/` |
-| | `simultaneous_feeding` | Simultaneous feeding | two-well | `qc/simultaneous_feeding/` |
-| | `bleeding` | Bleeding between wells | two-well | `qc/bleeding/` |
-| Optogenetics | `opto_light_qc` | Light QC tables | optogenetic | `qc/opto/*.csv` |
+| QC reports | `integrity` | Data integrity | | `qc/integrity/DFM*_integrity_report.csv`, `.txt` |
+| | `data_breaks` | Data breaks | | `qc/data_breaks/DFM*_data_breaks.csv` (the folder alone when no DFM has a break) |
+| | `raw_signal` | Raw signal plots | | `qc/raw_signal/DFM*_raw.png` |
+| | `baselined_signal` | Baselined signal plots | | `qc/baselined/DFM*_baselined.png` |
+| | `cumulative_licks` | Cumulative licks plots | | `qc/cumulative_licks/DFM*_cumulative_licks.png` |
+| | `simultaneous_feeding` | Simultaneous feeding | two-well | `qc/simultaneous_feeding/DFM*_simultaneous_feeding_matrix.csv` |
+| | `bleeding` | Bleeding between wells | two-well | `qc/bleeding/DFM*_bleeding_matrix.csv`, `DFM*_bleeding_alldata.csv` |
+| Optogenetics | `opto_light_qc` | Light QC tables | optogenetic | `qc/opto/opto_light_qc.csv`, `opto_light_intervals.csv`, `opto_light_events.csv`, `opto_program.csv` |
 | | `opto_light_figures` | Light explained by licks | optogenetic | `qc/opto/opto_light_dfm*.png` |
 | | `program_timeline` | Program timeline | optogenetic; greyed when no DFM has a timeline | `qc/program/` |
 | Progressive Ratio | `pr_light_qc` | Light QC table | Progressive Ratio | `analysis/pr_light_qc.csv`, `analysis/pr_light_events.csv` |
@@ -91,12 +102,12 @@ The core always runs first: the auto-removal, `removed_chambers.csv`,
 |---|---|---|---|---|
 | Analyses | `binned_summary` | Binned summary | | `analysis/binned_feeding_summary.csv` |
 | | `event_statistics` | Event statistics | | `analysis/tidy_feeding_events.csv` |
-| Optogenetics | `light_tables` | Light tables | optogenetic | `analysis/light_summary*.csv`, `analysis/light_wells*.csv` |
+| Optogenetics | `light_tables` | Light tables | optogenetic | `analysis/light_summary.csv`, `light_wells.csv` and, with Facets, `light_summary_facet.csv`, `light_wells_facet.csv` |
 | | `yoked_comparison` | Paired and yoked comparison | optogenetic, not Progressive Ratio; greyed when no yoked group | `analysis/yoked_comparison.csv` |
-| Progressive Ratio | `paired_yoked_diff` | Paired − yoked difference | Progressive Ratio; greyed when no group has a yoked chamber | `analysis/paired_yoked_diff.csv` |
-| | `cumulative_diff` | Cumulative difference table | Progressive Ratio | `analysis/pr_cumulative_diff.csv` |
+| Progressive Ratio | `paired_yoked_diff` | Paired-Yoked Difference | Progressive Ratio; greyed when no group has a yoked chamber | `analysis/paired_yoked_diff.csv` |
+| | `cumulative_diff` | Cumulative difference table | Progressive Ratio | `analysis/pr_cumulative_diff.csv` (one-minute bins) |
 | | `breaking_point` | Breaking point | Progressive Ratio | `analysis/pr_breaking_point.csv` |
-| Hedonic | `weighted_duration` | Weighted duration summary | Hedonic | the weighted-duration CSV (`weighted_duration_summary(save=True)`) |
+| Hedonic | `weighted_duration` | Weighted duration summary | Hedonic | `analysis/treatment_means.csv` (`weighted_duration_summary(save=True)`) |
 | Report | `experiment_report` | Experiment report (PDF) | | `analysis/experiment_report.pdf`, written last so it reflects the run |
 
 ### Plot Set (`omit: plots:`), run by *Generate plots*
@@ -104,18 +115,29 @@ The core always runs first: the auto-removal, `removed_chambers.csv`,
 | Group | Id | Label | Requires | Writes |
 |---|---|---|---|---|
 | Figures | `feeding_summary_plot` | Feeding summary | | `analysis/feeding_summary.png` |
-| | `well_comparison` | Well A vs B | two-well | `analysis/well_comparison_*.png` |
+| | `well_comparison` | Well A vs B | two-well | `analysis/well_comparison_*.png` (it draws `MedDuration`) |
 | Chosen metric | `binned_time_course` | Binned time course | | `analysis/binned_*.png` |
 | | `dot_plot` | Dot plot | | `analysis/dot_*.png` |
 | Progressive Ratio | `pr_cumulative_diff_plot` | Cumulative difference curve | Progressive Ratio | `analysis/pr_cumulative_diff.png` |
 | | `pr_cumulative_licks` | Training-aligned traces | Progressive Ratio | `analysis/pr_cumulative_licks_dfm*.png` |
 | | `pr_still_responding` | Still-responding curve | Progressive Ratio | `analysis/pr_still_responding.png` |
 | | `pr_breaking_point_plots` | Breaking-point plots | Progressive Ratio | `analysis/breaking_point_dfm*.png` |
-| Hedonic | `hedonic_plot` | Hedonic feeding plot | Hedonic | the hedonic figure (`hedonic_feeding_plot(save=True)`) |
+| Hedonic | `hedonic_plot` | Hedonic feeding plot | Hedonic | `analysis/hedonic_feeding_plot.png` (`hedonic_feeding_plot(save=True)`) |
 
 Each item calls the same function as today's button or action, with the
 same inputs. The exact output names are those the code writes. A stream
 that finds one different here follows the code and corrects this table.
+Core corrected the tables to the code (2026-10-18), and fixed three inputs
+where the button and the action disagreed:
+
+- the optogenetic figures and the Program timeline are drawn as
+  `write_qc_reports` draws them (10-minute bins), not at the Hub's Bin size;
+- the Progressive Ratio's cumulative curves (`cumulative_diff`,
+  `pr_cumulative_diff_plot`, `pr_cumulative_licks`) keep their one-minute
+  resolution, the actions' and Basic analysis's default, rather than the
+  Bin size the old buttons passed;
+- *Run analysis*'s `summary.txt` includes the QC summary, as *Analyze all*'s
+  Basic analysis writes it.
 
 ## The contract
 
@@ -150,6 +172,19 @@ def validate_omit(config) -> list[str]                   # for pyflic lint
   Editor writes design keys. For a standalone experiment it writes to
   `flic_config.yaml`. An empty list is removed, and the block with it.
   `omit` joins `DESIGN_KEYS`, and `yaml_lint`'s known global keys.
+- **As built**, Core added, without changing the above:
+  - `Item.excludes` (default `None`): the yoked comparison's "not
+    Progressive Ratio";
+  - `not_applicable_reason(item, experiment) -> str | None`, the reason
+    behind `applies`;
+  - `item(kind, item_id)`, `all_items()`, `selection_file(experiment) ->
+    Path` and `selection_where(experiment, kind) -> str` (for log lines);
+  - `set_included(..., *, project=None)`: given the loaded `Project`, its
+    design is updated in memory, so the members it loads next see the
+    change. A Member whose own `global:` states `omit:` has it
+    removed, so it inherits. A Member of a Project with no `design: global:`
+    raises `ValueError`, since there is no design to hold its Selection.
+  - The Design Editor and the Config Editor keep `omit` when they save.
 
 **`pyflic/base/run_selection.py`**:
 
@@ -157,7 +192,7 @@ def validate_omit(config) -> list[str]                   # for pyflic lint
 @dataclass
 class SelectionRun:
     ran: list[Item]; left_out: list[Item]; not_applicable: list[tuple[Item, str]]
-    removed: list[Path]; figures: list[tuple[str, Any]]   # (title, figure) for tabs
+    figures: list[tuple[str, Any]]   # (title, figure) for tabs
 
 def run_qc(exp, *, omit=None, log=print) -> SelectionRun
 def run_analysis(exp, *, binsize_min=30.0, omit=None, log=print) -> SelectionRun
@@ -166,11 +201,16 @@ def run_plots(exp, *, metric="Licks", binsize_min=30.0, omit=None, log=print,
 ```
 
 - **`omit`** defaults to the experiment's selection. A caller may pass more,
-  for example `run_all_analyses: {reports: false}` adds
-  `experiment_report`.
+  for example the selection plus `experiment_report`. A given `omit` is used
+  as given. The log calls an id that is in the Selection "unticked", and any
+  other id "left out by this run".
+- **As built**, `SelectionRun` also has `kind`, `written` (every file,
+  the core's included), `item_outputs` (the files by item id), `reasons`
+  (why each item was left out) and `lines()` (the left-out and
+  not-applicable lines).
 - **Each run logs** what it will run, what it leaves out (unticked) and what
-  does not apply. It removes the left-out items' earlier outputs and logs
-  each removal. *Run analysis* adds those lines to `summary.txt`.
+  does not apply. *Run analysis* adds those lines to `summary.txt`. No run
+  removes a file.
 - **Script actions.**
   - `run_qc`, the existing key, now calls `run_selection.run_qc`. With
     nothing omitted, it writes what `write_qc_reports` wrote.
@@ -179,24 +219,23 @@ def run_plots(exp, *, metric="Licks", binsize_min=30.0, omit=None, log=print,
 
   All three are in the `ACTIONS` catalogue and the runner. The Hub's buttons
   run these actions.
-- **`Project.run_all`** runs, per member, `run_qc`, `run_analysis` (with
-  `experiment_report` omitted when `make_reports` is false) and
-  `run_plots(keep_figures=False)`. `skip_analyzed` and the failure handling
-  are unchanged. `run_all_analyses` keeps `reports` (default false) and
-  `skip_analyzed`.
+- **`Project.run_all`** and the `run_all_analyses` step are unchanged: Basic
+  analysis per member, and its report unless `reports: false`. They do not
+  read the Selection (considered and dropped, see
+  [What the user sees](#what-the-user-sees)).
 
 ## Streams
 
 1. **Core** (`hs-core`): the contract above.
    - `write_qc_reports` split into per-item writers, behind its unchanged
      signature.
-   - The script actions, `Project.run_all`, and lint.
+   - The script actions and lint.
    - Tests:
      - every item runs and writes what its table says;
-     - `omit` leaves it out, and removes its earlier outputs;
+     - `omit` leaves it out, says so, and removes nothing;
      - `run_qc` with nothing omitted writes the same files as before, proven
        on the fixtures;
-     - `run_all` honours a member's selection;
+     - `run_all` still runs Basic analysis;
      - the selection is written to the right file in both cases.
 2. **Hub** (`hs-hub`, after Core):
    - the three panels as described, the View card, the tooltips, greyed

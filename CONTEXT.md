@@ -299,9 +299,10 @@ leave *out*: `global.omit:` with `qc:`, `analyses:` and `plots:` lists of
 item ids, in the Project's design for a Member and in `flic_config.yaml` for
 a standalone experiment. A config with no `omit:` runs everything, and an
 item a later version adds is included until someone unticks it. The Hub's
-ticks, a script's `run_qc` / `run_analysis` / `run_plots` steps and a Batch
-Run all read the same Selection, so they produce the same files; a run states
-what it left out, apart from what did not apply.
+buttons and a script's `run_qc` / `run_analysis` / `run_plots` steps read the
+same Selection, so they produce the same files; a run states what it left
+out, apart from what did not apply, and removes nothing. *Analyze all* and a
+Batch Run's `run_all_analyses` do not read it: they run Basic analysis.
 _Avoid_: ticks as session state, "include list", preset.
 
 **Experiment Script**:

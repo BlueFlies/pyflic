@@ -55,6 +55,10 @@ DESIGN_KEYS: tuple[str, ...] = (
     "facet_source",
     "exclusion_group",
     "optogenetics",
+    ## The Selection (ADR-0018): what every Member's Run QC, Run analysis and
+    ## Generate plots leave out, the same for all of them, since a Project's
+    ## replicates are analysed alike.
+    "omit",
 )
 
 

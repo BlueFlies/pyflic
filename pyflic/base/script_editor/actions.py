@@ -194,12 +194,32 @@ ACTIONS: list[Action] = [
     ),
     Action(
         action="run_qc",
-        label="QC reports",
-        blurb="Write per-DFM QC reports and signal plots into qc/.",
+        label="Run QC",
+        blurb="The QC Set minus the Selection: QC reports and signal plots into qc/.",
         icon="qc", category=Category.QC, produces="none",
-        notes="Integrity report, data breaks, simultaneous feeding and "
-              "bleeding matrices (two-well), and the per-DFM Raw Signal, "
-              "Baselined, and Cumulative Licks plots the QC Viewer shows.",
+        notes="What the Hub's Run QC runs: every item of the QC Set the "
+              "experiment's global.omit.qc does not leave out — integrity "
+              "report, data breaks, simultaneous feeding and bleeding matrices "
+              "(two-well), the per-DFM Raw Signal, Baselined and Cumulative "
+              "Licks plots the QC Viewer shows, the optogenetic light QC and "
+              "Program timeline, and Progressive Ratio's light QC.  With "
+              "nothing left out it writes what write_qc_reports writes.",
+    ),
+    Action(
+        action="run_analysis",
+        label="Run analysis",
+        blurb="The core, then the Analysis Set minus the Selection; the report last.",
+        icon="basic", category=Category.ANALYZE, produces="csv",
+        params=[_BINSIZE],
+        notes="What the Hub's Run analysis runs.  The core always runs first: "
+              "the auto-removal and removed_chambers.csv, summary.txt, "
+              "feeding_summary.csv and, with Facets, feeding_summary_facet.csv.  "
+              "Then every item of the Analysis Set the experiment's "
+              "global.omit.analyses does not leave out (binned summary, event "
+              "statistics, the light tables, the type's own tables), and the "
+              "experiment report last.  summary.txt lists what was left out "
+              "and what did not apply.  The bin size is the binned summary's "
+              "and the report's.",
     ),
     Action(
         action="feeding_csv",
@@ -340,6 +360,23 @@ ACTIONS: list[Action] = [
     ),
 
     # ── PLOTS ────────────────────────────────────────────────────────────
+    Action(
+        action="run_plots",
+        label="Generate plots",
+        blurb="The Plot Set minus the Selection, each figure saved into analysis/.",
+        icon="plot", category=Category.PLOTS, produces="figure",
+        params=[
+            Param(key="metric", label="Metric", type="metric",
+                  note="The Chosen metric: the binned time course's and the "
+                       "dot plot's.",
+                  default="Licks", required=True),
+            _BINSIZE,
+        ],
+        notes="What the Hub's Generate plots runs: every item of the Plot Set "
+              "the experiment's global.omit.plots does not leave out — the "
+              "feeding summary, Well A vs B (two-well), the binned time course "
+              "and dot plot of the metric, and the type's own figures.",
+    ),
     Action(
         action="plot_feeding_summary",
         label="Feeding summary plot",
