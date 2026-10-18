@@ -31,7 +31,10 @@ _DECIMALS = re.compile(r"(?<![\w.])(-?\d+\.\d{5,})(?![\d.eE])")
 _TABULAR = re.compile(r"\S(\t+| {2,})\S")
 _RULE = re.compile(r"^[=\-─═_]{3,}\s*$")
 _LOG_PREFIX = re.compile(r"^\[([^\]\n]{1,40})\]\s?")
-_ERRISH = re.compile(r"\b(FAILED|ERROR|Error|Traceback)\b")
+## "Error" alone is a word, not a failure: the DFM's firmware column is named
+## Error, and the integrity report names it on a clean recording.  An error
+## *message* opens with it ("Error: ...", "ValueError: ...").
+_ERRISH = re.compile(r"\b(FAILED|ERROR|Traceback)\b|\b\w*Error:")
 _WARNISH = re.compile(r"\b(SKIPPED|WARNING|skipped)\b")
 
 
