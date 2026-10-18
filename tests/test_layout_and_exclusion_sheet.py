@@ -105,6 +105,21 @@ def test_filing_moves_the_recording_and_parks_everything_else(tmp_path: Path):
     assert layout.classify(root).status == layout.OK
 
 
+def test_filing_moves_the_program_and_the_message_log_with_the_recording(tmp_path: Path):
+    """The loader reads Program.txt and Messages.csv from data/ only, so
+    parking them in extra_files/ silently lost the program."""
+    from pyflic.base.messages import find_messages
+    from pyflic.base.opto_program import find_program
+
+    root = _member(tmp_path / "rep1", filed=False, configured=True)
+    _write(root / "PROGRAM.TXT", "Start Time: 1/1/2026 9:00:00 AM\n")
+    _write(root / "Messages.csv", "DFM,Date,Time\n")
+    layout.file_recording(root)
+    assert find_program(root / "data") == root / "data" / "PROGRAM.TXT"
+    assert find_messages(root / "data") == root / "data" / "Messages.csv"
+    assert not (root / "extra_files").exists()
+
+
 def test_filing_never_moves_a_yaml_or_the_exclusion_sheet(tmp_path: Path):
     """Moving flic_config.yaml un-makes the Experiment Directory, and moving
     remove_chambers.csv silently returns excluded chambers to the analysis —

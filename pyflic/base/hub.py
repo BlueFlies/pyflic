@@ -699,8 +699,9 @@ class AnalysisHubWindow(QMainWindow):
                                             Category.NEUTRAL, "project")
         self.init_member_btn.setToolTip(
             "Adopt a folder already sitting in the Project that has no "
-            "flic_config.yaml: any loose recording is filed into data/ (and "
-            "everything else loose into extra_files/), the config is "
+            "flic_config.yaml: any loose recording is filed into data/, with "
+            "its Program.txt and Messages.csv (everything else loose goes "
+            "into extra_files/), the config is "
             "scaffolded from the design, and the config editor opens on it.")
         self.init_member_btn.clicked.connect(self._initialize_member_folder)
         self.scaffold_btn = ActionButton("Member configs…", Category.NEUTRAL,
@@ -732,7 +733,8 @@ class AnalysisHubWindow(QMainWindow):
                                      Category.TOOLS, "file")
         self.file_btn.setToolTip(
             "Move DFM CSVs sitting loose at a member's root into its data/ "
-            "folder (everything else loose goes to extra_files/).  YAML files "
+            "folder, with Program.txt and Messages.csv (everything else loose "
+            "goes to extra_files/).  YAML files "
             "and remove_chambers.csv stay where they are, and nothing is "
             "overwritten.")
         self.file_btn.clicked.connect(self._file_unfiled)
@@ -1843,8 +1845,9 @@ class AnalysisHubWindow(QMainWindow):
         if member.fix == "file":
             answer = QMessageBox.question(
                 self, "Blocked member",
-                f"{detail}\n\nFile its DFM CSVs into data/ now?  Everything "
-                "else loose goes to extra_files/; YAML files and "
+                f"{detail}\n\nFile its DFM CSVs, Program.txt and Messages.csv "
+                "into data/ now?  Everything else loose goes to extra_files/; "
+                "YAML files and "
                 "remove_chambers.csv stay where they are.")
             if answer == QMessageBox.StandardButton.Yes:
                 self._file_unfiled()
@@ -2217,8 +2220,9 @@ class AnalysisHubWindow(QMainWindow):
             return
         confirm = QMessageBox.question(
             self, "File unfiled recordings",
-            f"Move the DFM CSVs into data/ in {len(targets)} member "
-            "director(ies)?\n\nEvery other loose file goes to extra_files/.  "
+            f"Move the DFM CSVs, Program.txt and Messages.csv into data/ in "
+            f"{len(targets)} member director(ies)?\n\nEvery other loose file "
+            "goes to extra_files/.  "
             "YAML files and remove_chambers.csv stay where they are, and "
             "nothing is overwritten.")
         if confirm != QMessageBox.StandardButton.Yes:

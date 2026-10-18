@@ -68,7 +68,8 @@ use it yet), missing member.
 
 **Unfiled Recording**:
 The one Blocked state a button clears: DFM CSVs sitting at a member's root
-because that is where the rig wrote them. **Filing** moves `DFM*.csv` into
+because that is where the rig wrote them. **Filing** moves `DFM*.csv`, with
+the `Program.txt` and `Messages.csv` the loader reads beside them, into
 `data/` and every other loose file into `extra_files/`; every `.yaml`/`.yml`
 and the Exclusion Sheet stay at the root, because there they are configuration
 or declaration, never data. Filing never overwrites and never guesses: an

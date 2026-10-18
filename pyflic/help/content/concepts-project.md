@@ -200,11 +200,11 @@ Project for **Fix blocked members in …**, which opens the
 Blocked belongs to the **member**, never to the Project: a Project with four healthy
 members and one blocked one analyses the four.
 
-**Filing** moves `DFM*.csv` into `data/` and every other loose file into `extra_files/`.
-Every `.yaml` file and any `remove_chambers.csv` stays exactly where it is — at a member
-root those are configuration and declaration, never data. Nothing is ever overwritten. A
-loose `Program.txt` goes to `extra_files/` with the rest, and pyflic reads the program only
-from `data/`: move it into `data/` yourself.
+**Filing** moves `DFM*.csv` into `data/`, with the `Program.txt` and `Messages.csv`
+PyMCU exported beside them, since pyflic reads both only from `data/`. Every other loose
+file goes into `extra_files/`. Every `.yaml` file and any `remove_chambers.csv` stays
+exactly where it is — at a member root those are configuration and declaration, never
+data. Nothing is ever overwritten.
 
 ## Adding a member
 
