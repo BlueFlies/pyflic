@@ -251,7 +251,8 @@ Acclimation cut short by the end of the recording or by a new Paradigm is never 
 
 Under a ratio Paradigm the firmware counts its own feeding bouts, Firmware Events, and
 pyflic counts its feeding events from the same signal. They are different detectors and
-differ at the edges. A trigger well whose two counts differ by more than
+differ at the edges. Like the firmware, pyflic's count leaves out the bouts that start while
+the well's own Activation is lit. A trigger well whose two counts differ by more than
 `opto_event_disagreement_warn_fraction` (25%) of the Firmware Events warns, once either count
 reaches 5. Far more Firmware Events than pyflic events is a drifting well or thresholds that
 miss real feeding; far fewer is pyflic splitting bouts the firmware joins. Compare the
