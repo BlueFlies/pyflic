@@ -1,4 +1,6 @@
 global:
+  # A Custom Experiment states its Chamber Layout: two_well or single_well.
+  chamber_layout: two_well
   # Apply the 0.25-power transformation to lick counts in feeding summaries
   # and downstream plots/CSVs.  Set to false to keep raw counts.  This is the
   # experiment-wide default; individual API calls can still override per-call.
@@ -15,7 +17,6 @@ global:
     feeding_event_link_gap: 5
     pi_direction: left
     correct_for_dual_feeding: true
-    chamber_size: 2
   well_names:
     A: S5
     B: S5Y5

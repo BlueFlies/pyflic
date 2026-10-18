@@ -1203,6 +1203,9 @@ class FLICConfigEditor(QMainWindow):
     def __init__(self, initial_path: str | Path | None = None) -> None:
         super().__init__()
         self._current_path: Path | None = None
+        #: Where Save As starts when nothing was loaded: the file or folder
+        #: the editor was opened on.
+        self._save_hint: Path | None = None
         self._dfm_widgets: list[DFMWidget] = []
         self._script_editor_window: Any | None = None
         #: The config as read from disk.  Saving rewrites ``global:`` and
@@ -2245,17 +2248,31 @@ class FLICConfigEditor(QMainWindow):
             already filed into ``data/``) preload one DFM tab per id — the
             "initialize an existing recording" case, where the plate already
             says which DFMs exist and retyping their ids is pure error surface.
-        Otherwise: search the current working directory for the defaults.
+          • a path that does not exist → nothing is loaded.
+        Otherwise: the current working directory's config, if it has one —
+        the Experiment Directory the editor was started in.
+
+        A named path is never swapped for the working directory's config:
+        Save would then overwrite a file nobody named.  Where nothing is
+        loaded, Save asks where to write, starting from what was named.
         """
+        names = ("flic_config.yaml", "flic_config.yml")
         candidates: list[Path] = []
-        if initial_path is not None:
+        if initial_path is None:
+            candidates.extend(Path.cwd() / name for name in names)
+        else:
             p = Path(initial_path).expanduser()
             if p.is_file():
                 candidates.append(p)
             elif p.is_dir():
-                candidates.extend(p / name for name in ("flic_config.yaml", "flic_config.yml"))
-        if not candidates:
-            candidates.extend(Path.cwd() / name for name in ("flic_config.yaml", "flic_config.yml"))
+                candidates.extend(p / name for name in names)
+                self._save_hint = p / names[0]
+            else:
+                if p.suffix.lower() in (".yaml", ".yml"):
+                    self._save_hint = p
+                self.statusBar().showMessage(
+                    f"{p} does not exist: nothing loaded.  Save asks where to write.")
+                return
 
         for candidate in candidates:
             if candidate.exists():
@@ -2805,7 +2822,8 @@ class FLICConfigEditor(QMainWindow):
             self._write_yaml(self._current_path)
 
     def _save_as(self) -> None:
-        default = str(self._current_path or (Path.cwd() / "flic_config.yaml"))
+        default = str(self._current_path or self._save_hint
+                      or (Path.cwd() / "flic_config.yaml"))
         path, _ = QFileDialog.getSaveFileName(
             self,
             "Save Config As",
@@ -2928,8 +2946,9 @@ def launch() -> None:
     """Launch the FLIC Config Editor GUI.
 
     Optional CLI argument: a YAML config file (or a directory containing
-    ``flic_config.yaml``).  When omitted, looks for ``flic_config.yaml`` in
-    the current working directory.
+    ``flic_config.yaml``).  When omitted, opens the current working
+    directory's ``flic_config.yaml`` if it has one, and otherwise a blank
+    editor whose Save asks where to write.
     """
     sanitize_input_method_environment()
     app = QApplication.instance() or QApplication(sys.argv)

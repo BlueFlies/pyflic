@@ -75,8 +75,10 @@ loose at its root, or one with no config yet.
 Create the config file interactively:
 
 ```bash
-pyflic config
+pyflic config my_experiment/
 ```
+
+An example config, with scripts, is in [examples/flic_config.yaml](examples/flic_config.yaml).
 
 Or validate an existing one:
 
@@ -133,7 +135,7 @@ pyflic batch my_study/
 | Command | Description |
 |---|---|
 | `pyflic` | Launch the analysis hub GUI (same as `pyflic hub`) |
-| `pyflic config` | Launch the config editor GUI |
+| `pyflic config [dir]` | Launch the config editor GUI (default: the current folder's config) |
 | `pyflic hub [dir]` | Launch the analysis hub GUI |
 | `pyflic plots <project>` | Launch the Plot Editor (project level) |
 | `pyflic qc <dir>` | Launch the QC viewer |

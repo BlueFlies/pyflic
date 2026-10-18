@@ -59,7 +59,7 @@ Both working means the package and its GUI dependencies are installed correctly.
 |---|---|
 | `pyflic` | Analysis Hub — the same as `pyflic hub` |
 | `pyflic hub [folder]` | Analysis Hub, opened on a Batch, a Project or an Experiment Directory |
-| `pyflic config [folder]` | Config Editor, on the folder's `flic_config.yaml` (or a YAML file you name) |
+| `pyflic config [folder]` | Config Editor, on the folder's `flic_config.yaml` (or a YAML file you name; default: the current folder's, else an empty editor) |
 | `pyflic qc [experiment]` | QC Viewer on an Experiment Directory (default: the current folder) |
 | `pyflic plots [project]` | Plot Editor, on a Project's publication figures |
 | `pyflic help [topic]` | This help window |

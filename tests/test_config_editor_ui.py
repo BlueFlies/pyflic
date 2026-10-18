@@ -369,6 +369,83 @@ def test_an_empty_directory_still_opens_a_blank_editor(app, tmp_path):
         win.close()
 
 
+def _save_as_default(win, monkeypatch) -> str:
+    """Where Save As would start; the dialog is answered with Cancel."""
+    from pyflic.base import config_editor
+
+    asked: list[str] = []
+
+    def _fake(_parent, _title, default, _filter):
+        asked.append(default)
+        return "", ""
+
+    monkeypatch.setattr(config_editor.QFileDialog, "getSaveFileName", _fake)
+    win._save_as()
+    return asked[0]
+
+
+def test_started_without_a_folder_it_opens_the_working_directorys_config(
+        app, tmp_path, monkeypatch):
+    """`pyflic config` run inside an Experiment Directory edits its config."""
+    (tmp_path / "flic_config.yaml").write_text(
+        yaml.dump({"global": {"chamber_layout": "two_well"},
+                   "dfms": [{"id": 1, "chambers": {}}]}), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    win = FLICConfigEditor()
+    try:
+        assert win._current_path == tmp_path / "flic_config.yaml"
+    finally:
+        win.close()
+
+
+def test_started_without_a_folder_elsewhere_it_names_no_file(app, tmp_path, monkeypatch):
+    """Anywhere else nothing is loaded, and Save asks where to write."""
+    monkeypatch.chdir(tmp_path)
+    win = FLICConfigEditor()
+    try:
+        assert win._current_path is None
+        assert len(win._dfm_widgets) == 1
+    finally:
+        win.close()
+
+
+def test_a_path_that_does_not_exist_never_opens_the_working_directorys_config(
+        app, tmp_path, monkeypatch):
+    """A mistyped or new file name used to fall back to the working
+    directory's config, which Save then overwrote."""
+    (tmp_path / "flic_config.yaml").write_text("dfms: []\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    named = tmp_path / "elsewhere" / "new_config.yaml"
+    win = FLICConfigEditor(initial_path=named)
+    try:
+        assert win._current_path is None
+        assert _save_as_default(win, monkeypatch) == str(named)
+        assert (tmp_path / "flic_config.yaml").read_text(encoding="utf-8") == "dfms: []\n"
+    finally:
+        win.close()
+
+
+def test_save_as_starts_in_the_folder_the_editor_was_opened_on(app, tmp_path, monkeypatch):
+    folder = tmp_path / "recording"
+    folder.mkdir()
+    monkeypatch.chdir(tmp_path)
+    win = FLICConfigEditor(initial_path=folder)
+    try:
+        assert _save_as_default(win, monkeypatch) == str(folder / "flic_config.yaml")
+    finally:
+        win.close()
+
+
+def test_the_pyflic_folder_is_not_an_experiment_directory():
+    """The example config lives in examples/, so `pyflic config`, the Hub
+    and batch discovery run from the pyflic folder find no config there."""
+    from pyflic.base.project import is_experiment_dir
+
+    root = Path(__file__).resolve().parents[1]
+    assert not is_experiment_dir(root)
+    assert (root / "examples" / "flic_config.yaml").is_file()
+
+
 def test_a_factor_column_edits_through_a_dropdown_of_its_levels(app, tmp_path):
     """Typed levels invited typos and undeclared values; the cell editor is a
     combo of exactly what the factor declares, plus a blank to clear."""

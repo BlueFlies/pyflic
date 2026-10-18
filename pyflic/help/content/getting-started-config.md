@@ -9,7 +9,7 @@ You do not have to write it by hand.
 ## The easy way
 
 ```bash
-pyflic config
+pyflic config my_experiment/
 ```
 
 This opens the **Config Editor**, a form-based editor that writes valid YAML for you. It
