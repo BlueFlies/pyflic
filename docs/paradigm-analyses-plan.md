@@ -6,16 +6,19 @@ every Experiment Type. It follows [v4-data-plan.md](v4-data-plan.md), which
 made pyflic read the new data, and begins with a check of pyflic against the
 firmware and PyMCU as they stood on 10/17/2026.
 
-**Status (2026-10-17): proposed.** The decisions below are recommendations,
-not yet accepted. The fixes listed under [Where pyflic stands](#where-pyflic-stands)
-as *fixed* are done on `v4_Dev`; everything else is to build.
+**Status (2026-10-17): accepted**, all 19 decisions, and being built on
+`v4_Dev` as the streams below. The fixes listed under
+[Where pyflic stands](#where-pyflic-stands) as *fixed* were done first
+(55c4315). The decision and its reasons are in
+[adr/0017](adr/0017-paradigm-families-not-experiment-types.md), with an
+addendum to [adr/0015](adr/0015-the-opto-program-and-a-light-qc-for-every-type.md)
+for the new checks' severities.
 
-Terms are [../CONTEXT.md](../CONTEXT.md)'s: *Paradigm*, *Program Interval*,
-*Activation*, *Hold*, *Requirement* / *Progress*, *Firmware Event*, *Phase* /
-*Acclimation*, *Role*, *Linkage Group*, *Trigger Well*. One new term is
-proposed, *Paradigm Family* (decision 2), to be added to the glossary on
-acceptance. The firmware's rules are DFMV3_V2's `src/LEDControl.c`, which is
-the authority; PyMCU's `docs/ProgramFormat.md` states them in words.
+Terms are [../CONTEXT.md](../CONTEXT.md)'s: *Paradigm*, *Paradigm Family*,
+*Program Interval*, *Activation*, *Hold*, *Requirement* / *Progress*,
+*Firmware Event*, *Phase* / *Acclimation*, *Role*, *Linkage Group*, *Trigger
+Well*. The firmware's rules are DFMV3_V2's `src/LEDControl.c`, which is the
+authority; PyMCU's `docs/ProgramFormat.md` states them in words.
 
 - [Where pyflic stands](#where-pyflic-stands)
 - [What the user gets](#what-the-user-gets)
@@ -137,9 +140,8 @@ Activations, LitSec, FirmwareEvents and AcclimationEndMin reach a report.
 
 ## Decisions
 
-Recommended, not yet accepted. Once accepted, the streams implement them, and
-a stream that finds one unworkable stops and reports rather than deciding
-otherwise.
+All accepted on 2026-10-17. The streams implement them; a stream that finds
+one unworkable stops and reports rather than deciding otherwise.
 
 **Scope**
 
@@ -172,7 +174,9 @@ otherwise.
    - `Family`.
 
    Every family check and summary aggregates the ledger. Nothing re-reads
-   the rows.
+   the rows. The pure columns come from the Paradigm state alone (P0, C3).
+   `EndedBy` needs the program's settings and pyflic's contact, so S1 adds
+   it (C4).
 5. **Judged against `Program.txt`.** When the data disagree with the program
    on a length, the lockout or the series, the reason says the likely cause:
    the file is not the program that ran. *Program mismatch* already does this
@@ -309,65 +313,255 @@ otherwise.
 
 ## Stream P0: current with upstream, and the shared contract
 
-One agent, on `v4_Dev`, before the others start.
+P0 runs before the other streams, as two agents. **P0-sim** works on the
+simulator and the Paradigm state (C1, C2) together with the integrity work
+(C6). **P0-ext** works on the PyMCU-simulator test (C8) in parallel, because
+it touches neither. A third agent, **P0-ledger**, then builds the ledger,
+the registry and their wiring (C3, C4, C5, C7) on P0-sim's merge. The
+contract below is what streams S1 to S5 build on. A stream that needs
+something this contract lacks adds it in its own module and says so in its
+report. It does not change the contract.
 
-**P0a. The simulator** (`tests/v4_fixtures.py`):
-- `DFMSpec.restarts`: a list of `(at_s, down_s)`. The simulator drops the
-  records of the outage and offsets `Index`, as PyMCU does. It writes `NA`
-  Interval rows (Phase `M`, `OnMs` 0, Activations carried) until the
-  instruction is resent, then restarts every well's state. It writes PyMCU's
-  two restart errors to `Messages.csv`.
-- Fault injection: `write_v4_recording(..., program_override=...)` writes a
-  `Program.txt` whose settings differ from what ran; `led_faults` blanks a
-  well's `OnMs` (dead) or fills it (stuck) over a span; `drop_activations`
-  removes rises.
-- One spec per family edge case:
-  - ClosedLoop with `MaxOnMs` and bouts longer than it;
-  - FixedInterval with `LockoutMs` both below and above `ActivationMs`;
-  - NonFeeding with `MaxOnMs`;
-  - Exponential ProgressiveRatio;
-  - FixedRatio with Acclimation;
-  - a yoked ClosedLoop design;
-  - a Repeating OpenLoop schedule.
+### C1. The simulator (`tests/v4_fixtures.py`)
 
-  `stress_spec` joins the QC and light-table tests, which do not use it
-  today.
+**Restarts.** `DFMSpec.restarts: tuple[Restart, ...] = ()`, with
+`@dataclass(frozen=True) class Restart: at_s: float; down_s: float = 5.0;
+resend_s: float = 1.0`. A restart at `at_s` seconds from the recording start
+runs as PyMCU 529b926 and the firmware do:
 
-**P0b. `ParadigmState`** (`pyflic/base/paradigm_state.py`): `restarts()`
-returns the row indices. Paradigm-state runs split there, and
-`acclimation_runs`, `requirement_met`, the K numbering and `training_end`
-honour the split.
+- **Down for `down_s`.** No records are written: `Index` and the times jump
+  by `round(down_s * 1000 / 200)` records, as PyMCU's offset makes them. No
+  light is lit and no contact is counted.
+- **Then `resend_s` of idle rows.** `Interval`, `Cycle` and `Paradigm` are
+  `NA`; Phase is `M`; `Requirement` and `Progress` are `NA`; `OnMs` is 0;
+  `Dark`, `OptoFreq` and `OptoPW` are 0. `Activations` carries its totals,
+  because PyMCU carries them.
+- **Then the instruction in force is applied afresh.** Every well starts as
+  under a new Paradigm: Phase `A` where the Paradigm has Acclimation, the
+  Requirement series from k = 1, `Progress` 0, no lockout running.
+- **The truth** gains `restarts_ms: list[tuple[int, int, int]]`: the ms the
+  DFM went down, the ms the instruction applied again, and the records
+  missing. The truth's Activation and Acclimation lists include what
+  happened after the restart.
+- **`Messages.csv`** gets PyMCU's two errors, worded exactly as
+  `DFM._StartRestart` and `DFM._FinishRestart` word them. "DFM {id}
+  restarted: its record count went back from {last} to 1. Its Paradigm state
+  and Activation counts started again. Sending its Interval and linkage
+  again." is dated at the first record after the outage. "DFM {id} recorded
+  nothing for about {s:.0f} s while it restarted: Index {a} to {b} are
+  missing." follows it.
 
-**P0c. The ledger and the family registry.** The events-table columns of
-decision 4 come from `opto_light.events_table` and `opto_qc`. A new
-`pyflic/base/paradigm_families.py` holds, for each family:
-- `FAMILY_OF[type]`;
-- the checks, as functions over the ledger and the state;
-- the summary columns;
-- the headline metrics;
-- the QC table's columns;
-- the rule figure.
+**Faults**, as new keyword arguments of `write_v4_recording`:
 
-Streams S1 to S3 read the registry, so a family is added in one place.
+- `program_paradigms: Mapping[str, ParadigmSpec] | None`: `Program.txt` is
+  written with these definitions in place of the spec's. They have the same
+  names and different settings: the wrong `Program.txt`.
+- `on_ms_faults: Mapping[int, Sequence[OnMsFault]] | None`, with
+  `OnMsFault(well, start_s, end_s, on_ms)`. In the records within
+  `[start_s, end_s)`, that DFM's `OnMs{well}` is set to `on_ms`, and its
+  `OptoCol1` bit is set exactly when `on_ms > 0`. Linkage is not applied.
+  This models a corrupted or misreported LED.
 
-**P0d. Integrity** (`dfm.py`):
-- the restart lines;
-- the No Ack note: with no lost or repeated records, the report explains
-  that PyMCU builds before 10/17/2026 caused it and nothing was lost;
-- a cross-check of `Messages.csv`'s lost-record counts against the `Index`
-  gaps.
+**Specs.** `family_specs() -> dict[str, RecordingSpec]` returns one spec per
+edge case, each about 20 minutes long, with bouts that exercise the rule:
 
-**P0e.** Decision 16.
+| Key | What it runs |
+|---|---|
+| `closed_max` | ClosedLoop, Hold 500 and `MaxOnMs` 2000, with bouts longer than 2 s and short ones |
+| `fixed_interval` | DFM 1: FixedInterval with `ActivationMs` 1000 and `LockoutMs` 10000. DFM 2: `LockoutMs` 500 and `ActivationMs` 1500, with Acclimation 3 |
+| `non_feeding` | DFM 1: NonFeeding, `OnDelayMs` 1000, `MaxOnMs` 0. DFM 2: `MaxOnMs` 5000 |
+| `exponential` | ProgressiveRatio, Exponential (Scale 5, Rate 0.2), Acclimation 2 |
+| `restart` | DFM 1: FixedRatio 3 with Acclimation 2, restarting in Main. DFM 2: ClosedLoop, restarting mid-bout |
 
-**P0f.** Decision 17's PyMCU-simulator test, `tests/test_pymcu_simulator.py`
-(marked slow), with the launcher as `tests/pymcu_sim_runner.py`.
+The existing `fixed_ratio_spec`, `yoked_controls_spec`,
+`repeating_open_loop_spec` and `stress_spec` stay as they are.
 
-Acceptance:
-- the restart spec loads, and its state runs split;
-- the ledger columns are exact on the simulator's truth for every spec;
-- the PyMCU-simulator test passes, or skips with a reason;
-- the firmware cross-check still passes;
-- the existing generation-1 tests are unchanged.
+**Acceptance.** The firmware cross-check passes on every new spec except
+`restart`; a restart is PyMCU's and the power supply's doing, not
+`LEDControl.c`'s. `restart`'s rows match its truth. The new keyword
+arguments change nothing when absent.
+
+### C2. `ParadigmState` (`pyflic/base/paradigm_state.py`)
+
+- `@dataclass(frozen=True) class RestartSpan: row: int; resume_row: int;
+  missing: int; minute: float`. `row` is the first unknown-instruction row
+  after the gap, `resume_row` the first row after that run, `missing` the
+  records the gap lost, and `minute` is `minutes[row]`.
+- `restarts() -> list[RestartSpan]` finds each `Index` gap whose next row
+  begins a run of unknown-instruction rows (`Interval` `NA`, after the
+  lead-in). This is the data's rule. `Messages.csv` confirms it in C6.
+- `state_runs() -> list[tuple[int, int]]` gives `[i0, i1)` of each
+  Paradigm-state run: rows between consecutive Paradigm starts, which already
+  include the start after a restart's `NA` rows. It is the public face of the
+  existing `_paradigm_starts`.
+- **Nothing else changes behaviour.** `training_end` stays the first Main
+  row under a ratio Paradigm, so a restart does not move Training.
+  `acclimation_end` stays the end of the first Acclimation run.
+
+### C3. The ledger (`pyflic/base/activation_ledger.py`)
+
+```python
+LEDGER_COLUMNS = ("Well", "Row", "EndRow", "Index", "OnsetMin", "OnsetMs", "EndMs", "LitMs",
+                  "Timing", "Overlap", "Boundary", "SinceLastOnsetMs", "Phase", "K",
+                  "Paradigm", "ProgramInterval", "Cycle", "RequirementMet")
+TIMING_EXACT, TIMING_RECORD = "exact", "record"
+BOUNDARY_INTERVAL, BOUNDARY_GAP, BOUNDARY_END = "interval", "gap", "end"
+
+def ledger(state: ParadigmState, *, wells=None,
+           linked: Mapping[int, Sequence[int]] | None = None,
+           record_ms: int = RECORD_MS) -> pd.DataFrame
+```
+
+It is pure, with no program, no pyflic events and no Qt. It returns one row
+per Activation (`state.activation_onsets(well)`) of each well in `wells`
+(default `state.wells_with_activations()`), sorted by `Well`, then `Row`.
+
+**Time base.** The time base is milliseconds from the start of the record
+with `Index` 1: row `r` spans `[(index[r] − 1) · record_ms, index[r] ·
+record_ms)`. PyMCU's simulator truth uses the same base.
+
+The columns:
+
+- **The light period**: from `Row`, the run of consecutive rows with no
+  `Index` gap where the well's `OnMs` > 0, cut before the well's next onset.
+  `EndRow` is its last row, inclusive.
+- **`LitMs`**: the well's `OnMs` summed over `[Row, EndRow]`.
+- **`OnsetMs`**: the end of `Row` minus `OnMs[Row]`.
+- **`EndMs`**: the start of `EndRow` plus `OnMs[EndRow]` when `EndRow >
+  Row`, otherwise `OnsetMs + LitMs`.
+- **`Timing`** is `exact` when the period spans more than one row, its
+  interior rows are all `record_ms`, and no row in it exceeds `record_ms`.
+  Otherwise it is `record`, and the times are good to one record.
+- **`Overlap`** is true when the period's length cannot be the Activation's
+  own:
+  - a well in `linked[well]` has an onset in `[Row, EndRow]`;
+  - the row before `Row` was lit with no gap between, so the LED was
+    already on;
+  - two of the well's onsets fall in `Row`.
+
+  Overlapped rows keep their `LitMs`, and checks skip them.
+- **`Boundary`** says why the period stopped other than by the rule: a
+  Paradigm start or Program Interval change in `(Row, EndRow + 1]`
+  (`interval`), an `Index` gap right after `EndRow` (`gap`), or the last
+  row (`end`). It is empty otherwise.
+- **`SinceLastOnsetMs`**: `OnsetMs` minus the same well's previous
+  `OnsetMs` in the same state run, or `NaN`.
+- **`Phase`**: `A` or `M` at `Row`.
+- **`K`**: the 1-based number of the well's Phase-`M` Activations in its
+  state run. It is `NA` in Phase `A`. Under a ratio Paradigm, the k-th Main
+  Activation meets `requirement_for(k)`.
+- **`Paradigm`, `ProgramInterval`, `Cycle`**: at `Row`.
+- **`RequirementMet`**: `state.requirement_met(well, Row)`. Filling the
+  first row of a new Paradigm from the program is the consumer's job.
+
+**Acceptance.** On every simulator spec, for every unoverlapped Activation
+with `Timing` `exact`, `OnsetMs`, `EndMs` and `LitMs` equal the truth's own
+`lit_spans_ms` to the millisecond. `K` and `RequirementMet` equal the truth's
+too. On PyMCU's simulator recording, they equal its `Activations.csv`
+(`StartMs`, `LitMs`).
+
+### C4. The light-events table
+
+`qc/opto/opto_light_events.csv`'s generation-3 rows gain the ledger's
+`OnsetMs`, `EndMs`, `LitMs`, `Timing`, `Overlap`, `Boundary`,
+`SinceLastOnsetMs` and `K`, joined on (`Well`, onset row; two onsets in one
+row are matched in order). They also gain `Family`, from C5's `family_of`
+of the row's `Mode` and `Phase`. Rows from `OptoCol1`, on generations 1 and
+2, have these columns `NA`. S1 adds `EndedBy` (contact, Hold, `MaxOnMs`,
+length, Interval change, gap, or unknown), because it needs the program's
+settings and pyflic's contact.
+
+### C5. The registry (`pyflic/base/paradigm_families.py`)
+
+```python
+OPEN_LOOP, CLOSED_LOOP, FIXED_LENGTH, NON_FEEDING = "open loop", "closed loop", "fixed length", "non-feeding"
+FAMILY_ORDER = (OPEN_LOOP, CLOSED_LOOP, FIXED_LENGTH, NON_FEEDING)
+INTERVAL_BRANCH, RATIO_BRANCH = "interval", "ratio"
+
+@dataclass(frozen=True)
+class Family:
+    key: str
+    title: str                       # "Open loop", "Closed loop", ...
+    modes: tuple[str, ...]           # opto_program mode strings
+    qc_columns: tuple[str, ...]      # S1's columns in opto_light_qc.csv
+    summary_columns: tuple[str, ...] # S2's columns in the light table
+    headline: tuple[str, ...]        # decision 9
+    figure: str | None               # S3's rule figure kind
+
+FAMILIES: dict[str, Family]
+def family_of(mode: str, *, acclimation: bool = False) -> str | None
+def branch_of(mode: str) -> str | None
+def families_in(program, dfm_ids=None) -> list[str]
+def headline_metrics(families, *, max_on: bool = False, acclimation: bool = False) -> list[str]
+def rule_sentence(paradigm) -> str
+```
+
+- **`family_of`** maps `op.OPEN_LOOP` to open loop; `op.CLOSED_LOOP` and
+  `op.CLOSED_LOOP_MAX` to closed loop; `op.FIXED_INTERVAL`,
+  `op.PROGRESSIVE_RATIO` and `op.FIXED_RATIO` to fixed length, or to closed
+  loop when `acclimation` is true; and `op.NON_FEEDING` to non-feeding.
+  `op.LIGHTS_OFF`, unknown and not-judged modes give `None`.
+- **`families_in`** lists, in `FAMILY_ORDER`, the families of the
+  program's Paradigms for those DFMs. It adds closed loop for any Paradigm
+  with Acclimation > 0, and open loop for any interval with a well `On`.
+- **`rule_sentence`** states the rule with its settings, for example "CL500
+  (closed loop): lit during contact and for 500 ms after; at most 2000 ms
+  per light period".
+- **The column tuples** are declared in P0 from decisions 8 and 9 and from
+  S1's column list. Streams fill in the values; they do not rename the
+  columns.
+
+### C6. Integrity (`pyflic/base/dfm.py`)
+
+- **The integrity report gains `## DFM restarts`**: one line per
+  `RestartSpan`, with the clock time, the minute, the records and seconds
+  missing, and whether `Messages.csv` names it. A restart that only
+  `Messages.csv` names is listed too, as "named in Messages.csv; the data
+  show an `Index` gap only". The report dict gains `restarts`.
+- **The No Ack note.** When the *No Ack* count is above 0 with no lost and
+  no repeated records, the error section adds: "No Ack with nothing lost or
+  repeated: PyMCU builds before 10/17/2026 sent a partial ACK the firmware
+  took as missed. No data were lost."
+- **The cross-check.** `Messages.csv`'s "Lost N records" counts are summed
+  per DFM against the `Index` gaps, and a difference is noted.
+
+### C7. *Firmware events disagree*, like with like (`opto_qc.py`)
+
+pyflic's count leaves out feeding events whose first sample lies in a row of
+the same well's own Activation period, `Row` to `EndRow` in the ledger.
+Decision 16.
+
+### C8. The PyMCU-simulator test
+
+- **`tests/pymcu_sim_runner.py`**, the launcher: stand-in modules for
+  `fcntl`, `busio`, `board`, `smbus*`, `adafruit_*`, `RPi`, `digitalio`,
+  `serial`, `cobs`, `gpiozero`, `neopixel` and `microcontroller`, and
+  `multiprocessing.get_context("fork")` mapped to `"spawn"`. It then runs
+  PyMCU's `scripts/simulate_recording.py` with `runpy`, with the working
+  directory at PyMCU. PyMCU's serial and I2C modules are imported but never
+  used, so pyflic's own `.venv` runs it, in about 7 s.
+- **`tests/test_pymcu_simulator.py`**, marked slow. It skips unless
+  `PYMCU_DIR` (default: the sibling checkout) has the script. It runs
+  `sys.executable -I tests/pymcu_sim_runner.py <PyMCU> --out <tmp> --seed 1`
+  and builds a Custom optogenetic Project over the recording.
+- **The comparison.** For the whole-recording rows of the triggering wells,
+  `light_wells.csv`'s values are compared with the truth's `Summary.csv`:
+  - Activations, AcclimationActivations, LastRequirementMet (the truth's
+    `Breakpoint`) and ProgressAtEnd: equal;
+  - AcclimationEndMin: within 0.2 s;
+  - LitSec: within 0.01 s.
+
+  After C3, the ledger is also compared with `Activations.csv`. After S4,
+  the same recording loads as Progressive Ratio without `paired_chambers`.
+- **Why the default seed.** The test pins the seed, so a PyMCU change that
+  alters the truth shows as a failure to look at, not a flake.
+
+### P0 acceptance
+
+- Each contract item's acceptance above is met.
+- The firmware cross-check passes.
+- The generation-1 tests are unchanged.
+- The full gate passes with only the eight pre-existing failures.
 
 ## Stream S1: rule checks
 
@@ -502,26 +696,28 @@ Acceptance:
 ## Delivery
 
 ```
-P0 (one agent, sequential, on v4_Dev)
-  P0a simulator ──► P0b restarts in ParadigmState ──► P0c ledger + registry
-                                  │                    P0d integrity, P0e, P0f
-          ┌───────────────────────┼───────────────────────┐
-          ▼                       ▼                       ▼
-     S1 rule checks        S2 summary columns       S4 Progressive Ratio
-          │                       │
-          │                       ▼
-          │                S5 yoked comparison
-          └───────────┬───────────┘
-                      ▼
-            S3 reports, figures, views
-                      ▼
-                  S6 docs
+P0-sim (C1 simulator, C2 restarts, C6 integrity)     P0-ext (C8 PyMCU test)
+                 └──────────────────┬───────────────────────┘
+                                    ▼
+                 P0-ledger (C3 ledger, C4 events, C5 registry, C7)
+          ┌─────────────────────────┼───────────────────────┐
+          ▼                         ▼                       ▼
+     S1 rule checks          S2 summary columns       S4 Progressive Ratio
+          │                         │
+          │                         ▼
+          │                  S5 yoked comparison
+          └────────────┬────────────┘
+                       ▼
+             S3 reports, figures, views
+                       ▼
+                   S6 docs
 ```
 
-- **Branches**: `pa-p0`, then `pa-s1-checks`, `pa-s2-summaries` and
-  `pa-s4-pr` in parallel from P0's tip, each in its own worktree. Then
-  `pa-s5-yoked` from S2's merge, and `pa-s3-reports` after S1, S2 and S5 are
-  merged. S6 works on `v4_Dev` last.
+- **Branches**: `pa-p0-sim` and `pa-p0-ext` in parallel from the plan's
+  commit, then `pa-p0-ledger` from their merge. Then `pa-s1-checks`,
+  `pa-s2-summaries` and `pa-s4-pr` in parallel from P0's tip, each in its own
+  worktree. Then `pa-s5-yoked` from S2's merge, and `pa-s3-reports` after
+  S1, S2 and S5 are merged. S6 works on `v4_Dev` last.
 - **Worktree base**: the agent tool's worktrees start from `main`. Each
   prompt names its base commit (`git switch -c <branch> <commit>`) and runs
   the main `.venv`'s Python from the worktree root.
@@ -538,8 +734,9 @@ P0 (one agent, sequential, on v4_Dev)
   - `light_summary.py`: S2 owns it; S5 adds `behaviour_rows` only.
   - `pdf_report.py` and `project_report.py`: S3 only.
   - `qc_viewer.py`: S1 owns the Opto tab, and S3 the Program tab.
-  - `paradigm_families.py`: P0 creates it, and each stream adds only its
-    own entries.
+  - `paradigm_families.py`: P0-ledger creates it with every family's
+    columns declared; a stream changes only its own family fields.
+  - `tests/v4_fixtures.py`: P0-sim owns it; later streams add specs only.
 - **Each stream's report** names:
   - the files changed;
   - the acceptance criteria met, with test names;

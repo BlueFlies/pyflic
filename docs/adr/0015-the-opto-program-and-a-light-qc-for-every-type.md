@@ -166,3 +166,33 @@ Acclimation count that does not match the Paradigm's, Firmware Events that
 disagree with pyflic's events, and lost, late or unknown-instruction rows)
 with five new constants, and a `Role` column for every optogenetic
 experiment, are specified in `docs/v4-data-plan.md`.
+
+## Addendum (2026-10-17): each Paradigm checked against its own rule
+
+`docs/paradigm-analyses-plan.md` and ADR-0017 extend the generation-3 light QC
+from explaining light to checking each Paradigm's rule, with the program's
+settings, one Activation at a time.
+
+- **Failing, because the firmware is deterministic.** A miss means a wrong
+  `Program.txt` or broken hardware, never a fly's behaviour:
+  - *wrong activation length*: a fixed-length Activation not lasting
+    `ActivationMs`;
+  - *lockout broken*: FixedInterval Activations closer than the lockout;
+  - *requirement series wrong*: a ratio Activation meeting a Requirement the
+    series does not give;
+  - *max on exceeded*: a closed-loop or non-feeding period past `MaxOnMs`;
+  - *short activations*: a closed-loop period shorter than its Hold.
+
+  The reason names the setting and the value measured. Where the data and the
+  program disagree, it says the file is probably not the program that ran.
+- **Warnings, because pyflic's lick detection is not the firmware's
+  threshold:**
+  - *contact without activation*: licks with the well free and no
+    FixedInterval Activation;
+  - *non-feeding dark*: no contact, yet no light;
+  - *interval started late*: a Program Interval's first row late against
+    its timestamp;
+  - *DFM restarted*.
+- **Constants of their own.** Each check has its own constants, never
+  borrowed. *Non-feeding light during feeding* gets its own two constants in
+  place of the unexplained-light ones it borrowed.

@@ -635,6 +635,24 @@ it.
 _Avoid_: mode, schedule, inferring the paradigm from which settings are zero
 (the pre-4.0.0 export's way, which pyflic keeps only for Generation 1).
 
+**Paradigm Family**:
+The Paradigm types pyflic checks and summarises with the same code, because
+the firmware lights them by the same mechanism. There are four:
+- **open loop**: OpenLoop, and any Well set `On`; lit regardless of the fly;
+- **closed loop**: ClosedLoop, and the Acclimation of any type that has one;
+  contact lights the LED for the contact and its Hold;
+- **fixed length**: FixedInterval, ProgressiveRatio and FixedRatio in Main;
+  an earned Activation lasts exactly `ActivationMs`. Its *Interval* branch
+  (FixedInterval) is earned by contact once the lockout has passed, and its
+  *Ratio* branch (the two ratio types) by the Firmware Event that meets the
+  Requirement;
+- **non-feeding**: NonFeeding; dark while the fly feeds.
+
+A Well's family follows its Phase, so a FixedInterval Well in Acclimation is
+closed loop until its Acclimation ends.
+_Avoid_: paradigm group, rule class, Experiment Type (which describes the
+feeding design, not the light).
+
 **Program Interval**:
 One timed step of a DFM's Opto Program: its Paradigm, its dark setting and a
 threshold per well, in the order the program lists them. A Generation-3 row
