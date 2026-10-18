@@ -267,9 +267,11 @@ In outline:
    your answers as `flic_config.yaml` in the recording's folder. On its Experiment tab you
    choose the **Experiment Type**; see [Which Experiment Type?](#which-experiment-type)
    below.
-3. **Open the hub on the folder** and run **Basic analysis**.
+3. **Open the hub on the folder**, and on its **Analyze** panel click **Run analysis**.
+   Every box on the panel starts ticked; untick what you do not need, and the choice is
+   saved in the config.
 4. **Check the data before you believe any result.** On the hub's **QC** panel, click
-   **QC reports**, then **Open QC Viewer**.
+   **Run QC**, then **Open QC Viewer**.
 
 ### Which Experiment Type?
 

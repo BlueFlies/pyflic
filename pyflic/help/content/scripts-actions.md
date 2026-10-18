@@ -21,16 +21,17 @@ several devices. `group` defaults to the **script's name** — see
 | Action | Parameters | What it does |
 |---|---|---|
 | `basic_analysis` | — | The standard pipeline: auto-removal (the `constants:` cutoffs, once), summary, feeding summary, summary plot, and for an optogenetic experiment the light QC, the light table, the yoked comparison (`yoked_comparison.csv`, a design with a yoked group only) and each firmware 4.0.0 DFM's Program timeline (QC is `run_qc`'s job) |
-| `run_qc` | — | Per-DFM QC reports into `qc/`: integrity, data breaks, bleeding, raw / baselined / cumulative-licks plots, and, in an optogenetic experiment, the Program timeline of each DFM with a `Program.txt` section or firmware 4.0.0 data |
+| `run_qc` | — | The Hub's **Run QC**: the QC Set minus `global.omit.qc`, into `qc/` — the integrity report, data breaks, simultaneous feeding and bleeding (two-well), the raw / baselined / cumulative-licks plots, and the optogenetic light QC, its figure and the Program timeline; Progressive Ratio's light QC and its two figures into `analysis/` |
+| `run_analysis` | `binsize` | The Hub's **Run analysis**: the core (auto-removal and `removed_chambers.csv`, `summary.txt`, `feeding_summary.csv` and, with Facets, `feeding_summary_facet.csv`), then the Analysis Set minus `global.omit.analyses`, the experiment report last. `binsize` is the binned summary's and the report's |
 | `feeding_csv` | — | Per-chamber feeding summary to CSV |
-| `facet_csv` | — | Per-chamber summary per Facet to `feeding_summary_facet.csv` (the Hub's **Faceted summary CSV**); skipped when the experiment has no Facets |
+| `facet_csv` | — | Per-chamber summary per Facet to `feeding_summary_facet.csv`, which `run_analysis` writes as part of its core; skipped when the experiment has no Facets |
 | `binned_csv` | `binsize` | Feeding metrics binned over time, to CSV |
 | `weighted_duration` | — | Weighted-duration summary (hedonic experiments) |
 | `paired_yoked_diff` | — | Paired − yoked table, one row per chamber group per Facet (progressive ratio) |
 | `breaking_point` | — | **Breaking point table**: per chamber group, the paired fly's lick-backed Test light events before its first pause longer than `pr_break_gap_min`. Writes `pr_breaking_point.csv` and logs the table with its sensitivity to the gap (progressive ratio) |
 | `pr_light_qc` | — | **Light QC table**: per chamber group, did the paired fly earn its light? Writes `pr_light_qc.csv` and `pr_light_events.csv` and logs each flagged group (progressive ratio) |
-| `opto_light_qc` | — | **Opto light QC table**: per linkage group, was the light where the licks were? Writes `qc/opto/` (verdicts, intervals, light events, the program as read) and logs each flagged group (any optogenetic experiment; skipped otherwise) |
-| `light_summary` | — | **Light summary CSV**: the light table, what each chamber's and each well's light did — lit time, Activations, Acclimation, Firmware Events and the Paradigm type's own measures, with the Treatment, factor and `Role` columns. Writes `analysis/light_summary.csv`, `light_wells.csv` and, for a faceted experiment, their `_facet` variants (any optogenetic experiment; skipped otherwise) |
+| `opto_light_qc` | — | The QC panel's **Light QC tables**: per linkage group, was the light where the licks were? Writes `qc/opto/` (verdicts, intervals, light events, the program as read) and logs each flagged group (any optogenetic experiment; skipped otherwise) |
+| `light_summary` | — | The Analyze panel's **Light tables**: what each chamber's and each well's light did — lit time, Activations, Acclimation, Firmware Events and the Paradigm type's own measures, with the Treatment, factor and `Role` columns. Writes `analysis/light_summary.csv`, `light_wells.csv` and, for a faceted experiment, their `_facet` variants (any optogenetic experiment; skipped otherwise) |
 | `tidy_export` | `kind` | **Event statistics**: one row per individual event, for downstream statistics |
 | `bootstrap` | `metric`, `mode`, `n_boot`, `ci`, `seed` | Bootstrap confidence intervals |
 | `compare` | `metric`, `mode`, `model`, `factors` | ANOVA or linear mixed model across treatments |
@@ -39,7 +40,7 @@ several devices. `group` defaults to the **script's name** — see
 | `transition_matrix` | — | Transition probabilities between bout types |
 | `pdf_report` | `metrics`, `binsize` | The experiment report: cover, quality control, the type's inference figures with statistics, appendices — see [Reports](reports.md) |
 
-**`tidy_export`** — the **Event statistics** button — takes `kind: feeding` (default) or `tasting`, and writes one row per event with its `StartMin`, `Duration`, `Licks`, `AvgIntensity` and `MaxIntensity`, labelled by chamber, well and treatment. The action key keeps its original spelling, so scripts already on disk are unaffected.
+**`tidy_export`** — the Analyze panel's **Event statistics** — takes `kind: feeding` (default) or `tasting`, and writes one row per event with its `StartMin`, `Duration`, `Licks`, `AvgIntensity` and `MaxIntensity`, labelled by chamber, well and treatment. The action key keeps its original spelling, so scripts already on disk are unaffected.
 
 **`bootstrap`** defaults to `metric: PI`, `n_boot: 2000`, `ci: 0.95`, `seed: 0`. The fixed
 seed means repeated runs give identical intervals — change it only if you want to confirm
@@ -66,10 +67,17 @@ parameter for a publication — an effect that appears only at one link gap is n
 
 **`pdf_report`** defaults to `metrics: Licks, Events, MedDuration`.
 
+**`run_qc`, `run_analysis` and `run_plots`** are the Hub's three buttons, so a script that
+names them writes what a click writes. Each runs its set minus the experiment's Selection,
+[`global.omit`](config-structure.md#globalomit), logs what it left out and what does not
+apply, and removes no file. The other actions are the single items, and run whatever the
+Selection says.
+
 ## Plot actions
 
 | Action | Parameters | What it does |
 |---|---|---|
+| `run_plots` | `metric`, `binsize` | The Hub's **Generate plots**: the Plot Set minus `global.omit.plots`, each figure saved into `analysis/` and returned for a tab. `metric` is the Chosen metric's (the binned time course and the dot plot), `binsize` the binned time course's |
 | `plot_feeding_summary` | — | Bar/jitter plot of per-chamber metrics |
 | `plot_binned` | `metric`, `mode`, `binsize` | A metric binned over time, by treatment |
 | `plot_dot` | `metric`, `mode` | Jittered dot plot of a metric by treatment |
@@ -109,7 +117,7 @@ Experiment Script, nor the ones above in a Project Script.
 |---|---|---|
 | `validate_design` | — | Fail the script early when a member contradicts the design |
 | `run_in_experiments` | `script`, `only` | Run a named Experiment Script in every member, or only those listed — the one bridge between the levels |
-| `run_all_analyses` | `skip_analyzed`, `reports` | Basic analysis in every member, optionally skipping current ones and writing each member's PDF report |
+| `run_all_analyses` | `skip_analyzed`, `reports` | Basic analysis in every member, with its QC reports, optionally skipping current ones and writing each member's PDF report. Like the Hub's **Analyze all**, it does not read `global.omit` |
 | `build_combined_analysis` | — | Stack the members' saved summaries into the Combined Analysis, with pooled and mixed-model statistics |
 | `project_report` | `ai_summary` | The Project Report; builds the Combined Analysis first when it is missing — see [Reports](reports.md#the-project-report) |
 | `render_publication_figures` | `format`, `only` | Every figure in `plot_specs.yaml` into `figures/`, SVG by default |

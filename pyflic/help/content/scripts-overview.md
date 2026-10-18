@@ -1,8 +1,10 @@
 # What a script is
 
 A **script** is a named recipe: a list of steps under one name, run from the Hub. Instead
-of clicking Load, then Basic analysis, then three plots every time you revisit an
-experiment, you define that sequence once and run it in a click.
+of clicking through the same panels every time you revisit an experiment, you define that
+sequence once and run it in a click. The Hub's **Run QC**, **Run analysis** and **Generate
+plots** are the steps `run_qc`, `run_analysis` and `run_plots`, so a script can do exactly
+what they do.
 
 Scripts also make an analysis reproducible. The sequence lives in the config alongside the
 parameters that produced the results, so re-running months later gives the same output
@@ -143,11 +145,15 @@ For each step, a parameter is resolved in this order:
 
 1. **The step itself** — `binsize: 30` written on that step
 2. **The script level** — `start:` / `end:` set on the script
-3. **The hub** — whatever the corresponding control currently shows
+3. **The default** — for `start` and `end`, the whole recording; for `binsize`, the Analyze
+   panel's **Bin size** box when the script runs from the Hub, else 30 minutes. The light
+   figure and the Program timeline (10 minutes) and the Progressive Ratio curves (1 minute)
+   keep their own defaults instead.
 
-So a step-level value always wins, and anything you leave blank falls back to the hub. That
-is deliberate: it lets one script be re-run over different time windows by changing a
-spinbox, while the parameters you *did* pin stay pinned.
+So a step-level value always wins. A blank `binsize` follows the Hub's Bin size box, which
+lets one script be re-run at another bin by changing it, while the values you *did* pin stay
+pinned. The Hub has no time-window control: a `start` and `end` left blank on both the step
+and the script mean the whole recording.
 
 ## Time windows
 

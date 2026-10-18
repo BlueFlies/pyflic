@@ -493,7 +493,8 @@ rows (`OptoLightQC`, `OptoUnexplainedFraction`) until you exclude it by hand or 
 
 ## Outputs
 
-Basic analysis and **QC reports** write, into the member's `qc/opto/`:
+Basic analysis and the Hub's **Run QC** (its *Light QC tables* item) write, into the
+member's `qc/opto/`:
 
 | File | One row per | Holds |
 |---|---|---|
@@ -543,7 +544,7 @@ not judged, and a rule figure with the values that break the rule in red. A Para
 Acclimation has a closed-loop subsection for its Acclimation as well, and wells set `On`
 under another Paradigm one of their own. See [the rule figures](plots-catalog.md#rule-figures).
 
-The figure, **Light explained by licks (QC)**, gives each group a row: its lit time per bin,
+The figure, **Light explained by licks**, gives each group a row: its lit time per bin,
 explained and unexplained, and beside it the contact with no lick — the emulated trigger's
 on generations 1 and 2, the light of Activations with no lick or touch on generation 3
 (titled *firmware events, no lick*). The report's cover counts the groups that failed or
@@ -551,9 +552,10 @@ warned, and how many groups raised each flag. A Project's Combined Analysis stac
 member's verdicts into `<project>_LightQC.csv` with `Source` = `Opto`.
 
 The Hub's QC panel has an **Optogenetics** group whenever the loaded member is
-optogenetic: **Opto light QC table**, **Light explained by licks (QC)**, **Program
-timeline** and **Light summary CSV**, with the Progressive Ratio light checks beside them for
-that type. The Script Editor's actions are `opto_light_qc`, `plot_opto_light`,
+optogenetic: **Light QC tables**, **Light explained by licks** and **Program timeline**,
+which **Run QC** writes while they are ticked. A Progressive Ratio member's own light checks
+are in the panel's **Progressive Ratio** group, and the light table is the Analyze panel's
+**Light tables**. The single Script Editor actions are `opto_light_qc`, `plot_opto_light`,
 `plot_program_timeline` and `light_summary`. The
 [QC Viewer](app-qc-viewer.md#the-opto-light-qc-tab) has an **Opto Light QC** tab: the
 verdicts with the rule checks' columns, why each group got its own, the figure per group, a
@@ -564,8 +566,8 @@ exclusion.
 
 The light QC asks whether the light was right. The **light table** asks what it did, and
 puts the answer in the feeding summary's shape so it can be pooled and tested like feeding.
-Every optogenetic experiment of any type gets one. Basic analysis and **Light summary CSV**
-write it into `analysis/`:
+Every optogenetic experiment of any type gets one. Basic analysis and the Hub's **Run
+analysis** (its *Light tables* item) write it into `analysis/`:
 
 | File | One row per |
 |---|---|
@@ -646,8 +648,9 @@ they do. Under any experiment type but Progressive Ratio, which has its own
 Progressive Ratio's question of it: does the paired fly feed differently from a fly that
 got the same light for free?
 
-- **`analysis/yoked_comparison.csv`**, written by basic analysis beside the light table,
-  only when a yoked group exists. One row per yoked group and window (`Whole recording`,
+- **`analysis/yoked_comparison.csv`**, written by basic analysis and by Run analysis's
+  *Paired and yoked comparison* beside the light table, only when a yoked group exists (the
+  Hub greys the box otherwise). One row per yoked group and window (`Whole recording`,
   then each Facet): `DFM`, `Group` (the linkage group), `PairedChamber`, `YokedChambers`,
   the paired chamber's `Treatment` and factor levels, then per metric `Paired<m>`,
   `Yoked<m>` (the mean of its yoked chambers) and `d<m>`, the difference. The metrics are
@@ -693,10 +696,10 @@ A generation-3 recording draws all of this from its own rows. A generation-1 or 
 with a `Program.txt` section gets the band from the program's clock schedule, approximate,
 and the lanes show `OptoCol1` only. With neither there is nothing to draw.
 
-**QC reports** write it to `qc/program/program_timeline_dfm<id>.png` for every DFM that has
+**Run QC** writes it to `qc/program/program_timeline_dfm<id>.png` for every DFM that has
 one, and basic analysis for every generation-3 DFM, in an optogenetic experiment only: a
 recording whose light never came on has nothing for it to show. It appears in the report's Quality
-control section, behind the Hub's **Program timeline** button (`plot_program_timeline`),
+control section, behind the QC panel's **Program timeline** box (`plot_program_timeline`),
 and in the [QC Viewer](app-qc-viewer.md#the-program-sub-tab)'s **Program** sub-tab, with
 each well's state at the end of the loaded range and, on generation 3, the DFM's
 Activations from `opto_light_events.csv`. See

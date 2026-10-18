@@ -349,7 +349,9 @@ runs the two-well pipeline first, then the type's own steps:
 
 The breaking-point ΔLicks figure (`breaking_point_dfm<id>.png`) is **not**
 written by the pipeline. It comes from the `plot_breaking_point` script
-action (Hub: **Breaking-point plots**) and appears in the experiment report.
+action, from the Hub's Plots panel item **Breaking-point plots**
+(`pr_breaking_point_plots`, run by *Generate plots*), and appears in the
+experiment report.
 
 ## QC protocols
 
@@ -724,19 +726,20 @@ Report says to re-run it.
 Script actions, all gated `requires: progressive_ratio` (`_PR_GATED` in
 [`runner.py`](../pyflic/base/script_editor/runner.py#L22)):
 
-| Action | Writes | Hub button |
+| Action | Writes | Hub item (ADR-0018: a checkbox, run by the panel's button) |
 |---|---|---|
-| `paired_yoked_diff` | `paired_yoked_diff.csv` | Analyze → *Paired − yoked difference CSV* |
-| `breaking_point` | `pr_breaking_point.csv`, logs `breaking_point_lines()` | Analyze → *Breaking point CSV* |
-| `pr_light_qc` | `pr_light_qc.csv`, `pr_light_events.csv`, logs the flagged groups | QC → *Light QC table* |
-| `plot_pr_light_events` | `pr_light_events_dfm<id>.png` | QC → *Licks per light event (QC)* |
-| `plot_pr_resting_level` | `pr_resting_level_dfm<id>.png` | QC → *Sucrose Well resting level (QC)* |
-| `plot_pr_cumulative_diff` (`binsize`) | `pr_cumulative_diff.csv` + `.png` | Plots → *Cumulative difference curve* |
-| `plot_pr_cumulative_licks` (`binsize`) | `pr_cumulative_licks_dfm<id>.png` | Plots → *Training-aligned traces (QC)* |
-| `plot_pr_still_responding` | `pr_still_responding.png` | Plots → *Still-responding curve* |
-| `plot_breaking_point` | `breaking_point_dfm<id>.png` | Plots → *Breaking-point plots* |
+| `paired_yoked_diff` | `paired_yoked_diff.csv` | Analyze → *Paired-Yoked Difference* (`paired_yoked_diff`) |
+| `breaking_point` | `pr_breaking_point.csv`, logs `breaking_point_lines()` | Analyze → *Breaking point* (`breaking_point`) |
+| `pr_light_qc` | `pr_light_qc.csv`, `pr_light_events.csv`, logs the flagged groups | QC → *Light QC table* (`pr_light_qc`) |
+| `plot_pr_light_events` | `pr_light_events_dfm<id>.png` | QC → *Licks per light event* (`pr_light_event_figures`) |
+| `plot_pr_resting_level` | `pr_resting_level_dfm<id>.png` | QC → *Sucrose Well resting level* (`pr_resting_level_figures`) |
+| `plot_pr_cumulative_diff` (`binsize`) | `pr_cumulative_diff.csv` + `.png` | Analyze → *Cumulative difference table* (`cumulative_diff`) and Plots → *Cumulative difference curve* (`pr_cumulative_diff_plot`), both at 1 minute |
+| `plot_pr_cumulative_licks` (`binsize`) | `pr_cumulative_licks_dfm<id>.png` | Plots → *Training-aligned traces* (`pr_cumulative_licks`), at 1 minute |
+| `plot_pr_still_responding` | `pr_still_responding.png` | Plots → *Still-responding curve* (`pr_still_responding`) |
+| `plot_breaking_point` | `breaking_point_dfm<id>.png` | Plots → *Breaking-point plots* (`pr_breaking_point_plots`) |
 
-The Hub shows these groups only while a Progressive Ratio member is loaded.
+The Hub offers these items, in each panel's *Progressive Ratio* group, only
+while a Progressive Ratio member is loaded.
 All the constants above have fields in the Project Design dialog (the
 Design, light QC and breaking point sections).
 

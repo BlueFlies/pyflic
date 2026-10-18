@@ -1121,10 +1121,11 @@ class AnalysisHubWindow(QMainWindow):
         except Exception as err:  # noqa: BLE001 - a message, not a traceback
             self._log_issue(f"[selection] {item.label}: not saved — {err}")
             QMessageBox.warning(self, "Selection not saved", str(err))
-            ## The box shows a choice nothing recorded; rebuild it from the
-            ## Selection.  Deferred: this runs inside the box's own toggled
-            ## signal, and the rebuild deletes the box.
-            QTimer.singleShot(0, lambda k=kind: self._rebuild_selection(k))
+            ## The box shows a choice nothing recorded; rebuild the panels
+            ## from the Selection.  Deferred: this runs inside the box's own
+            ## toggled signal, and the rebuild deletes the box.  A bound
+            ## method, so the timer dies with the window.
+            QTimer.singleShot(0, self._rebuild_selection)
             return
         self.log.append_line(self._selection_line(kind, item, included, path))
 

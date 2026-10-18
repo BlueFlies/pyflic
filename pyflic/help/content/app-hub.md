@@ -47,16 +47,16 @@ the fix — it goes inert as well as dimmed, and its hint names where the fix is
 "Open Project" — the controls that fix the empty state — so a closed-looking tile there
 would be pointing away from the only way forward.
 
-**Help is on every panel.** Each panel's cards carry a `?` beside their title, and the
-type-specific groups (*Progressive Ratio only*, *Hedonic only*, *Optogenetics*) carry their own, opening
-this window at the topic for that area. The `?` at the right-hand end of the output area,
-beside **Clear Errors**, opens help at the start whatever is open, and **F1** opens this
-topic.
+**Help is on every panel.** Each panel's cards carry a `?` beside their title, and each group
+box of the QC, Analyze and Plots panels (*QC reports*, *Optogenetics*, *Progressive Ratio*,
+*Chosen metric*, …) carries its own, opening this window at the topic for that area. The `?`
+at the right-hand end of the output area, beside **Clear Errors**, opens help at the start
+whatever is open, and **F1** opens this topic.
 
 **One thing is open at a time.** Expanding the Experiment group closes a container
 panel and vice versa; a click in the background closes the open panel *and* folds the
-group; Esc closes only the panel. The subtiles' panels are narrow columns of buttons,
-and their status lives in each subtile's tooltip.
+group; Esc closes only the panel. The subtiles' panels are narrow columns — QC, Analyze and
+Plots of checkboxes over one button — and their status lives in each subtile's tooltip.
 
 ## Project-first
 
@@ -167,7 +167,13 @@ one and open it; an unfiled recording offers to file itself.
 
 Appears when a Project is open, in the order the work happens:
 
-- **Analyze all** / **Combine** / **Create report** — the project-level actions.
+- **Analyze all** runs each member's QC reports, Basic analysis and experiment report, as
+  before, **whatever the QC, Analyze and Plots panels' ticks**: it does not read the
+  Selection, and neither does a Batch Run's `run_all_analyses` step. It removes no earlier
+  output. To run a member's ticked items, use its own panels, or a script's `run_qc`,
+  `run_analysis` and `run_plots` steps.
+- **Combine** / **Create report** — pool the members' summaries, and write the Project
+  Report.
 - **View reports** — opens the Project Report and each member's own report
   (`analysis/experiment_report.pdf`). See [Reports](reports.md).
 - **Apply exclusion sheet…** — see [Excluding chambers in bulk](concepts-exclusions.md).
@@ -181,82 +187,129 @@ Appears when a Project is open, in the order the work happens:
   act on: they need no loaded member, and they are available the moment a Project is
   open. See [Scripts](scripts-overview.md).
 
-## Analyze panel
+## The ticks are configuration
 
-Actions on the **loaded member**: basic analysis, the summary CSVs, the faceted
-summary, binned CSVs, **Event statistics** (one row per individual feeding or tasting
-event — its start minute, duration, licks and intensity — written by the `tidy_export`
-action to `analysis*/tidy_<kind>_events.csv`), and the member's PDF report
-([Reports](reports.md)). Basic
-analysis deliberately skips QC — that is the QC panel's job — but it does apply the
-Design's auto-removal cutoffs, once, before writing anything.
+The QC, Analyze and Plots panels each list a set as checkboxes, in group boxes, over one
+button: the **QC Set** over **Run QC**, the **Analysis Set** over **Run analysis**, the
+**Plot Set** over **Generate plots**. A ticked box is included in every run. Every box has a
+tooltip saying what the item writes.
 
-A **Progressive Ratio only** group appears while such a member is loaded: **Paired −
-yoked difference CSV** writes `paired_yoked_diff.csv`, and **Breaking point CSV** writes
-`pr_breaking_point.csv` and logs each group's breaking point with its sensitivity to the
-gap. The type's light QC is on the QC panel.
+**A tick is written at once**, and the log says where, in one line:
 
-The **Bin size** box sets the bin of the binned CSV, the binned plots, the PDF report, and
-the two Progressive Ratio curve figures (cumulative difference, training-aligned traces).
-Those two default to 1-minute bins in a script and in basic analysis; from the Hub they
-follow this box, so set it to 1 to match. See
-[Progressive Ratio experiments](concepts-progressive-ratio.md#outputs).
+- for a standalone experiment, into its `flic_config.yaml`, under `global.omit`;
+- for a member of a Project, into the Project's `project.yaml`, under `design.global.omit`.
+  A Project's members are analysed alike, so **a tick on one member applies to every
+  member**, and the log line says so. A Project with no `design: global:` section has
+  nowhere to keep it: the Hub says so and puts the box back. Write the design first
+  (**Project design…**).
+
+What is stored is what is left *out*, so a config nobody touched runs everything, and an
+item a later pyflic adds is included until you untick it. A script's `run_qc`,
+`run_analysis` and `run_plots` steps read the same lists, so a click and a script write the
+same files. See [`global.omit`](config-structure.md#globalomit).
+
+**A missing box** is one the member cannot have: two-well items on a single-well layout,
+optogenetic items on a run without light, a type's items under another type. A group with
+none left is not shown. One quiet line under the groups names what is not offered; hover it
+for the reasons.
+
+**A greyed box** is one the design allows but the data cannot answer: the Program timeline
+with no `Program.txt` and no firmware 4.0.0 data, the paired and yoked comparison with no
+linkage group lighting a Yoked chamber, the Paired-Yoked Difference with every chamber group
+solo. Its tooltip gives the reason, and a run writes nothing for it.
+
+**A run states what it left out.** The log, and for Run analysis `summary.txt`, list each
+item unticked and, separately, each that does not apply. **No run removes a file**: an item
+left out keeps whatever an earlier run wrote.
+
+The panels follow the member: they are rebuilt when a member loads, unloads or reloads. The
+Project panel's **Analyze all** and a Batch Run do not read the ticks (see
+[The Analysis card](#the-analysis-card)).
 
 ## QC panel
 
-Everything QC for the loaded member, in the order the work happens. **QC reports**
-writes the per-DFM bundle into `qc/`: the integrity report, data breaks, the
-simultaneous-feeding and bleeding matrices (two-well), and the **Raw Signal**,
-**Baselined**, and **Cumulative Licks** signal plots. **Open QC Viewer** opens the
-interactive app on the already-loaded member — tables, plots, and per-chamber
-exclusions saved to `remove_chambers.csv` (see [QC Viewer](app-qc-viewer.md)).
-**View QC plots** opens the saved signal plots, and the saved Program timelines, as
-output-area tabs, one per DFM and kind, reusing tabs on a second look. **Open qc folder**
-shows the files themselves.
+Two cards. **QC** lists the QC Set for the loaded member over **Run QC**, which writes each
+ticked item into the member's `qc/` folder (the Progressive Ratio light QC into
+`analysis/`). The QC is computed once per run and written item by item.
 
-An **Optogenetics** group appears while the loaded member is optogenetic — whatever its
-type — or a Progressive Ratio member:
+| Group | Item | Writes | Offered for |
+|---|---|---|---|
+| QC reports | Data integrity | `qc/integrity/DFM<n>_integrity_report.csv` and `.txt`: rows, time span, lost and repeated records and, on firmware 4.0.0, the Paradigm sequence and restarts | every member |
+| | Data breaks | `qc/data_breaks/DFM<n>_data_breaks.csv`, for a DFM that has a gap | every member |
+| | Raw signal plots | `qc/raw_signal/DFM<n>_raw.png` | every member |
+| | Baselined signal plots | `qc/baselined/DFM<n>_baselined.png`, with the thresholds drawn | every member |
+| | Cumulative licks plots | `qc/cumulative_licks/DFM<n>_cumulative_licks.png` | every member |
+| | Simultaneous feeding | `qc/simultaneous_feeding/DFM<n>_simultaneous_feeding_matrix.csv` | two-well |
+| | Bleeding between wells | `qc/bleeding/DFM<n>_bleeding_matrix.csv` and `DFM<n>_bleeding_alldata.csv` | two-well |
+| Optogenetics | Light QC tables | `qc/opto/`: the verdicts, the intervals, every light event and the program as read; the log names every linkage group that failed or warned | optogenetic |
+| | Light explained by licks | `qc/opto/opto_light_dfm<n>.png`, the figure behind the verdict | optogenetic |
+| | Program timeline | `qc/program/program_timeline_dfm<n>.png`: the Program Intervals by Paradigm, each well's Acclimation, Activations and light | optogenetic; greyed when no DFM has a `Program.txt` section or firmware 4.0.0 data |
+| Progressive Ratio | Light QC table | `analysis/pr_light_qc.csv` and `pr_light_events.csv`: did the paired fly earn its light? The log names every chamber group that failed or warned | Progressive Ratio |
+| | Licks per light event | `analysis/pr_light_events_dfm<n>.png` | Progressive Ratio |
+| | Sucrose Well resting level | `analysis/pr_resting_level_dfm<n>.png` | Progressive Ratio |
 
-- **Opto light QC table** — was the light where the licks were? Writes `qc/opto/` and logs
-  every linkage group that failed or warned.
-- **Light explained by licks (QC)** — the per-DFM figure behind the verdict.
-- **Program timeline** — per DFM, what the program ran and what each well did: the Program
-  Intervals by Paradigm, each well's Acclimation and Activations, and the light it received.
-  Writes `qc/program/`. It needs firmware 4.0.0 data or a `data/Program.txt`, and uses the
-  Analyze panel's **Bin size** for its light strip. See
-  [Program timeline](plots-catalog.md#program-timeline).
-- **Light summary CSV** — the light table: per chamber (`light_summary.csv`) and per well
-  (`light_wells.csv`), lit time, Activations, Acclimation, Firmware Events and the Paradigm
-  type's own measures, with the Treatment, factor and Role columns, written into
-  `analysis/` (and per Facet when faceted). Basic analysis writes it too.
+The light figures and the Program timeline are drawn in 10-minute bins, whatever the
+Analyze panel's Bin size. See [Optogenetic experiments](concepts-optogenetics.md),
+[Program timeline](plots-catalog.md#program-timeline) and
+[Light QC](concepts-progressive-ratio.md#light-qc).
 
-See [Optogenetic experiments](concepts-optogenetics.md).
+**View** holds the three buttons that run nothing:
 
-For a Progressive Ratio member the same group holds that type's own check — did the paired
-fly earn its light? **Light QC table** writes `pr_light_qc.csv` and `pr_light_events.csv`
-and logs every chamber group that failed or warned; **Licks per light event (QC)** and
-**Sucrose Well resting level (QC)** draw the two per-DFM figures behind the verdict. See
-[Light QC](concepts-progressive-ratio.md#light-qc) and
-[Plot catalogue](plots-catalog.md#did-the-paired-fly-earn-its-light-qc).
+- **Open QC Viewer** opens the interactive app on the already-loaded member — tables,
+  plots, and per-chamber exclusions saved to `remove_chambers.csv` (see
+  [QC Viewer](app-qc-viewer.md)).
+- **View QC plots** opens the saved signal plots, the light QC's figure and the Program
+  timelines as output-area tabs, one per DFM and kind, reusing tabs on a second look.
+- **Open qc folder** shows the files themselves.
+
+## Analyze panel
+
+At the top, the **Bin size (min)** box. The binned summary, the experiment report's time
+courses and the Plots panel's Binned time course use it, and nothing else: the light figures
+and the Program timeline keep 10-minute bins, and the Progressive Ratio curves 1-minute
+bins. See [Progressive Ratio experiments](concepts-progressive-ratio.md#outputs).
+
+Then the Analysis Set, over **Run analysis**. **The core always runs** and has no checkbox,
+because every other item reads it: the design's auto-removal and `removed_chambers.csv`,
+`summary.txt` (with the QC summary), `feeding_summary.csv` and, with Facets,
+`feeding_summary_facet.csv`. Run analysis writes the core, then each ticked item, the report
+last.
+
+| Group | Item | Writes into `analysis/` | Offered for |
+|---|---|---|---|
+| Analyses | Binned summary | `binned_feeding_summary.csv`, in bins of the Bin size | every member |
+| | Event statistics | `tidy_feeding_events.csv`: one row per feeding event — its start minute, duration, licks and intensity | every member |
+| Optogenetics | Light tables | `light_summary.csv` per chamber and `light_wells.csv` per well — lit time, Activations, Acclimation, Firmware Events and the Paradigm type's own measures — and, with Facets, their `_facet` variants | optogenetic |
+| | Paired and yoked comparison | `yoked_comparison.csv` | optogenetic, not Progressive Ratio; greyed when no linkage group lights a Yoked chamber |
+| Progressive Ratio | Paired-Yoked Difference | `paired_yoked_diff.csv` | Progressive Ratio; greyed when every chamber group is solo |
+| | Cumulative difference table | `pr_cumulative_diff.csv`, in 1-minute bins | Progressive Ratio |
+| | Breaking point | `pr_breaking_point.csv`, and each group's breaking point with its sensitivity to the gap in the log | Progressive Ratio |
+| Hedonic | Weighted duration summary | `treatment_means.csv` | Hedonic |
+| Report | Experiment report (PDF) | `experiment_report.pdf` ([Reports](reports.md)) | every member |
+
+The Analyze panel's old buttons, one per output, are gone; their script actions remain (see
+[Script actions](scripts-actions.md)), and *Basic analysis* is still the `basic_analysis`
+action and what **Analyze all** runs.
 
 ## Plots panel
 
-Quick figures for the loaded member, in three groups — because the buttons are three
-kinds of thing and a flat list said they were one.
+Quick figures for the loaded member, over **Generate plots**, which saves each ticked figure
+into `analysis/` and opens it in a tab, replacing the tab of the same title.
 
-**Chosen metric** holds the **Metric** dropdown and the only two figures it steers:
-**Binned time course** and **Dot plot**. Change the metric and nothing outside this group
-changes.
+| Group | Item | Saves into `analysis/` | Offered for |
+|---|---|---|---|
+| Figures | Feeding summary | `feeding_summary.png` | every member |
+| | Well A vs B | `well_comparison_MedDuration.png`: median bout duration at well A beside well B | two-well |
+| Chosen metric | Binned time course | `binned_<metric>.png`, in bins of the Bin size | every member |
+| | Dot plot | `dot_<metric>.png`, one point per chamber (per Chamber Group under Progressive Ratio) | every member |
+| Progressive Ratio | Cumulative difference curve | `pr_cumulative_diff.png` | Progressive Ratio |
+| | Training-aligned traces | `pr_cumulative_licks_dfm<n>.png` | Progressive Ratio |
+| | Still-responding curve | `pr_still_responding.png` | Progressive Ratio |
+| | Breaking-point plots | `breaking_point_dfm<n>.png` | Progressive Ratio |
+| Hedonic | Hedonic feeding plot | `hedonic_feeding_plot.png` | Hedonic |
 
-**Standard figures** — **Feeding summary** and **Well A vs B** — draw their own metrics;
-the Metric box does not reach them. **Well A vs B** is offered only on a two-well layout.
-
-**Type-specific groups** are titled with the Experiment Type they belong to
-(*Progressive Ratio only*, *Hedonic only*) and appear only while a member of that type
-is loaded, so the card never offers a button whose only possible answer is "this requires
-a different Experiment Type". The Progressive Ratio group holds the cumulative difference
-curve, the training-aligned traces, the still-responding curve and the breaking-point
-plots; its light QC figures are on the QC panel.
+The **Metric** menu sits inside the *Chosen metric* group because it steers those two
+figures and no other. The Progressive Ratio curves keep 1-minute bins.
 
 The panel does not repeat which member is loaded: the Experiment tile it hangs from
 already says so, as does the status strip.

@@ -199,29 +199,40 @@ requires.
 
 For each member (experiment):
 
-1. **Hub → Analyze → Basic analysis.** This runs everything below and
-   writes the tables and figures into the member's `analysis/` folder.
-2. **Hub → Analyze → PDF report**, or `pyflic report <member folder>`. This writes
-   the experiment report.
+1. **Hub → QC → Run QC.** This writes the per-DFM QC bundle and the
+   Progressive Ratio light QC (section 5.2).
+2. **Hub → Analyze → Run analysis.** This writes the summaries and the
+   Progressive Ratio tables below into the member's `analysis/` folder, and
+   the experiment report last (or `pyflic report <member folder>`).
+3. **Hub → Plots → Generate plots.** This draws the figures (section 6) and
+   saves them into `analysis/`.
+
+Each panel lists its outputs as checkboxes, every one ticked to begin with;
+untick what you do not need, and the choice is saved in the Project's design
+for every member. The Project panel's **Analyze all** runs every member's
+QC, Basic analysis and report in one go, whatever the ticks.
 
 For the Project:
 
-3. **Project panel → Build combined analysis.** This stacks every member's
+4. **Project panel → Build combined analysis.** This stacks every member's
    tables and runs the pooled statistics (`<project>_Stats.txt`).
-4. **Project panel → Create report**, or `pyflic report <project folder>`.
+5. **Project panel → Create report**, or `pyflic report <project folder>`.
    This writes the Project Report.
 
 Every step is also a Script Editor action, so a Project Script or
-`pyflic batch` can run it unattended. **Re-run basic analysis after changing
+`pyflic batch` can run it unattended. **Re-run the analysis after changing
 any setting.** Members analysed before a setting changed keep their old
 numbers until you do.
 
-**Check each member's data before its results.** Basic analysis does not
+**Check each member's data before its results.** Run analysis does not
 write the per-DFM QC bundle (integrity, data breaks, crosstalk and the
-signal plots). **Hub → QC → QC reports** writes it, and **Open QC Viewer**
+signal plots). **Hub → QC → Run QC** writes it, and **Open QC Viewer**
 shows it. [Checking your data](qc-user-guide.md) explains every check.
 
 ### What basic analysis does, in order
+
+Basic analysis is what **Analyze all** and a script's `basic_analysis` run;
+the Hub's three buttons write the same outputs between them.
 
 1. **Training.** It finds each group's training end (section 5.1).
 2. **Quality control and exclusions.** It checks training and light for
@@ -342,8 +353,8 @@ This type owns its phases, so its design never states `facet_cutoffs` or
 
 **Choosing `pr_break_gap_min`.** The breaking point moves with this value,
 so pyflic always shows every group's breaking point at 60, 120 and 240
-minutes beside your setting (in `summary.txt` and the *Breaking point CSV*
-log). Look at that table **before** you settle on a gap:
+minutes beside your setting (in `summary.txt` and the log of the Analyze
+panel's *Breaking point*). Look at that table **before** you settle on a gap:
 
 - If the ranking of treatments is the same at every gap, the result is
   robust.
@@ -369,7 +380,9 @@ will be censored.
 
 The cumulative-curve actions (*Cumulative difference curve*,
 *Training-aligned traces*) take a **bin size**, default 1 minute. It changes
-only the smoothness of the curve, not any statistic.
+only the smoothness of the curve, not any statistic. The Hub always draws
+them, and writes the cumulative difference table, at 1 minute, whatever its
+Bin size box says.
 
 ---
 
@@ -532,7 +545,7 @@ group, because the firmware keeps its rules exactly. A group the general
 check fails is flagged, not removed,
 unless you switch on `exclude_failed_opto_chambers`. Its results are in
 `qc/opto/`, an *Optogenetic light QC* section of `summary.txt` and of the
-report, and the **Light explained by licks (QC)** figure. The QC Viewer's
+report, and the **Light explained by licks** figure. The QC Viewer's
 **Opto Light QC** tab shows the same verdicts group by group, says why each
 group got its own, recomputes them when you change a detection parameter,
 and can tick a failed group's chambers for exclusion. Every check it makes,
@@ -770,8 +783,8 @@ responding when their window ended. The legend gives each treatment's *n*.
 - This is the figure that treats censoring correctly. When many flies are
   censored, trust it over the dot plot.
 
-**Breaking-point plots** (`breaking_point_dfm<id>.png`, from the Hub's
-**Breaking-point plots** button and in the experiment report). One panel per
+**Breaking-point plots** (`breaking_point_dfm<id>.png`, from the Plots
+panel's **Breaking-point plots** and in the experiment report). One panel per
 chamber, both roles of a pair, showing the licks between successive light
 onsets over time since training end.
 
@@ -980,7 +993,7 @@ the same device, or in the same recording, as independent.
 | Almost every breaking point is censored (`n+`) | the Test window is short compared with `pr_break_gap_min`, or a DFM restart cut it short | record longer, or reconsider the gap; don't shorten the gap to get a result |
 | "the design has no yoked controls" | every chamber group is a single chamber | nothing: there is no paired − yoked difference to take; the breaking point is the result. If the rig had yoked partners, state `paired_chambers` or check the program's linkage |
 | A group is missing from the difference table | one of its two chambers was removed, or it is a single chamber | see `removed_chambers.csv` |
-| The Project Report says a member has no breaking point table | that member was analysed with an older pyflic | re-run its basic analysis |
+| The Project Report says a member has no breaking point table | that member was analysed with an older pyflic | re-run its analysis |
 | Loading fails on `paired_chambers` | missing, two chambers from one pair, or a pair left out | name exactly one chamber from each of 1–2, 3–4, 5–6; or, for a design without yoked controls, write `chamber_groups: single`; or copy `Program.txt` into `data/` so its linkage gives the groups |
 | "'paired_chambers' cannot be stated with 'chamber_groups: single'" | both keys on one DFM | keep the one that describes the rig |
 | "chamber groups taken from Program.txt's linkage" in `summary.txt` | neither key was stated, and the program's linkage gave the groups | check that the groups it lists are the rig's |

@@ -112,8 +112,8 @@ class Action:
 
 _START = Param(
     key="start", label="Start minute", type="float",
-    note="Time window start (minutes). Leave blank to inherit from the "
-         "script-level value, or from the hub's Start Min spinbox.",
+    note="Time window start (minutes). Leave blank to inherit the "
+         "script-level value, or, with none, the whole recording.",
     default=None, unit="min", inheritable=True,
 )
 _END = Param(
