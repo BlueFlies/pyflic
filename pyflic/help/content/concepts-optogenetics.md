@@ -493,7 +493,7 @@ rows (`OptoLightQC`, `OptoUnexplainedFraction`) until you exclude it by hand or 
 
 ## Outputs
 
-Basic analysis and the Hub's **Run QC** (its *Light QC tables* item) write, into the
+Basic analysis and the Hub's **Run QC** (its *Opto light QC tables* item) write, into the
 member's `qc/opto/`:
 
 | File | One row per | Holds |
@@ -552,7 +552,7 @@ warned, and how many groups raised each flag. A Project's Combined Analysis stac
 member's verdicts into `<project>_LightQC.csv` with `Source` = `Opto`.
 
 The Hub's QC panel has an **Optogenetics** group whenever the loaded member is
-optogenetic: **Light QC tables**, **Light explained by licks** and **Program timeline**,
+optogenetic: **Opto light QC tables**, **Light explained by licks** and **Program timeline**,
 which **Run QC** writes while they are ticked. A Progressive Ratio member's own light checks
 are in the panel's **Progressive Ratio** group, and the light table is the Analyze panel's
 **Light tables**. The single Script Editor actions are `opto_light_qc`, `plot_opto_light`,

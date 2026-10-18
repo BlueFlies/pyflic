@@ -124,7 +124,7 @@ QC_SET: tuple[Item, ...] = (
         "qc/bleeding/DFM<id>_bleeding_matrix.csv and DFM<id>_bleeding_alldata.csv.",
         TWO_WELL,
         "qc/bleeding/DFM*_bleeding_matrix.csv", "qc/bleeding/DFM*_bleeding_alldata.csv"),
-    _qc("opto_light_qc", "Optogenetics", "Light QC tables",
+    _qc("opto_light_qc", "Optogenetics", "Opto light QC tables",
         "Per linkage group: was the light where the licks were?  Writes qc/opto/"
         "opto_light_qc.csv, opto_light_intervals.csv, opto_light_events.csv and "
         "opto_program.csv, and logs every flagged group.", OPTOGENETIC,

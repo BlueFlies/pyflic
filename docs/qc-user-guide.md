@@ -781,7 +781,7 @@ experiments* in the help.
 
 **On the Hub**, the QC panel shows an **Optogenetics** group whenever the
 loaded member is optogenetic, and **Run QC** writes what is ticked in it:
-**Light QC tables** writes the tables and logs every flagged group, **Light
+**Opto light QC tables** writes the tables and logs every flagged group, **Light
 explained by licks** draws the figure, and **Program timeline** draws section
 6.8's figure (greyed when no DFM has one to draw). The light table is the
 Analyze panel's **Light tables**.

@@ -241,7 +241,7 @@ ticked item into the member's `qc/` folder (the Progressive Ratio light QC into
 | | Cumulative licks plots | `qc/cumulative_licks/DFM<n>_cumulative_licks.png` | every member |
 | | Simultaneous feeding | `qc/simultaneous_feeding/DFM<n>_simultaneous_feeding_matrix.csv` | two-well |
 | | Bleeding between wells | `qc/bleeding/DFM<n>_bleeding_matrix.csv` and `DFM<n>_bleeding_alldata.csv` | two-well |
-| Optogenetics | Light QC tables | `qc/opto/`: the verdicts, the intervals, every light event and the program as read; the log names every linkage group that failed or warned | optogenetic |
+| Optogenetics | Opto light QC tables | `qc/opto/`: the verdicts, the intervals, every light event and the program as read; the log names every linkage group that failed or warned | optogenetic |
 | | Light explained by licks | `qc/opto/opto_light_dfm<n>.png`, the figure behind the verdict | optogenetic |
 | | Program timeline | `qc/program/program_timeline_dfm<n>.png`: the Program Intervals by Paradigm, each well's Acclimation, Activations and light | optogenetic; greyed when no DFM has a `Program.txt` section or firmware 4.0.0 data |
 | Progressive Ratio | Light QC table | `analysis/pr_light_qc.csv` and `pr_light_events.csv`: did the paired fly earn its light? The log names every chamber group that failed or warned | Progressive Ratio |

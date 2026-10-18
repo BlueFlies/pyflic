@@ -81,7 +81,7 @@ writes, as the code names them. A `*` is a DFM id or a metric.
 | | `cumulative_licks` | Cumulative licks plots | | `qc/cumulative_licks/DFM*_cumulative_licks.png` |
 | | `simultaneous_feeding` | Simultaneous feeding | two-well | `qc/simultaneous_feeding/DFM*_simultaneous_feeding_matrix.csv` |
 | | `bleeding` | Bleeding between wells | two-well | `qc/bleeding/DFM*_bleeding_matrix.csv`, `DFM*_bleeding_alldata.csv` |
-| Optogenetics | `opto_light_qc` | Light QC tables | optogenetic | `qc/opto/opto_light_qc.csv`, `opto_light_intervals.csv`, `opto_light_events.csv`, `opto_program.csv` |
+| Optogenetics | `opto_light_qc` | Opto light QC tables | optogenetic | `qc/opto/opto_light_qc.csv`, `opto_light_intervals.csv`, `opto_light_events.csv`, `opto_program.csv` |
 | | `opto_light_figures` | Light explained by licks | optogenetic | `qc/opto/opto_light_dfm*.png` |
 | | `program_timeline` | Program timeline | optogenetic; greyed when no DFM has a timeline | `qc/program/` |
 | Progressive Ratio | `pr_light_qc` | Light QC table | Progressive Ratio | `analysis/pr_light_qc.csv`, `analysis/pr_light_events.csv` |
