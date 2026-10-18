@@ -483,10 +483,10 @@ class Experiment:
         for n, (dfm_id, r) in enumerate(qc.items(), 1):
             print(f"  DFM {dfm_id}  ({n}/{n_total})...", flush=True)
 
-            ## One row of numbers; the gaps and the Paradigm sequence are lists,
-            ## and the integrity text lists them.
+            ## One row of numbers; the gaps, the Paradigm sequence and the
+            ## restarts are lists, and the integrity text lists them.
             integrity = {k: v for k, v in r["integrity"].items()
-                         if k not in ("lost_record_gaps", "paradigm_sequence")}
+                         if k not in ("lost_record_gaps", "paradigm_sequence", "restarts")}
             pd.DataFrame([integrity]).to_csv(
                 dir_integrity / f"DFM{dfm_id}_integrity_report.csv", index=False
             )

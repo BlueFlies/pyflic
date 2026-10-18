@@ -20,6 +20,9 @@ Two writers exist, and both are read:
 
 :func:`read` turns the file into a frame the integrity report and the QC
 Viewer list; a missing file is an empty frame, never an error.
+:func:`record_messages` picks out what PyMCU said about a DFM's records: the
+records lost and the restarts, which the integrity report checks against the
+data's ``Index``.
 """
 
 from __future__ import annotations
@@ -40,10 +43,24 @@ MSG_ERROR = "Error"
 #: The ``DFM`` of the MCU's own messages.
 MCU_ID = 0
 
+#: :func:`record_messages`' kinds: records that never arrived, a DFM that
+#: restarted, and the records it did not record while it restarted.
+LOST_RECORDS, DFM_RESTARTED, RESTART_GAP = "lost records", "restarted", "restart gap"
+#: The columns :func:`record_messages` returns.
+RECORD_MESSAGE_COLUMNS: tuple[str, ...] = ("DFM", "Time", "Kind", "First", "Last", "Records", "Message")
+
 _HEAD_FIELDS = 5            # DFM, Date, Time, Millisecond, Sample
 #: The ending PyMCU gives a message it folded repeats into (``Message.Text``).
 _REPEATED = re.compile(r"\(repeated (\d+) more times?, the last at [0-9:]+\)\s*$")
 _TIME_FORMATS = ("%m/%d/%Y %H:%M:%S", "%m/%d/%Y %I:%M:%S %p", "%Y-%m-%d %H:%M:%S")
+#: PyMCU's wording (``DFM._ReportLostRecords``, ``_RecordRange``, ``_StartRestart``,
+#: ``_FinishRestart``), and the lost-records wording of builds before 10/17/2026.
+_LOST = re.compile(r"Lost (\d+) records? \([0-9.]+ s\): (?:Index (\d+)(?: to (\d+))?|"
+                   r"\d+ to \d+ \(counted from the DFM's restart\)), from ")
+_SKIPPED = re.compile(r"\((\d+)\) Skipped index: \((\d+)\)")
+_RESTARTED = re.compile(r"DFM \d+ restarted: its record count went back from \d+ to \d+\.")
+_RESTART_GAP = re.compile(r"DFM \d+ recorded nothing for about \d+ s while it restarted: "
+                          r"Index (\d+) to (\d+) are missing\.")
 
 
 def find_messages(data_dir: str | Path) -> Path | None:
@@ -165,6 +182,68 @@ def errors(frame: pd.DataFrame) -> pd.DataFrame:
         return frame
     keep = frame["MsgType"].astype(str).str.strip().str.lower() == MSG_ERROR.lower()
     return frame[keep.to_numpy(dtype=bool)].reset_index(drop=True)
+
+
+def _record_message(message: str) -> tuple[str, int | None, int | None, int | None] | None:
+    """``(kind, first, last, records)`` of one message, or ``None``."""
+    text = message.strip()
+    found = _LOST.match(text)
+    if found:
+        records = int(found.group(1))
+        if found.group(2) is None:            # counted from the DFM's restart: no Index yet
+            return LOST_RECORDS, None, None, records
+        first = int(found.group(2))
+        return LOST_RECORDS, first, int(found.group(3) or first), records
+    found = _SKIPPED.match(text)
+    if found:
+        # "(n) Skipped index: (m)": the DFM sent record n after record m.
+        arrived, before = int(found.group(1)), int(found.group(2))
+        if arrived - before - 1 <= 0:
+            return None
+        return LOST_RECORDS, before + 1, arrived - 1, arrived - before - 1
+    if _RESTARTED.match(text):
+        return DFM_RESTARTED, None, None, None
+    found = _RESTART_GAP.match(text)
+    if found:
+        first, last = int(found.group(1)), int(found.group(2))
+        return RESTART_GAP, first, last, last - first + 1
+    return None
+
+
+def record_messages(frame: pd.DataFrame) -> pd.DataFrame:
+    """PyMCU's messages about a DFM's records in *frame* (:func:`read`), one
+    row each, in file order, with :data:`RECORD_MESSAGE_COLUMNS`:
+
+    * :data:`LOST_RECORDS`: "Lost N records (… s): Index a to b, from
+      HH:MM:SS." (PyMCU from 10/17/2026), or "(n) Skipped index: (m)"
+      (earlier builds): records the DFM wrote that never reached the file;
+    * :data:`DFM_RESTARTED`: "DFM d restarted: its record count went back
+      from m to 1. …" (``DFM._StartRestart``);
+    * :data:`RESTART_GAP`: "DFM d recorded nothing for about s s while it
+      restarted: Index a to b are missing." (``DFM._FinishRestart``), which
+      PyMCU writes after the first when the restart lost records.
+
+    ``First`` and ``Last`` are the data file's ``Index`` range and
+    ``Records`` how many records it holds; they are ``NA`` where the message
+    gives none (a restart, or records counted from a restart before PyMCU
+    knew the new ``Index``).  A folded line counts once: its repeats have the
+    same text, so the same records.
+    """
+    columns = list(RECORD_MESSAGE_COLUMNS)
+    rows = []
+    if not frame.empty:
+        for row in frame.itertuples(index=False):
+            found = _record_message(str(row.Message))
+            if found is None:
+                continue
+            kind, first, last, records = found
+            rows.append({"DFM": row.DFM, "Time": row.Time, "Kind": kind, "First": first,
+                         "Last": last, "Records": records, "Message": row.Message})
+    out = pd.DataFrame(rows, columns=columns)
+    for column in ("DFM", "First", "Last", "Records"):
+        out[column] = pd.array([None if pd.isna(v) else int(v) for v in out[column]], dtype="Int64")
+    out["Time"] = pd.to_datetime(out["Time"])
+    return out
 
 
 def describe(row) -> str:

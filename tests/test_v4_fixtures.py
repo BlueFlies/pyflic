@@ -10,6 +10,8 @@ millisecond-for-millisecond comparison with the compiled firmware is
 
 from __future__ import annotations
 
+import ast
+import csv
 import json
 import os
 import subprocess
@@ -26,20 +28,32 @@ from v4_fixtures import START as V4_START
 from v4_fixtures import (
     CHOICE_LINKAGE,
     CHOICE_PR_CASES,
+    CL500,
     COLUMNS,
     DATA_FILE_DTYPES,
+    FAMILY_SPEC_KEYS,
+    FI10S,
+    FI500,
+    FR3,
+    NF_MAX5S,
+    NF1000,
     OFF,
     ON,
     PARADIGM_COLUMNS,
     PR10,
+    PR_EXP,
     YOKED_LINKAGE,
     Bout,
     DFMSpec,
     IntervalSpec,
+    OnMsFault,
     ParadigmSpec,
     RecordingSpec,
+    Restart,
     SimResult,
     choice_pr_spec,
+    family_specs,
+    firmware_inputs,
     fixed_ratio_spec,
     messages_text,
     one_of_each_spec,
@@ -48,6 +62,7 @@ from v4_fixtures import (
     read_v4_csv,
     repeating_open_loop_spec,
     requirement_series,
+    restart_messages,
     simulate,
     stress_spec,
     write_gen2_recording,
@@ -285,11 +300,13 @@ def test_a_reset_counts_a_new_activation_for_a_well_that_stays_lit() -> None:
 # The schedule and the rows
 # ---------------------------------------------------------------------------
 
-def test_the_lead_in_rows_are_interval_0_idle() -> None:
+def test_the_lead_in_rows_are_interval_0_with_no_paradigm() -> None:
+    """PyMCU names no instruction before the program: the first bench
+    recording's lead-in reads Interval 0, Cycle NA and Paradigm NA."""
     rows = _run(fixed_ratio_spec(minutes=1.0)).rows
     lead, program = rows.iloc[:25], rows.iloc[25:]
     assert (lead["Interval"] == 0).all() and lead["Cycle"].isna().all()
-    assert (lead["Paradigm"] == "Idle").all()
+    assert lead["Paradigm"].isna().all()
     assert (lead[[f"Phase{w}" for w in range(1, 13)]] == "M").all().all()
     assert (lead[[f"Activations{w}" for w in range(1, 13)]] == 0).all().all()
     assert lead[[f"{c}{w}" for c in ("Requirement", "Progress") for w in range(1, 13)]].isna().all().all()
@@ -591,6 +608,326 @@ def test_a_generation_2_recording_has_every_paradigm_column_na(tmp_path: Path) -
 
 
 # ---------------------------------------------------------------------------
+# Restarts (PyMCU 529b926)
+# ---------------------------------------------------------------------------
+
+def _wells(prefix: str) -> list[str]:
+    return [f"{prefix}{w}" for w in range(1, 13)]
+
+
+def _on_ms_from_spans(result: SimResult, linkage: tuple[int, ...]) -> np.ndarray:
+    """Each row's OnMs from the truth's own lit spans, after Linkage."""
+    index = result.rows["Index"].to_numpy(dtype=np.int64)
+    n_ms = int(index.max()) * RECORD_MS
+    out = np.zeros((len(index), 12), dtype=np.int64)
+    for w in range(12):
+        edges = np.zeros(n_ms + 1, dtype=np.int64)
+        for j in (j for j in range(12) if linkage[j] == linkage[w]):
+            for a, b in result.truth.lit_spans_ms[j + 1]:
+                edges[a] += 1
+                edges[b] -= 1
+        lit = np.cumsum(edges)[:n_ms] > 0
+        out[:, w] = lit.reshape(-1, RECORD_MS).sum(axis=1)[index - 1]
+    return out
+
+
+@pytest.fixture(scope="module")
+def restart_run() -> ChoiceRun:
+    spec = family_specs()["restart"]
+    return spec, simulate(spec)
+
+
+def test_a_restart_leaves_a_gap_then_idle_rows_then_the_instruction_afresh(restart_run: ChoiceRun) -> None:
+    spec, results = restart_run
+    n = int(spec.duration_min * 60 * 5)
+    for d in spec.dfms:
+        result = results[d.dfm_id]
+        rows, truth = result.rows, result.truth
+        (r,) = d.restarts
+        down, resume = round(r.at_s * 1000), round((r.at_s + r.down_s + r.resend_s) * 1000)
+        missing, idle_rows = round(r.down_s * 5), round(r.resend_s * 5)
+        assert truth.restarts_ms == [(down, resume, missing)]
+        # No records while down: Index and the times jump, Sample counts the rows written.
+        after = down // RECORD_MS
+        assert rows["Index"].tolist() == list(range(1, after + 1)) + list(range(after + missing + 1, n + 1))
+        assert rows["Sample"].tolist() == list(range(1, len(rows) + 1))
+        stamps = pd.to_datetime(rows["Date"] + " " + rows["Time"], format="%m/%d/%Y %H:%M:%S") \
+            + pd.to_timedelta(rows["MSec"], unit="ms")
+        assert (stamps == pd.Timestamp(V4_START) + pd.to_timedelta(rows["Index"] * RECORD_MS, unit="ms")).all()
+        # Then the idle rows: no instruction PyMCU can name, every Well Off, the totals carried.
+        idle = rows.iloc[after: after + idle_rows]
+        assert idle["Index"].tolist() == list(range(after + missing + 1, resume // RECORD_MS + 1))
+        assert idle[["Interval", "Cycle", "Paradigm"]].isna().all().all()
+        assert (idle[["Dark", "OptoFreq", "OptoPW", "OptoCol1"] + _wells("OnMs")] == 0).all().all()
+        assert (idle[_wells("Phase")] == "M").all().all()
+        assert idle[_wells("Requirement") + _wells("Progress")].isna().all().all()
+        before, resumed = rows.iloc[after - 1], rows.iloc[after + idle_rows]
+        totals = before[_wells("Activations")].to_numpy(dtype=np.int64)
+        assert (idle[_wells("Activations")].to_numpy(dtype=np.int64) == totals).all()
+        # Then the instruction in force, applied again: the same Interval, Cycle and Paradigm.
+        for column in ("Interval", "Cycle", "Paradigm", "Dark", "OptoFreq", "OptoPW"):
+            assert resumed[column] == before[column], column
+        # The rows are the truth's, the restart included.
+        record_end = rows["Index"].to_numpy() * RECORD_MS - 1
+        for w in range(1, 13):
+            onsets = np.sort(np.asarray(truth.activation_onset_ms[w], dtype=np.int64))
+            assert np.array_equal(rows[f"Activations{w}"].to_numpy(np.int64),
+                                  np.searchsorted(onsets, record_end, side="right"))
+            assert truth.on_ms_total[w] == rows[f"OnMs{w}"].sum()
+            # Dark, and nothing counted, from the outage to the resend.
+            assert all(b <= down or a >= resume for a, b in truth.lit_spans_ms[w])
+            assert all(b <= down or a >= resume for a, b in truth.event_spans_ms[w])
+            assert not any(down <= t < resume for t in onsets)
+        assert np.array_equal(rows[_wells("OnMs")].to_numpy(np.int64), _on_ms_from_spans(result, d.linkage))
+
+
+def test_a_ratio_well_restarting_in_main_starts_its_acclimation_again(restart_run: ChoiceRun) -> None:
+    spec, results = restart_run
+    rows, truth = results[1].rows, results[1].truth
+    ((down, resume, _missing),) = truth.restarts_ms
+    before = rows.iloc[down // RECORD_MS - 1]
+    resumed = rows.loc[rows["Index"] == resume // RECORD_MS + 1].iloc[0]
+    for w in range(1, 13, 2):
+        assert before[f"Phase{w}"] == "M"
+        # Every Well as under a new Paradigm: Acclimation, the first Requirement, no Progress.
+        assert resumed[f"Phase{w}"] == "A" and resumed[f"Requirement{w}"] == 3 and resumed[f"Progress{w}"] == 0
+        after = [(p, m) for t, p, m in zip(truth.activation_onset_ms[w], truth.activation_phase[w],
+                                           truth.requirement_met[w]) if t >= resume]
+        assert [p for p, _ in after[:2]] == ["A", "A"] and {p for p, _ in after[2:]} == {"M"}
+        assert [m for _, m in after] == [None, None] + [3] * (len(after) - 2) and len(after) > 4
+        # acclimation_end_ms is the first Acclimation's.
+        assert truth.acclimation_end_ms[w] < down
+
+
+def test_a_closed_loop_well_restarting_mid_bout_relights_when_the_instruction_returns(
+        restart_run: ChoiceRun) -> None:
+    spec, results = restart_run
+    truth = results[2].truth
+    (r,) = spec.dfms[1].restarts
+    ((down, resume, _missing),) = truth.restarts_ms
+    (held,) = [b for b in spec.dfms[1].bouts[1] if b.start_s < r.at_s < b.start_s + b.duration_s]
+    start, end = round(held.start_s * 1000), round((held.start_s + held.duration_s) * 1000)
+    assert end > resume
+    # Lit from the bout's start until the DFM went down, then again, as a new Activation, from
+    # the resend to the bout's end and its Hold.
+    assert (start, down) in truth.lit_spans_ms[1] and (resume, end + 500) in truth.lit_spans_ms[1]
+    assert start in truth.activation_onset_ms[1] and resume in truth.activation_onset_ms[1]
+    # The Event in progress ended with the outage; the contact after it is a new one, which ends
+    # EventGapMs after its last contact.
+    assert (start, down) in truth.event_spans_ms[1] and (resume, end - 1 + 100) in truth.event_spans_ms[1]
+
+
+def test_restart_messages_follow_the_first_record_after_the_outage(restart_run: ChoiceRun) -> None:
+    spec, _results = restart_run
+    text = messages_text(spec)
+    for d in spec.dfms:
+        (r,) = d.restarts
+        after, missing = round(r.at_s * 5), round(r.down_s * 5)
+        when = V4_START + pd.Timedelta(milliseconds=(after + missing + 1) * RECORD_MS)
+        stamp = f"{d.dfm_id},{when:%m/%d/%Y},{when:%H:%M:%S},{when.microsecond / 1000}"
+        started, finished = restart_messages(d.dfm_id, after, after, missing)
+        assert f"{stamp},1,{started},Error\n{stamp},{after},{finished},Error\n" in text
+
+
+def test_a_second_restart_counts_from_the_first(tmp_path: Path) -> None:
+    spec = family_specs(minutes=6.0)["restart"]
+    dfm = replace(spec.dfms[0], restarts=(Restart(60.0, down_s=2.0), Restart(200.0)))
+    spec = replace(spec, dfms=(dfm,))
+    result = simulate(spec)[1]
+    assert result.truth.restarts_ms == [(60_000, 63_000, 10), (200_000, 206_000, 25)]
+    index = result.rows["Index"].tolist()
+    assert index == list(range(1, 301)) + list(range(311, 1001)) + list(range(1026, 1801))
+    # The DFM's own count began again after the first: it had reached 1000 - 310 = 690.
+    text = messages_text(spec)
+    assert restart_messages(1, 300, 300, 10)[0] in text and restart_messages(1, 690, 1000, 25)[0] in text
+    assert "Index 1001 to 1025 are missing." in text
+
+
+def test_restarts_are_validated() -> None:
+    spec = family_specs(minutes=6.0)["restart"]
+    dfm = spec.dfms[0]
+    bad = [(Restart(3.0),), (Restart(8.0),), (Restart(100.0, down_s=0.0),), (Restart(100.0, resend_s=0.05),),
+           (Restart(359.0),), (Restart(100.0), Restart(110.0))]
+    for restarts in bad:
+        with pytest.raises(ValueError):
+            simulate(replace(spec, dfms=(replace(dfm, restarts=restarts),)))
+    # A restart is no part of LEDControl.c.
+    with pytest.raises(ValueError, match="restart"):
+        firmware_inputs(spec, 1)
+
+
+def test_the_event_driven_engine_matches_stepping_every_millisecond_through_a_restart() -> None:
+    spec = family_specs(minutes=1.5)["restart"]
+    quick, slow = simulate(spec), simulate(spec, _step_every_ms=True)
+    for dfm_id in quick:
+        assert quick[dfm_id].truth.restarts_ms
+        pd.testing.assert_frame_equal(quick[dfm_id].rows, slow[dfm_id].rows)
+        assert quick[dfm_id].truth == slow[dfm_id].truth
+
+
+def test_a_written_restart_reloads_as_simulated(tmp_path: Path, restart_run: ChoiceRun) -> None:
+    spec, results = restart_run
+    files = write_v4_recording(tmp_path, spec, results=results)
+    for d in spec.dfms:
+        pd.testing.assert_frame_equal(read_v4_csv(files[f"DFM{d.dfm_id}_0.csv"]), results[d.dfm_id].rows)
+
+
+# ---------------------------------------------------------------------------
+# Faults: the wrong Program.txt and a misreported LED
+# ---------------------------------------------------------------------------
+
+def test_the_fault_arguments_change_nothing_when_absent(tmp_path: Path) -> None:
+    spec = family_specs(minutes=3.0)["restart"]
+    results = simulate(spec)
+    plain = write_v4_recording(tmp_path / "plain", spec, results=results)
+    none = write_v4_recording(tmp_path / "none", spec, results=results, program_paradigms=None, on_ms_faults=None)
+    empty = write_v4_recording(tmp_path / "empty", spec, results=results, program_paradigms={}, on_ms_faults={})
+    assert sorted(plain) == sorted(none) == sorted(empty)
+    for name, path in plain.items():
+        assert none[name].read_bytes() == path.read_bytes() == empty[name].read_bytes(), name
+
+
+def test_program_paradigms_describe_a_program_that_did_not_run(tmp_path: Path) -> None:
+    spec = family_specs(minutes=3.0)["fixed_interval"]
+    results = simulate(spec)
+    files = write_v4_recording(tmp_path, spec, results=results,
+                               program_paradigms={"FI10s": replace(FI10S, lockout_ms=20000)})
+    right = program_text(spec)
+    assert right.count("LockoutMs 10000 ms") == 1
+    assert files["Program.txt"].read_text() == right.replace("LockoutMs 10000 ms", "LockoutMs 20000 ms")
+    # The data are the program that ran.
+    for dfm_id in (1, 2):
+        pd.testing.assert_frame_equal(read_v4_csv(files[f"DFM{dfm_id}_0.csv"]), results[dfm_id].rows)
+    with pytest.raises(ValueError):
+        write_v4_recording(tmp_path / "other", spec, results=results,
+                           program_paradigms={"Other": replace(FI10S, name="Other")})
+
+
+def test_an_on_ms_fault_sets_on_ms_and_the_led_bit_and_nothing_else(tmp_path: Path) -> None:
+    spec = family_specs(minutes=3.0)["closed_max"]
+    results = simulate(spec)
+    clean = results[1].rows
+    files = write_v4_recording(tmp_path, spec, results=results,
+                               on_ms_faults={1: [OnMsFault(1, 60.0, 90.0, 0), OnMsFault(4, 100.0, 101.0, 200)]})
+    rows = read_v4_csv(files["DFM1_0.csv"])
+    dead = ((clean["Index"] > 300) & (clean["Index"] <= 450)).to_numpy()
+    stuck = ((clean["Index"] > 500) & (clean["Index"] <= 505)).to_numpy()
+    assert clean.loc[dead, "OnMs1"].sum() > 0 and (clean.loc[stuck, "OnMs4"] < 200).any()
+    expected = clean.copy()
+    expected.loc[dead, "OnMs1"] = 0
+    expected.loc[dead, "OptoCol1"] = expected.loc[dead, "OptoCol1"] & ~1
+    expected.loc[stuck, "OnMs4"] = 200
+    expected.loc[stuck, "OptoCol1"] = expected.loc[stuck, "OptoCol1"] | (1 << 3)
+    # Linkage is not applied: Well 1's partner keeps its light, and so does Well 4's.
+    pd.testing.assert_frame_equal(rows, expected)
+    with pytest.raises(ValueError):
+        write_v4_recording(tmp_path / "bad", spec, results=results, on_ms_faults={1: [OnMsFault(13, 0, 1, 0)]})
+
+
+# ---------------------------------------------------------------------------
+# The Paradigm Family specs
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="module")
+def families() -> dict[str, ChoiceRun]:
+    return {key: (spec, simulate(spec)) for key, spec in family_specs().items()}
+
+
+def _contact_ms(bout: Bout) -> tuple[int, int]:
+    """[start, end) of a bout's contact: every bout is well above the threshold."""
+    start = int(round(bout.start_s * 1000))
+    return start, start + int(round(bout.duration_s * 1000))
+
+
+def test_the_family_specs_run_their_paradigms_for_twenty_minutes(families: dict[str, ChoiceRun]) -> None:
+    assert tuple(families) == FAMILY_SPEC_KEYS
+    types = {key: {d.dfm_id: [spec.paradigms[iv.paradigm].type for iv in d.intervals] for d in spec.dfms}
+             for key, (spec, _results) in families.items()}
+    assert types == {"closed_max": {1: ["ClosedLoop"]},
+                     "fixed_interval": {1: ["FixedInterval"], 2: ["FixedInterval"]},
+                     "non_feeding": {1: ["NonFeeding"], 2: ["NonFeeding"]},
+                     "exponential": {1: ["ProgressiveRatio"]},
+                     "restart": {1: ["FixedRatio"], 2: ["ClosedLoop"]}}
+    assert {key: [d.dfm_id for d in spec.dfms if d.restarts] for key, (spec, _r) in families.items()} == \
+        {"closed_max": [], "fixed_interval": [], "non_feeding": [], "exponential": [], "restart": [1, 2]}
+    for spec, _results in families.values():
+        assert spec.duration_min == 20.0 and all(d.linkage == CHOICE_LINKAGE for d in spec.dfms)
+    assert families["fixed_interval"][0].paradigms == {"FI10s": FI10S, "FI500": FI500}
+    assert families["non_feeding"][0].paradigms == {"NF1000": NF1000, "NFMax5s": NF_MAX5S}
+    assert families["restart"][0].paradigms["FR3"] == FR3
+
+
+def test_closed_max_cuts_off_the_long_bouts(families: dict[str, ChoiceRun]) -> None:
+    spec, results = families["closed_max"]
+    truth = results[1].truth
+    assert spec.paradigms == {"CL500": CL500}
+    for w in range(1, 13, 2):
+        spans = truth.lit_spans_ms[w]
+        lengths = [b - a for a, b in spans]
+        # Each on-period is one Activation, and none outlasts MaxOnMs.
+        assert [a for a, _b in spans] == truth.activation_onset_ms[w]
+        assert max(lengths) == 2000 and lengths.count(2000) >= 10 and sum(x < 2000 for x in lengths) >= 10
+        # After a cut-off the light stays off until the bout ends: a cut-off span ends inside contact.
+        contact = [_contact_ms(b) for b in spec.dfms[0].bouts[w]]
+        cut = [b for a, b in spans if b - a == 2000]
+        assert sum(any(c0 < b < c1 for c0, c1 in contact) for b in cut) >= len(cut) // 2
+
+
+def test_fixed_interval_keeps_its_lockout_and_its_length(families: dict[str, ChoiceRun]) -> None:
+    spec, results = families["fixed_interval"]
+    long, short = results[1].truth, results[2].truth
+    repeats = continuous = 0
+    for w in range(1, 13, 2):
+        onsets = np.diff(long.activation_onset_ms[w])
+        assert (onsets >= 10_000).all()
+        repeats += int((onsets == 10_000).sum())           # contact held through a lockout
+        assert all(b - a == 1000 for a, b in long.lit_spans_ms[w])
+        # Many bouts start in a lockout and earn nothing.
+        starts = [_contact_ms(b)[0] for b in spec.dfms[0].bouts[w]]
+        locked = [s for s in starts if any(t < s < t + 10_000 for t in long.activation_onset_ms[w])]
+        assert len(locked) >= 20
+        phases = short.activation_phase[w]
+        assert phases[:3] == ["A"] * 3 and set(phases[3:]) == {"M"}
+        main = [t for t, p in zip(short.activation_onset_ms[w], phases) if p == "M"]
+        # LockoutMs shorter than ActivationMs: held contact relights every 1.5 s, without a gap.
+        continuous += int((np.diff(main) == 1500).sum())
+        assert max(b - a for a, b in short.lit_spans_ms[w]) >= 3000
+    assert repeats >= 6 and continuous >= 30
+
+
+def test_non_feeding_is_dark_during_contact_and_relights_after_the_delay(families: dict[str, ChoiceRun]) -> None:
+    spec, results = families["non_feeding"]
+    for d, max_on in zip(spec.dfms, (None, 5000)):
+        truth = results[d.dfm_id].truth
+        for w in range(1, 13, 2):
+            contact = [_contact_ms(b) for b in d.bouts[w]]
+            spans = truth.lit_spans_ms[w]
+            assert spans[0][0] == 25 * RECORD_MS            # lit at the Interval's start
+            assert [a for a, _b in spans] == truth.activation_onset_ms[w]
+            for a, b in spans:
+                assert all(b <= c0 or a >= c1 for c0, c1 in contact)
+            ends = {c1 for _c0, c1 in contact}
+            assert all(a - 1000 in ends for a, _b in spans[1:])
+            # Some gaps between bouts are shorter than the delay, so it stays dark through them.
+            assert sum(n0 - c1 < 1000 for (_c0, c1), (n0, _n1) in zip(contact, contact[1:])) >= 5
+            if max_on:
+                lengths = [b - a for a, b in spans]
+                assert max(lengths) == max_on and lengths.count(max_on) >= 3
+
+
+def test_the_exponential_spec_climbs_its_series(families: dict[str, ChoiceRun]) -> None:
+    _spec, results = families["exponential"]
+    truth = results[1].truth
+    series = requirement_series(PR_EXP, 30)
+    assert series[:6] == [1, 2, 4, 6, 9, 12]
+    for w in range(1, 13, 2):
+        phases, met = truth.activation_phase[w], truth.requirement_met[w]
+        assert phases[:2] == ["A", "A"] and set(phases[2:]) == {"M"}
+        main = met[2:]
+        assert main == series[:len(main)] and len(main) >= 12
+
+
+# ---------------------------------------------------------------------------
 # Against PyMCU's own code, when its checkout is beside this one
 # ---------------------------------------------------------------------------
 
@@ -673,10 +1010,13 @@ for r in data["rows"]:
     sp.paradigmType, sp.phases, sp.onMs = r["type"], r["phases"], r["on_ms"]
     sp.activationTotals, sp.requirement, sp.progress = r["activations"], r["requirement"], r["progress"]
     sp.interval, sp.cycle, sp.paradigmName = r["interval"], r["cycle"], r["paradigm"]
-    sp.isBeforeProgram = r["interval"] is None
+    sp.isBeforeProgram = r["before"]
     out.append(sp.GetDataBufferPrintPacket())
 messages = MessagesList.MessageList()
 messages.AddMessage(Message.Message(0, start, 0, "Recording started", Enums.MESSAGETYPE.ANNOTATION, -99))
+for dfm, when, sample, text in data.get("errors", []):
+    messages.AddMessage(Message.Message(dfm, datetime.datetime.fromisoformat(when), sample, text,
+                                        Enums.MESSAGETYPE.ERROR, -99))
 for dfm, index, after in data["gaps"]:
     # The wording and date of DFM._ReportLostRecords (DFM itself needs pyserial).
     count = index - after - 1
@@ -691,32 +1031,82 @@ sys.stdout.write("".join(out) + "@@\\n" + messages.GetMessageStringForFile())
 """
 
 
-def test_rows_and_messages_are_pymcus_own_formatting(tmp_path: Path) -> None:
-    # DFM 2 of the stress spec: ratio and other types, Cycles, and midnight.
-    spec = stress_spec(minutes=6.0)
-    spec = replace(spec, dfms=(spec.dfms[1],))
-    files = write_v4_recording(tmp_path, spec, index_gaps={2: [(400, 3)]}, error_bits={2: [(30, 2)]})
-    rows = read_v4_csv(files["DFM2_0.csv"])
+def _pymcu_rows(rows: pd.DataFrame, spec: RecordingSpec) -> list[dict]:
+    """The data file's rows as the values PyMCU's StatusPacket holds: an
+    Interval 0 row is from before the program, an NA one from an instruction
+    PyMCU cannot name (a restart's idle rows)."""
     types = {name: ["OpenLoop", "ClosedLoop", "FixedInterval", "NonFeeding", "ProgressiveRatio",
                     "FixedRatio"].index(p.type) for name, p in spec.paradigms.items()}
 
     def wells(prefix: str) -> list[list[int]]:
         return rows[[f"{prefix}{w}" for w in range(1, 13)]].fillna(0).astype(int).values.tolist()
 
-    payload = {
-        "start": spec.start.isoformat(), "dfm": 2, "minutes": spec.duration_min, "gaps": [[2, 404, 400]],
-        "rows": [
-            {"sample": int(r.Sample), "index": int(r.Index), "w": w, "dark": int(r.Dark), "freq": int(r.OptoFreq),
-             "pw": int(r.OptoPW), "led": int(r.OptoCol1), "error": int(r.Error),
-             "type": types.get(r.Paradigm, 1), "phases": [int(p == "A") for p in ph], "on_ms": on,
-             "activations": act, "requirement": req, "progress": prog,
-             "interval": None if r.Interval == 0 else int(r.Interval) - 1,
-             "cycle": None if pd.isna(r.Cycle) else int(r.Cycle), "paradigm": r.Paradigm}
-            for r, w, ph, on, act, req, prog in zip(
-                rows.itertuples(index=False), wells("W"), rows[[f"Phase{w}" for w in range(1, 13)]].values.tolist(),
-                wells("OnMs"), wells("Activations"), wells("Requirement"), wells("Progress"))],
-    }
+    named = rows["Paradigm"].notna().to_numpy()
+    return [
+        {"sample": int(r.Sample), "index": int(r.Index), "w": w, "dark": int(r.Dark), "freq": int(r.OptoFreq),
+         "pw": int(r.OptoPW), "led": int(r.OptoCol1), "error": int(r.Error),
+         "type": types.get(r.Paradigm, 1) if known else 1, "phases": [int(p == "A") for p in ph], "on_ms": on,
+         "activations": act, "requirement": req, "progress": prog,
+         "interval": None if pd.isna(r.Interval) or r.Interval == 0 else int(r.Interval) - 1,
+         "before": bool(not pd.isna(r.Interval) and r.Interval == 0),
+         "cycle": None if pd.isna(r.Cycle) else int(r.Cycle), "paradigm": r.Paradigm if known else None}
+        for r, known, w, ph, on, act, req, prog in zip(
+            rows.itertuples(index=False), named, wells("W"), rows[[f"Phase{w}" for w in range(1, 13)]].values.tolist(),
+            wells("OnMs"), wells("Activations"), wells("Requirement"), wells("Progress"))]
+
+
+def test_rows_and_messages_are_pymcus_own_formatting(tmp_path: Path) -> None:
+    # DFM 2 of the stress spec: ratio and other types, Cycles, and midnight.
+    spec = stress_spec(minutes=6.0)
+    spec = replace(spec, dfms=(spec.dfms[1],))
+    files = write_v4_recording(tmp_path, spec, index_gaps={2: [(400, 3)]}, error_bits={2: [(30, 2)]})
+    rows = read_v4_csv(files["DFM2_0.csv"])
+    payload = {"start": spec.start.isoformat(), "dfm": 2, "minutes": spec.duration_min, "gaps": [[2, 404, 400]],
+               "rows": _pymcu_rows(rows, spec)}
     data_text, message_text = _pymcu(_ROWS, json.dumps(payload)).split("@@\n")
     assert files["DFM2_0.csv"].read_text() == data_text
     assert files["Messages.csv"].read_text() == message_text
     assert rows["Date"].nunique() == 2
+
+
+def test_a_restarts_rows_and_messages_are_pymcus_own_formatting(tmp_path: Path) -> None:
+    """The lead-in's and the idle rows' NA Interval, Cycle and Paradigm, and
+    the restart's two errors, as PyMCU writes them."""
+    spec = family_specs(minutes=6.0)["restart"]
+    spec = replace(spec, dfms=(spec.dfms[0],))
+    files = write_v4_recording(tmp_path, spec)
+    rows = read_v4_csv(files["DFM1_0.csv"])
+    assert rows["Interval"].isna().sum() == 5 and rows["Paradigm"].isna().sum() == 25 + 5
+    with open(files["Messages.csv"], newline="", encoding="utf-8") as f:
+        errors = [[int(m["DFM"]), (datetime.strptime(f"{m['Date']} {m['Time']}", "%m/%d/%Y %H:%M:%S")
+                                   + pd.Timedelta(milliseconds=float(m["Millisecond"]))).isoformat(),
+                   int(m["Sample"]), m["Message"]]
+                  for m in csv.DictReader(f) if m["MsgType"] == "Error"]
+    payload = {"start": spec.start.isoformat(), "dfm": 1, "minutes": spec.duration_min, "gaps": [],
+               "errors": errors, "rows": _pymcu_rows(rows, spec)}
+    assert len(payload["errors"]) == 2
+    data_text, message_text = _pymcu(_ROWS, json.dumps(payload)).split("@@\n")
+    assert files["DFM1_0.csv"].read_text() == data_text
+    assert files["Messages.csv"].read_text() == message_text
+
+
+def _pymcu_message_format(function: str) -> str:
+    """The text PyMCU's ``DFM.<function>`` formats its message from, read
+    from the checkout's source (the DFM module itself needs pyserial)."""
+    path = PYMCU_DIR / "DFM.py"
+    if not path.is_file():
+        pytest.skip(f"PyMCU not found at {PYMCU_DIR} (set PYMCU_DIR)")
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    body = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == function)
+    (text,) = [n.func.value.value for n in ast.walk(body)
+               if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == "format"
+               and isinstance(n.func.value, ast.Constant) and str(n.func.value.value).startswith("DFM {}")]
+    return text
+
+
+def test_restart_messages_are_worded_as_pymcus() -> None:
+    started, finished = restart_messages(3, 2400, 5000, 25)
+    assert started == _pymcu_message_format("_StartRestart").format(3, 2400, 1)
+    # _FinishRestart: lost * V3_PACKET_INTERVAL seconds, then Index restartLastIndex + 1 to + lost.
+    assert finished == _pymcu_message_format("_FinishRestart").format(3, 25 * 0.2, 5001, 5025)
+    assert finished == "DFM 3 recorded nothing for about 5 s while it restarted: Index 5001 to 5025 are missing."

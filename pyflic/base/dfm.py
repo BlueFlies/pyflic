@@ -52,6 +52,11 @@ ERROR_BITS: dict[int, tuple[tuple[int, str], ...]] = {
     GENERATION_EMPTY: ((0x01, "No Ack"), (0x02, "Overflow"), *_ERROR_BITS_COMMON),
     GENERATION_PARADIGM: ((0x01, "No Ack"), (0x02, "Overflow"), *_ERROR_BITS_COMMON),
 }
+#: The integrity report's note on generation 3 when *No Ack* is counted with
+#: nothing lost or repeated: firmware 4.0.0 took PyMCU's partial ACK naming
+#: every record as a missed ACK until PyMCU 19efddd sent a plain one.
+NO_ACK_NOTE = ("No Ack with nothing lost or repeated: PyMCU builds before 10/17/2026 sent a partial "
+               "ACK the firmware took as missed. No data were lost.")
 
 
 # ── DFM CSV loading (formerly io.py) ────────────────────────────────────────
@@ -117,6 +122,22 @@ def _repeated_index_rows(df: pd.DataFrame) -> np.ndarray:
         return np.zeros(len(df), dtype=bool)          # the usual file: nothing repeats
     key = [c for c in ("Index", "Date", "Time", "MSec") if c in df.columns]
     return (df.duplicated(subset=key, keep="first") & index.notna()).to_numpy(dtype=bool)
+
+
+def _clock_times(raw: pd.DataFrame) -> pd.Series | None:
+    """Each row's clock time from ``Date``, ``Time`` and ``MSec``, labelled
+    UTC as the integrity report prints them (``NaT`` where one does not
+    parse); ``None`` without ``Date`` and ``Time`` or without rows."""
+    if not all(c in raw.columns for c in ("Date", "Time")) or len(raw) == 0:
+        return None
+    tmp = str(raw["Time"].iloc[0])
+    is_ampm = ("AM" in tmp.upper()) or ("PM" in tmp.upper()) or (re.search(r".M$", tmp) is not None)
+    fmt = "%m/%d/%Y %I:%M:%S %p" if is_ampm else "%m/%d/%Y %H:%M:%S"
+    ts = pd.to_datetime(raw["Date"].astype(str) + " " + raw["Time"].astype(str), format=fmt, utc=True,
+                        errors="coerce")
+    if "MSec" in raw.columns:
+        ts = ts + pd.to_timedelta(pd.to_numeric(raw["MSec"], errors="coerce").fillna(0.0) / 1000.0, unit="s")
+    return ts
 
 
 def _elapsed_seconds_from_date_time(df: pd.DataFrame) -> np.ndarray:
@@ -734,9 +755,9 @@ class DFM:
     def paradigm_sequence(self) -> list[dict[str, object]] | None:
         """The Paradigms the rows were recorded under, in order: one entry
         per run of rows with the same name (``Paradigm``, ``FirstMin``,
-        ``LastMin``, ``Rows``), the ``Idle`` lead-in included and an unknown
-        name as ``NA``.  ``None`` without a Paradigm state (generations 1
-        and 2)."""
+        ``LastMin``, ``Rows``), an unknown name as ``NA``: the lead-in, which
+        PyMCU writes before any instruction, and a restart's idle rows.
+        ``None`` without a Paradigm state (generations 1 and 2)."""
         state = self.paradigm
         if state is None:
             return None
@@ -762,6 +783,12 @@ class DFM:
         records (some ``OnMs`` above 200) and the Paradigm sequence; and the
         ``Error`` rows of the recording's ``Messages.csv`` for this DFM and
         the MCU.  A count that does not apply to the Generation is ``None``.
+
+        Generation 3 also gets the DFM's restarts (``## DFM restarts``,
+        :meth:`restarts`, the dict's ``restarts``), :data:`NO_ACK_NOTE` when
+        *No Ack* is counted with nothing lost or repeated, and the
+        ``Messages.csv`` "Lost N records" counts checked against the
+        ``Index`` gaps outside restarts.  Generations 1 and 2 are unchanged.
         """
         raw = self.raw_df
         n = len(raw)
@@ -774,17 +801,11 @@ class DFM:
 
         start_time = end_time = elapsed_minutes = elapsed_minutes_from_minutes_col = None
 
-        if all(c in raw.columns for c in ("Date", "Time")) and n > 0:
-            tmp = str(raw["Time"].iloc[0])
-            is_ampm = ("AM" in tmp.upper()) or ("PM" in tmp.upper()) or (re.search(r".M$", tmp) is not None)
-            fmt = "%m/%d/%Y %I:%M:%S %p" if is_ampm else "%m/%d/%Y %H:%M:%S"
-            ts = pd.to_datetime(raw["Date"].astype(str) + " " + raw["Time"].astype(str), format=fmt, utc=True, errors="coerce")
-            if "MSec" in raw.columns:
-                ts = ts + pd.to_timedelta(pd.to_numeric(raw["MSec"], errors="coerce").fillna(0.0) / 1000.0, unit="s")
-            if ts.notna().any():
-                start_time = ts.iloc[0]
-                end_time = ts.iloc[-1]
-                elapsed_minutes = float((end_time - start_time).total_seconds() / 60.0)
+        ts = _clock_times(raw)
+        if ts is not None and ts.notna().any():
+            start_time = ts.iloc[0]
+            end_time = ts.iloc[-1]
+            elapsed_minutes = float((end_time - start_time).total_seconds() / 60.0)
 
         if "Minutes" in raw.columns and n > 1:
             mins = pd.to_numeric(raw["Minutes"], errors="coerce")
@@ -801,6 +822,12 @@ class DFM:
         if elapsed_minutes_from_minutes_col is not None:
             print(f"Elapsed (from Minutes column): {elapsed_minutes_from_minutes_col:.3f} minutes")
         print()
+
+        gaps = self.lost_record_gaps()
+        lost = None if gaps is None else int(sum(missing for _, missing, _ in gaps))
+        ## Firmware 4.0.0's own No Ack: counted after every read, with nothing lost or resent.
+        explain_no_ack = (self.generation == GENERATION_PARADIGM and lost == 0
+                          and int(self.repeated_records) == 0)
 
         err_cols = [c for c in raw.columns if re.search("error", c, flags=re.IGNORECASE)]
         print("## Error column details")
@@ -825,13 +852,17 @@ class DFM:
                     if len(codes) > 0:
                         values = codes.to_numpy()
                         print("  Error-type counts (among flagged rows):")
+                        no_ack = 0
                         for mask, name in ERROR_BITS.get(self.generation, ERROR_BITS[GENERATION_PARADIGM]):
-                            print(f"    {name}: {int(((values & mask) != 0).sum())}")
+                            count = int(((values & mask) != 0).sum())
+                            print(f"    {name}: {count}")
+                            no_ack += count if name == "No Ack" else 0
+                        if explain_no_ack and no_ack > 0:
+                            print(f"  {NO_ACK_NOTE}")
                 print()
 
         print("## Index increment check")
         index_ok = None
-        gaps = self.lost_record_gaps()
         if "Index" not in raw.columns:
             print("No `Index` column found in RawData.\nSkipping increment-by-one analysis.\n")
         else:
@@ -843,10 +874,9 @@ class DFM:
                 index_ok = bool(np.all(d == 1))
                 print("Index increments by exactly 1 for all consecutive rows." if index_ok else "Index does NOT always increment by 1.")
                 self._print_lost_and_repeated(gaps or [])
-        lost = None if gaps is None else int(sum(missing for _, missing, _ in gaps))
 
         state = self.paradigm
-        unknown = late = sequence = None
+        unknown = late = sequence = restarts = None
         if state is not None:
             unknown = int(state.unknown_rows().sum())
             late = int(state.late_rows().sum())
@@ -864,7 +894,11 @@ class DFM:
         elif self.generation == GENERATION_EMPTY:
             print("## Paradigm state")
             print("None: every Paradigm column is NA (DFM firmware older than 4.0.0).\n")
-        self._print_message_errors()
+        found = self._messages()
+        if state is not None:
+            restarts = self._restarts(found)
+            self._print_restarts(restarts)
+        self._print_message_errors(found, restarts=restarts)
 
         return {
             "dfm_id": self.id,
@@ -882,6 +916,7 @@ class DFM:
             "unknown_instruction_rows": unknown,
             "late_records": late,
             "paradigm_sequence": sequence,
+            "restarts": restarts,
         }
 
     def _print_lost_and_repeated(self, gaps: list[tuple[int, int, float]]) -> None:
@@ -897,22 +932,192 @@ class DFM:
             print(f"  {note}")
         print()
 
-    def _print_message_errors(self) -> None:
-        """The ``Error`` rows of the recording's ``Messages.csv`` for this DFM
-        and the MCU (DFM 0); nothing when the recording has no such file."""
+    def _messages(self) -> pd.DataFrame | None:
+        """The recording's ``Messages.csv`` rows for this DFM and the MCU
+        (DFM 0), or ``None`` when the recording has no such file."""
         from . import messages
 
         if not self.source_files:
-            return
+            return None
         data_dir = Path(self.source_files[0]).parent
         if messages.find_messages(data_dir) is None:
+            return None
+        return messages.for_dfm(messages.read(data_dir), self.id)
+
+    def restarts(self) -> list[dict[str, object]] | None:
+        """Each restart of this DFM (PyMCU 529b926), from the rows and from
+        ``Messages.csv``, in ``Index`` order; ``None`` without a Paradigm
+        state (generations 1 and 2).  See :meth:`_restarts` for the keys."""
+        return self._restarts(self._messages())
+
+    def _restarts(self, found: pd.DataFrame | None) -> list[dict[str, object]] | None:
+        """The restarts the rows show (:meth:`ParadigmState.restarts`: an
+        ``Index`` gap into rows under no instruction), each matched with
+        ``Messages.csv``'s "recorded nothing … Index a to b are missing" by
+        its ``Index`` range, then the ones only *found* (the file's rows,
+        :meth:`_messages`) names.  Each is a dict:
+
+        * ``Time``: the clock time of the first row after the gap, or the
+          message's own when the rows show none;
+        * ``Minute``, ``Row`` and ``ResumeRow`` (the first row after the
+          rows under no instruction), ``None`` when the rows show none;
+        * ``AfterIndex``, the last ``Index`` before the gap, ``Missing`` and
+          ``Seconds``, what it lost;
+        * ``Source``: ``"data"``, or ``"Messages.csv"`` when only the file
+          names it;
+        * ``Messages``: whether ``Messages.csv`` names it, ``None`` without
+          the file;
+        * ``Note``: the integrity text's words for that.
+        """
+        from . import messages
+
+        state = self.paradigm
+        if state is None:
+            return None
+        n = len(state)
+        period = 1.0 / float(self.params.samples_per_second)
+        times = _clock_times(self.raw_df)
+
+        def clock(row: int):
+            if times is None or not 0 <= row < len(times) or pd.isna(times.iloc[row]):
+                return None
+            return times.iloc[row].tz_localize(None)
+
+        ## PyMCU's messages, a "restarted" with the "recorded nothing" that follows it.
+        named: list[tuple[object | None, object | None]] = []
+        if found is not None:
+            records = messages.record_messages(found)
+            mine = (records["DFM"] == int(self.id)).fillna(False).to_numpy(dtype=bool)
+            started = None
+            for row in records[mine].itertuples(index=False):
+                if row.Kind == messages.DFM_RESTARTED:
+                    if started is not None:
+                        named.append((started, None))
+                    started = row
+                elif row.Kind == messages.RESTART_GAP:
+                    named.append((started, row))
+                    started = None
+            if started is not None:
+                named.append((started, None))
+
+        def entry(**values) -> dict[str, object]:
+            out: dict[str, object] = dict(Time=None, Minute=None, Row=None, ResumeRow=None,
+                                          AfterIndex=None, Missing=None, Seconds=None,
+                                          Source="data", Messages=None, Note="")
+            out.update(values)
+            if out["Missing"] is not None:
+                out["Seconds"] = float(out["Missing"]) * period
+            return out
+
+        used: set[int] = set()
+        out: list[dict[str, object]] = []
+        for span in state.restarts():
+            after = int(state.index[span.row - 1])
+            match = next((k for k, (_start, gap) in enumerate(named)
+                          if k not in used and gap is not None and int(gap.First) == after + 1), None)
+            if match is not None:
+                used.add(match)
+            confirmed = None if found is None else match is not None
+            if confirmed is None:
+                note = f"no {messages.MESSAGES_FILENAME} to confirm it"
+            else:
+                note = f"{'named' if confirmed else 'not named'} in {messages.MESSAGES_FILENAME}"
+            out.append(entry(Time=clock(span.row), Minute=float(span.minute), Row=int(span.row),
+                             ResumeRow=int(span.resume_row), AfterIndex=after, Missing=int(span.missing),
+                             Messages=confirmed, Note=note))
+        for k, (start, gap) in enumerate(named):
+            if k in used:
+                continue
+            source = dict(Source=messages.MESSAGES_FILENAME, Messages=True)
+            if gap is None:
+                out.append(entry(Time=start.Time, **source,
+                                 Note=f"named in {messages.MESSAGES_FILENAME}; it lost no records, "
+                                      f"so the data show no Index gap"))
+                continue
+            after = int(gap.First) - 1
+            before = np.flatnonzero(state.index == after)
+            row = int(before[0]) + 1 if before.size else n
+            if row < n and int(state.index[row]) > after + 1:
+                out.append(entry(Time=clock(row), Minute=float(state.minutes[row]), AfterIndex=after,
+                                 Missing=int(state.index[row]) - after - 1, **source,
+                                 Note=f"named in {messages.MESSAGES_FILENAME}; the data show an "
+                                      f"Index gap only"))
+            else:
+                out.append(entry(Time=gap.Time, AfterIndex=after, Missing=int(gap.Records), **source,
+                                 Note=f"named in {messages.MESSAGES_FILENAME}; the rows loaded show "
+                                      f"no Index gap there"))
+        out.sort(key=lambda r: (r["AfterIndex"] is None, r["AfterIndex"] or 0))
+        return out
+
+    def _print_restarts(self, restarts: list[dict[str, object]]) -> None:
+        """The integrity text's ``## DFM restarts``, then a blank line."""
+        print("## DFM restarts")
+        if not restarts:
+            print("None.\n")
             return
-        found = messages.errors(messages.for_dfm(messages.read(data_dir), self.id))
+        print(f"Restarts: {len(restarts)}")
+        for r in restarts:
+            when = r["Time"]
+            text = when.strftime("%m/%d/%Y %H:%M:%S.%f")[:-3] if when is not None else "(no time)"
+            if r["Minute"] is not None:
+                text += f" (minute {r['Minute']:.2f})"
+            if r["Missing"] is not None:
+                text += (f": {r['Missing']} record(s), {r['Seconds']:.1f} s, missing after Index "
+                         f"{r['AfterIndex']}")
+            if r["ResumeRow"] is not None:
+                text += f", then {r['ResumeRow'] - r['Row']} row(s) under no instruction"
+            print(f"  {text}; {r['Note']}")
+        print()
+
+    def _lost_records_check(self, found: pd.DataFrame,
+                            restarts: list[dict[str, object]]) -> str | None:
+        """``Messages.csv``'s "Lost N records" against the ``Index`` gaps
+        outside restarts (a restart's records are named apart, by the
+        "recorded nothing" error), over the ``Index`` range loaded; ``None``
+        without an ``Index``."""
+        from . import messages
+
+        gaps = self.lost_record_gaps()
+        if gaps is None:
+            return None
+        records = messages.record_messages(found)
+        mine = ((records["DFM"] == int(self.id)) & (records["Kind"] == messages.LOST_RECORDS)) \
+            .fillna(False).to_numpy(dtype=bool)
+        records = records[mine]
+        index = pd.to_numeric(self.raw_df["Index"], errors="coerce").dropna()
+        lo, hi = float(index.min()), float(index.max())
+        inside = (records["First"].isna() | ((records["First"] > lo) & (records["Last"] < hi))) \
+            .fillna(False).to_numpy(dtype=bool)
+        named = int(records.loc[inside, "Records"].fillna(0).sum())
+        restart_gaps = {r["AfterIndex"] for r in restarts if r["AfterIndex"] is not None}
+        in_gaps = int(sum(missing for after, missing, _ in gaps if after not in restart_gaps))
+        text = f"Lost records {messages.MESSAGES_FILENAME} names: {named}"
+        if named == in_gaps:
+            return f"{text}, as the Index gaps outside restarts show."
+        more = "more" if in_gaps > named else "fewer"
+        return (f"{text}, but the Index gaps outside restarts hold {in_gaps} "
+                f"({abs(in_gaps - named)} {more} in the data).")
+
+    def _print_message_errors(self, found: pd.DataFrame | None, *,
+                              restarts: list[dict[str, object]] | None = None) -> None:
+        """The ``Error`` rows of the recording's ``Messages.csv`` (*found*,
+        :meth:`_messages`) for this DFM and the MCU (DFM 0), and on
+        generation 3 :meth:`_lost_records_check`; nothing when the recording
+        has no such file."""
+        from . import messages
+
+        if found is None:
+            return
+        errors = messages.errors(found)
         print(f"## {messages.MESSAGES_FILENAME} errors (DFM {self.id} and the MCU)")
-        if found.empty:
+        if errors.empty:
             print("None.")
-        for _, row in found.iterrows():
+        for _, row in errors.iterrows():
             print(f"  {messages.describe(row)}")
+        if self.generation == GENERATION_PARADIGM:
+            check = self._lost_records_check(found, restarts or [])
+            if check is not None:
+                print(check)
         print()
 
     def simultaneous_feeding_matrix(self) -> np.ndarray:

@@ -24,12 +24,14 @@ import numpy as np
 import pytest
 
 from v4_fixtures import (
+    FAMILY_SPEC_KEYS,
     THRESHOLD_OFF,
     THRESHOLD_ON,
     FirmwareInputs,
     RecordingSpec,
     SimResult,
     choice_pr_spec,
+    family_specs,
     firmware_inputs,
     fixed_ratio_spec,
     one_of_each_spec,
@@ -185,6 +187,13 @@ def test_the_repeating_and_yoked_recordings_match_the_firmware(harness: Path, tm
 @pytest.mark.parametrize("seed", [7, 8, 9])
 def test_the_engine_edge_cases_match_the_firmware(harness: Path, tmp_path: Path, seed: int) -> None:
     _compare(harness, stress_spec(minutes=8.0, seed=seed), tmp_path)
+
+
+#: Every Paradigm Family spec but the restart, which is PyMCU's and the power
+#: supply's doing, not LEDControl.c's (firmware_inputs refuses it).
+@pytest.mark.parametrize("key", [k for k in FAMILY_SPEC_KEYS if k != "restart"])
+def test_the_paradigm_family_specs_match_the_firmware(harness: Path, tmp_path: Path, key: str) -> None:
+    _compare(harness, family_specs()[key], tmp_path)
 
 
 def test_threshold_wire_values_are_the_firmwares() -> None:
