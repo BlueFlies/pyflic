@@ -110,7 +110,8 @@ def test_a_generation_3_recording_reports_lost_records_and_its_error_labels(tmp_
     ## The Paradigm state.
     assert report["unknown_instruction_rows"] == 0 and report["late_records"] == 0
     sequence = report["paradigm_sequence"]
-    assert [s["Paradigm"] for s in sequence] == ["Idle", "Closed", "PR10"]
+    ## The lead-in names no Paradigm: PyMCU writes NA before the program.
+    assert [s["Paradigm"] for s in sequence] == ["NA", "Closed", "PR10"]
     assert sum(s["Rows"] for s in sequence) == len(dfm.raw_df)
     assert sequence[0]["Rows"] == dfm.paradigm.lead_in_rows()
     assert "Lead-in rows (Interval 0, before the first instruction): 25" in text

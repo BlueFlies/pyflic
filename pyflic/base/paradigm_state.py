@@ -38,6 +38,10 @@ rely on, all reproduced by ``tests/v4_fixtures.py``:
   Progress.
 * The same Paradigm name in consecutive Intervals keeps every Well's state;
   a different name resets it.
+* A DFM that restarts on its own (PyMCU 529b926) writes nothing while it is
+  down, so ``Index`` jumps, then rows with ``Interval`` and ``Paradigm``
+  ``NA`` until PyMCU's instruction applies again, afresh: every Well's state
+  starts over there, while ``Activations`` carries on (:meth:`ParadigmState.restarts`).
 
 Pure numpy and pandas; no Qt and no pyflic imports, so the loader, the light
 QC and the tests can all use it.
@@ -67,8 +71,10 @@ PARADIGM_COLUMNS: tuple[str, ...] = (
     "Interval", "Cycle", "Paradigm",
     *(f"{name}{w}" for name in _PER_WELL for w in range(1, N_WELLS + 1)))
 
-#: PyMCU's own Paradigm: ClosedLoop with every Well Off.  It runs in the
-#: baseline lead-in and after the Program ends.
+#: PyMCU's own Paradigm: ClosedLoop with every Well Off, the Paradigm of a
+#: program whose Intervals name none (the simple export) and of the DFM after
+#: the Program ends.  The lead-in rows before the first instruction name no
+#: Paradigm at all (``NA``).
 IDLE = "Idle"
 
 #: The milliseconds one record covers; ``OnMs`` above it marks a late record.
@@ -161,6 +167,17 @@ class IntervalRun:
     i0: int                           # sample index, inclusive
     i1: int                           # exclusive
     kind: str                         # "program" | "baseline" | "unknown"
+
+
+@dataclass(frozen=True)
+class RestartSpan:
+    """A DFM restart the rows show: an ``Index`` gap followed by a run of
+    unknown-instruction rows (:meth:`ParadigmState.restarts`)."""
+
+    row: int                          # the first unknown-instruction row after the gap
+    resume_row: int                   # the first row after that run (n if it runs to the end)
+    missing: int                      # records the gap lost
+    minute: float                     # minutes[row]
 
 
 class ParadigmState:
@@ -328,9 +345,9 @@ class ParadigmState:
         return runs
 
     def lead_in_rows(self) -> int:
-        """The baseline rows at the start (``Interval`` 0, Paradigm ``Idle``
-        or ``NA``), before the first instruction of the Program reached the
-        DFM."""
+        """The baseline rows at the start (``Interval`` 0, Paradigm ``NA``,
+        or ``Idle`` in development builds), before the first instruction of
+        the Program reached the DFM."""
         interval = self._interval_codes()
         other = np.flatnonzero(interval != 0)
         return int(other[0]) if other.size else len(self)
@@ -358,6 +375,37 @@ class ParadigmState:
         step = np.diff(self.index)
         at = np.flatnonzero(step > 1)
         return [(int(self.index[i]), int(step[i] - 1), float(self.minutes[i])) for i in at]
+
+    def restarts(self) -> list[RestartSpan]:
+        """Each DFM restart the rows show, in order: an ``Index`` gap whose
+        next row begins a run of unknown-instruction rows (``Interval`` ``NA``
+        after the lead-in).  This is the data's own rule: PyMCU 529b926 writes
+        no records while the DFM is down and the idle instruction's rows until
+        it resends the Program's.  A gap without such rows is lost records,
+        and such rows without a gap are an instruction the DFM did not take
+        up; neither is a restart.  ``Messages.csv`` names restarts too (the
+        integrity report compares the two)."""
+        if len(self) < 2:
+            return []
+        unknown = self.unknown_rows()
+        runs = {a: b for a, b in _runs(unknown)}
+        step = np.diff(self.index)
+        out: list[RestartSpan] = []
+        for i in np.flatnonzero(step > 1):
+            row = int(i) + 1
+            if row in runs:
+                out.append(RestartSpan(row=row, resume_row=int(runs[row]), missing=int(step[i] - 1),
+                                       minute=float(self.minutes[row])))
+        return out
+
+    def state_runs(self) -> list[tuple[int, int]]:
+        """``[i0, i1)`` of each Paradigm-state run, in order: the rows between
+        consecutive Paradigm starts, where the firmware reset every Well (a
+        change of Paradigm name, ``NA`` a name of its own).  A restart's
+        ``NA`` rows are a run of their own, so the run after them starts
+        afresh, as the firmware did; the lead-in is the first run."""
+        starts = np.flatnonzero(self._paradigm_starts()).tolist()
+        return [(int(a), int(b)) for a, b in zip(starts, [*starts[1:], len(self)])]
 
     # -- Activations and light -----------------------------------------------
 

@@ -21,10 +21,12 @@ from pyflic.base import paradigm_state as ps
 from v4_fixtures import (
     COLUMNS,
     DATA_COLUMNS,
+    FAMILY_SPEC_KEYS,
     PARADIGM_COLUMNS as SIM_PARADIGM_COLUMNS,
     PR10,
     YOKED_LINKAGE,
     choice_pr_spec,
+    family_specs,
     fixed_ratio_spec,
     one_of_each_spec,
     repeating_open_loop_spec,
@@ -46,11 +48,18 @@ EXPERIMENTS = {
     "yoked_controls": yoked_controls_spec,
     "repeating_open_loop": repeating_open_loop_spec,
 }
+#: The Paradigm Family specs, by ``family_<key>``; ``family_restart`` restarts.
+FAMILIES = [f"family_{key}" for key in FAMILY_SPEC_KEYS]
+#: The ones without a restart, where the row of step t is t // 200.
+CLEAN_FAMILIES = [f for f in FAMILIES if f != "family_restart"]
 
 
 @lru_cache(maxsize=None)
 def _simulated(name: str):
-    spec = stress_spec() if name == "stress" else EXPERIMENTS[name]()
+    if name.startswith("family_"):
+        spec = family_specs()[name.removeprefix("family_")]
+    else:
+        spec = stress_spec() if name == "stress" else EXPERIMENTS[name]()
     return spec, simulate(spec)
 
 
@@ -170,12 +179,13 @@ def test_subset_keeps_the_rows_selected() -> None:
 # Program Intervals
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("name", [*EXPERIMENTS, "stress"])
+@pytest.mark.parametrize("name", [*EXPERIMENTS, "stress", *CLEAN_FAMILIES])
 def test_interval_runs_follow_the_schedule(name: str) -> None:
     for _dfm, r, state in runs(name):
         schedule = r.truth.schedule
         starts = [row_of(ms) for ms, *_ in schedule] + [len(state)]
-        expected = [ps.IntervalRun(0, None, ps.IDLE, 0, starts[0], "baseline")]
+        ## The lead-in names no Paradigm (PyMCU writes NA before the program).
+        expected = [ps.IntervalRun(0, None, None, 0, starts[0], "baseline")]
         expected += [ps.IntervalRun(interval, cycle, paradigm, starts[k], starts[k + 1], "program")
                      for k, (_ms, interval, cycle, paradigm) in enumerate(schedule)]
         assert state.interval_runs() == expected
@@ -217,10 +227,121 @@ def test_index_gaps(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Restarts and Paradigm-state runs (docs/paradigm-analyses-plan.md, C2)
+# ---------------------------------------------------------------------------
+
+def row_of_index(state: ps.ParadigmState, ms: int) -> int:
+    """The row of the record holding step *ms*, whatever records are missing."""
+    (row,) = np.flatnonzero(state.index == int(ms) // RECORD_MS + 1)
+    return int(row)
+
+
+def test_restarts_find_every_restart_of_the_restart_spec() -> None:
+    found = 0
+    for _dfm, r, state in runs("family_restart"):
+        expected = []
+        for down, resume, missing in r.truth.restarts_ms:
+            row = down // RECORD_MS              # rows 0 .. row-1 hold Index 1 .. row
+            idle = (resume - down) // RECORD_MS - missing
+            expected.append(ps.RestartSpan(row=row, resume_row=row + idle, missing=missing,
+                                           minute=float(state.minutes[row])))
+            ## The gap, then the idle rows, then the instruction again.
+            assert state.index[row] - state.index[row - 1] == missing + 1
+            assert state.unknown_rows()[row:row + idle].all() and not state.unknown_rows()[row + idle]
+            assert state.index[row + idle] == resume // RECORD_MS + 1
+        assert state.restarts() == expected and len(expected) == 1
+        assert expected[0].minute == pytest.approx((r.truth.restarts_ms[0][0] / RECORD_MS
+                                                    + r.truth.restarts_ms[0][2] + 1) * RECORD_MS / 60000)
+        found += len(expected)
+    assert found == 2
+
+
+@pytest.mark.parametrize("name", [*EXPERIMENTS, "stress", *CLEAN_FAMILIES])
+def test_restarts_find_nothing_on_the_other_specs(name: str) -> None:
+    for _dfm, _r, state in runs(name):
+        assert state.restarts() == []
+
+
+def test_a_gap_alone_or_unknown_rows_alone_are_no_restart(tmp_path: Path) -> None:
+    spec, results = _simulated("choice_pr")
+    ## Lost records: a gap, then the same Paradigm.
+    write_v4_recording(tmp_path, spec, results=results, index_gaps={1: [(1000, 25)]})
+    assert state_of(pd.read_csv(tmp_path / "DFM1_0.csv")).restarts() == []
+    ## An instruction outside the program without a gap.
+    rows = results[1].rows.copy()
+    rows["Interval"] = rows["Interval"].astype("Float64")
+    rows.loc[400:409, ["Interval", "Cycle"]] = pd.NA
+    rows.loc[400:409, "Paradigm"] = pd.NA
+    assert state_of(rows).restarts() == []
+    ## Both, but the gap ends before the unknown rows begin.
+    gapped = rows[(rows["Index"] < 300) | (rows["Index"] > 320)].reset_index(drop=True)
+    assert state_of(gapped).restarts() == []
+    ## A gap straight into them is one.
+    gapped = rows[(rows["Index"] < 380) | (rows["Index"] > 400)].reset_index(drop=True)
+    (span,) = state_of(gapped).restarts()
+    assert (span.row, span.resume_row, span.missing) == (379, 389, 21)
+
+
+def test_a_restart_running_to_the_end_resumes_at_the_end() -> None:
+    _dfm, r, state = runs("family_restart")[0]
+    (span,) = state.restarts()
+    cut = state.subset(np.arange(len(state)) < span.row + 2)
+    (end,) = cut.restarts()
+    assert (end.row, end.resume_row, end.missing) == (span.row, len(cut), span.missing)
+
+
+@pytest.mark.parametrize("name", [*EXPERIMENTS, "stress", *FAMILIES])
+def test_state_runs_are_the_runs_between_paradigm_starts(name: str) -> None:
+    for _dfm, r, state in runs(name):
+        state_runs = state.state_runs()
+        assert state_runs[0][0] == 0 and state_runs[-1][1] == len(state)
+        assert all(a < b for a, b in state_runs)
+        assert all(b == a2 for (_a, b), (a2, _b) in zip(state_runs, state_runs[1:]))
+        starts = state._paradigm_starts()
+        assert [a for a, _b in state_runs] == np.flatnonzero(starts).tolist()
+        ## Without a restart: the lead-in, then a run per change of name in the schedule.
+        if not r.truth.restarts_ms:
+            names = [p for _ms, _k, _c, p in r.truth.schedule]
+            expected = [0] + [row_of(ms) for k, (ms, _k, _c, p) in enumerate(r.truth.schedule)
+                              if k == 0 or p != names[k - 1]]
+            assert [a for a, _b in state_runs] == expected
+
+
+def test_state_runs_split_at_a_restart() -> None:
+    for _dfm, r, state in runs("family_restart"):
+        (span,) = state.restarts()
+        lead = state.lead_in_rows()
+        assert state.state_runs() == [(0, lead), (lead, span.row), (span.row, span.resume_row),
+                                      (span.resume_row, len(state))]
+        ## The run after the restart starts as the firmware did: a new Paradigm's first row.
+        assert state._paradigm_starts()[span.resume_row]
+        assert state.paradigm[span.resume_row] == state.paradigm[span.row - 1]
+
+
+def test_a_restart_changes_nothing_else() -> None:
+    """Training stays the first Main row under a ratio Paradigm and the
+    Acclimation end the end of the first Acclimation run, though the wells
+    acclimate again after the restart; the onsets are still the truth's."""
+    (_dfm, r, state), _closed = runs("family_restart")
+    (span,) = state.restarts()
+    for w in range(1, 13, 2):
+        first, *again = state.acclimation_runs(w)
+        assert [run[0] for run in again] == [span.resume_row]
+        assert state.acclimation_end(w) == first[1] == row_of(r.truth.acclimation_end_ms[w])
+        assert state.training_end(w) == first[1] < span.row
+        onsets = [row_of_index(state, ms) for ms in r.truth.activation_onset_ms[w]]
+        assert state.activation_onsets(w).tolist() == onsets
+        assert [state.requirement_met(w, o) for o in state.activation_onsets(w)] == r.truth.requirement_met[w]
+    ## The Activations carry on through the gap and the idle rows.
+    assert (np.diff(state.activations, axis=0) >= 0).all()
+    assert (state.activations[span.row:span.resume_row] == state.activations[span.row - 1]).all()
+
+
+# ---------------------------------------------------------------------------
 # Activations and light
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("name", [*EXPERIMENTS, "stress"])
+@pytest.mark.parametrize("name", [*EXPERIMENTS, "stress", *CLEAN_FAMILIES])
 def test_activation_onsets_are_the_truths(name: str) -> None:
     repeated = 0
     for _dfm, r, state in runs(name):
@@ -244,7 +365,7 @@ def test_wells_with_activations() -> None:
             assert state.wells_with_activations() == frozenset(expected)
 
 
-@pytest.mark.parametrize("name", [*EXPERIMENTS, "stress"])
+@pytest.mark.parametrize("name", [*EXPERIMENTS, "stress", *CLEAN_FAMILIES])
 def test_lit_seconds_are_the_on_ms_total(name: str) -> None:
     for _dfm, r, state in runs(name):
         n = len(state)
@@ -314,7 +435,7 @@ def test_training_needs_a_ratio_paradigm() -> None:
             assert all(end is None for end in ends.values()), dfm_id
 
 
-@pytest.mark.parametrize("name", list(EXPERIMENTS))
+@pytest.mark.parametrize("name", [*EXPERIMENTS, *CLEAN_FAMILIES])
 def test_requirement_met_is_the_truths(name: str) -> None:
     for _dfm, r, state in runs(name):
         for w in WELLS:
@@ -350,7 +471,7 @@ def test_an_acclimation_activation_meets_no_requirement() -> None:
                     assert state.requirement_met(w, onset) is None
 
 
-@pytest.mark.parametrize("name", list(EXPERIMENTS))
+@pytest.mark.parametrize("name", [*EXPERIMENTS, *CLEAN_FAMILIES])
 def test_firmware_events_between_are_the_truths(name: str) -> None:
     rng = np.random.default_rng(3)
     for _dfm, r, state in runs(name):

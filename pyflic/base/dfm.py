@@ -734,9 +734,9 @@ class DFM:
     def paradigm_sequence(self) -> list[dict[str, object]] | None:
         """The Paradigms the rows were recorded under, in order: one entry
         per run of rows with the same name (``Paradigm``, ``FirstMin``,
-        ``LastMin``, ``Rows``), the ``Idle`` lead-in included and an unknown
-        name as ``NA``.  ``None`` without a Paradigm state (generations 1
-        and 2)."""
+        ``LastMin``, ``Rows``), an unknown name as ``NA``: the lead-in, which
+        PyMCU writes before any instruction, and a restart's idle rows.
+        ``None`` without a Paradigm state (generations 1 and 2)."""
         state = self.paradigm
         if state is None:
             return None
