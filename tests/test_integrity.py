@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+from datetime import timedelta
 from functools import lru_cache
 from pathlib import Path
 
@@ -27,7 +28,7 @@ import yaml
 
 from pyflic.base import pdf_report
 from pyflic.base import program_timeline as pt
-from pyflic.base.dfm import DFM
+from pyflic.base.dfm import DFM, NO_ACK_NOTE
 from pyflic.base.parameters import Parameters
 from pyflic.base.script_editor.runner import run_experiment_script
 from pyflic.base.yaml_config import load_experiment_yaml
@@ -37,9 +38,11 @@ from pr_fixtures import make_pr_experiment_dir
 from v4_fixtures import (
     CHOICE_PR_CASES,
     choice_pr_spec,
+    family_specs,
     fixed_ratio_spec,
     one_of_each_spec,
     repeating_open_loop_spec,
+    restart_messages,
     simulate,
     stress_spec,
     write_gen2_recording,
@@ -148,6 +151,176 @@ def test_generation_2_has_no_paradigm_state_and_the_new_labels(tmp_path):
     assert report["paradigm_sequence"] is None and report["lost_records"] == 0
     assert "None: every Paradigm column is NA" in text
     assert "    Overflow: 1\n" in text
+
+
+# ---------------------------------------------------------------------------
+# Generation 3: restarts, the No Ack note and the lost-records cross-check
+# (docs/paradigm-analyses-plan.md, C6)
+# ---------------------------------------------------------------------------
+
+@lru_cache(maxsize=None)
+def _restart():
+    spec = family_specs(minutes=6.0)["restart"]
+    return spec, simulate(spec)
+
+
+def _restart_lines(spec, dfm_id: int) -> tuple[dict, str]:
+    """The report entry and the text line the restart spec's DFM should get,
+    named in Messages.csv."""
+    (r,) = next(d for d in spec.dfms if d.dfm_id == dfm_id).restarts
+    after, missing, idle = round(r.at_s * 5), round(r.down_s * 5), round(r.resend_s * 5)
+    when = spec.start + timedelta(milliseconds=(after + missing + 1) * 200)
+    minute = (after + missing + 1) * RECORD_MIN
+    entry = {"Time": pd.Timestamp(when), "Minute": pytest.approx(minute), "Row": after,
+             "ResumeRow": after + idle, "AfterIndex": after, "Missing": missing,
+             "Seconds": pytest.approx(missing * 0.2), "Source": "data", "Messages": True,
+             "Note": "named in Messages.csv"}
+    line = (f"  {when:%m/%d/%Y %H:%M:%S}.{when.microsecond // 1000:03d} (minute {minute:.2f}): "
+            f"{missing} record(s), {missing * 0.2:.1f} s, missing after Index {after}, then {idle} "
+            f"row(s) under no instruction; named in Messages.csv\n")
+    return entry, line
+
+
+def _drop_messages(path: Path, *texts: str) -> None:
+    """Messages.csv without its lines holding any of *texts*."""
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    path.write_text("".join(line for line in lines if not any(t in line for t in texts)),
+                    encoding="utf-8")
+
+
+def test_the_report_lists_each_restart_and_whether_messages_names_it(tmp_path):
+    spec, results = _restart()
+    _recording(tmp_path, spec, results=results)
+    for dfm_id in (1, 2):
+        report, text = _report(DFM.load(dfm_id, Parameters.two_well(), data_dir=tmp_path / "data"))
+        entry, line = _restart_lines(spec, dfm_id)
+        assert report["restarts"] == [entry]
+        assert f"## DFM restarts\nRestarts: 1\n{line}\n" in text
+        ## The restart's idle rows are the unknown-instruction rows, its gap the only lost records.
+        assert report["unknown_instruction_rows"] == entry["ResumeRow"] - entry["Row"]
+        assert report["lost_record_gaps"] == [(entry["AfterIndex"], entry["Missing"],
+                                               pytest.approx(entry["AfterIndex"] * RECORD_MIN))]
+        assert "Lost records Messages.csv names: 0, as the Index gaps outside restarts show.\n" in text
+    ## A clean recording has none.
+    clean, clean_results = _choice()
+    _recording(tmp_path / "clean", clean, results=clean_results)
+    report, text = _report(DFM.load(1, Parameters.two_well(), data_dir=tmp_path / "clean" / "data"))
+    assert report["restarts"] == [] and "## DFM restarts\nNone.\n" in text
+
+
+def test_a_restart_messages_does_not_name_says_so(tmp_path):
+    spec, results = _restart()
+    _recording(tmp_path / "none", spec, results=results, messages=False)
+    _recording(tmp_path / "silent", spec, results=results)
+    _drop_messages(tmp_path / "silent" / "data" / "Messages.csv", "restarted", "recorded nothing")
+    for folder, named, note in (("none", None, "no Messages.csv to confirm it"),
+                                ("silent", False, "not named in Messages.csv")):
+        report, text = _report(DFM.load(1, Parameters.two_well(), data_dir=tmp_path / folder / "data"))
+        (entry,) = report["restarts"]
+        assert entry["Messages"] is named and entry["Note"] == note and entry["Source"] == "data"
+        assert f"row(s) under no instruction; {note}\n" in text
+
+
+def test_a_restart_only_messages_names_is_listed_too(tmp_path):
+    """The data show an Index gap but no rows under no instruction (PyMCU's
+    resend came at once), or nothing at all."""
+    spec, results = _choice()
+    _recording(tmp_path, spec, results=results, index_gaps={1: [(1000, 25)]})
+    path = tmp_path / "data" / "Messages.csv"
+    _drop_messages(path, "Lost 25 records")
+    started, finished = restart_messages(1, 1000, 1000, 25)
+    gone = restart_messages(1, 2000, 2000, 10)          # a range the data show no gap at
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    lines[1:1] = [f"1,10/16/2026,23:37:25,200.0,1,{started},Error\n",
+                  f"1,10/16/2026,23:37:25,200.0,1000,{finished},Error\n",
+                  f"1,10/16/2026,23:40:00,200.0,1,{gone[0]},Error\n",
+                  f"1,10/16/2026,23:40:00,200.0,2000,{gone[1]},Error\n",
+                  f"1,10/16/2026,23:42:00,0.0,1,{restart_messages(1, 600, 2400, 1)[0]},Error\n"]
+    path.write_text("".join(lines), encoding="utf-8")
+    report, text = _report(DFM.load(1, Parameters.two_well(), data_dir=tmp_path / "data"))
+    gap, elsewhere, no_gap = report["restarts"]
+    assert (gap["Source"], gap["AfterIndex"], gap["Missing"], gap["Row"]) == ("Messages.csv", 1000, 25, None)
+    assert gap["Minute"] == pytest.approx(1026 * RECORD_MIN)
+    assert gap["Note"] == "named in Messages.csv; the data show an Index gap only"
+    assert (elsewhere["AfterIndex"], elsewhere["Missing"], elsewhere["Minute"]) == (2000, 10, None)
+    assert elsewhere["Note"] == "named in Messages.csv; the rows loaded show no Index gap there"
+    assert no_gap["AfterIndex"] is None and no_gap["Time"] == pd.Timestamp(2026, 10, 16, 23, 42)
+    assert no_gap["Note"] == "named in Messages.csv; it lost no records, so the data show no Index gap"
+    assert "missing after Index 1000; named in Messages.csv; the data show an Index gap only\n" in text
+    assert "10/16/2026 23:42:00.000; named in Messages.csv; it lost no records" in text
+    ## That gap was the restart's, so no "Lost N records" is due for it.
+    assert "Lost records Messages.csv names: 0, as the Index gaps outside restarts show." in text
+
+
+def _no_ack(tmp_path: Path, **kw) -> str:
+    spec, results = _choice()
+    _recording(tmp_path, spec, results=results, **kw)
+    return _report(DFM.load(1, Parameters.two_well(), data_dir=tmp_path / "data"))[1]
+
+
+def test_the_no_ack_note_appears_only_when_nothing_was_lost_or_repeated(tmp_path):
+    bits = {1: [(500, 0x01), (900, 0x01), (1300, 0x03)]}
+    quiet = _no_ack(tmp_path / "quiet", error_bits=bits)
+    assert "    No Ack: 3\n    Overflow: 1\n" in quiet
+    assert f"    OInterrupt Error: 0\n  {NO_ACK_NOTE}\n\n## Index increment check" in quiet
+    assert NO_ACK_NOTE == ("No Ack with nothing lost or repeated: PyMCU builds before 10/17/2026 sent "
+                           "a partial ACK the firmware took as missed. No data were lost.")
+    ## Records lost, or written twice, or no No Ack at all: no note.
+    assert NO_ACK_NOTE not in _no_ack(tmp_path / "lost", error_bits=bits, index_gaps={1: [(2000, 3)]})
+    assert NO_ACK_NOTE not in _no_ack(tmp_path / "overflow", error_bits={1: [(500, 0x02)]})
+    spec, results = _choice()
+    _recording(tmp_path / "repeated", spec, results=results, error_bits=bits)
+    _repeat_block(tmp_path / "repeated" / "data" / "DFM1_0.csv", 2000, 2010)
+    _report_, text = _report(DFM.load(1, Parameters.two_well(), data_dir=tmp_path / "repeated" / "data"))
+    assert "Repeated records: 10" in text and NO_ACK_NOTE not in text
+    ## Firmware 4.0.0's own: generation 2 (older firmware) has no note.
+    assert NO_ACK_NOTE not in _no_ack(tmp_path / "gen2", error_bits=bits, writer=write_gen2_recording)
+
+
+def test_lost_record_messages_are_checked_against_the_index_gaps(tmp_path):
+    spec, results = _choice()
+    _recording(tmp_path, spec, results=results, index_gaps={1: [(1000, 20), (3000, 7)]})
+    data = tmp_path / "data"
+    _report_, text = _report(DFM.load(1, Parameters.two_well(), data_dir=data))
+    assert "Lost records Messages.csv names: 27, as the Index gaps outside restarts show.\n" in text
+    ## Over the rows loaded: the first gap is before minute 5.
+    _report_, text = _report(DFM.load(1, Parameters.two_well(), data_dir=data, range_minutes=(5, 12)))
+    assert "Lost records Messages.csv names: 7, as the Index gaps outside restarts show.\n" in text
+    ## A gap Messages.csv does not name is a difference.
+    _drop_messages(data / "Messages.csv", "Lost 20 records")
+    _report_, text = _report(DFM.load(1, Parameters.two_well(), data_dir=data))
+    assert ("Lost records Messages.csv names: 7, but the Index gaps outside restarts hold 27 "
+            "(20 more in the data).\n") in text
+
+
+def test_lost_records_beside_a_restart_are_checked_apart_from_it(tmp_path):
+    spec, results = _restart()
+    _recording(tmp_path, spec, results=results, index_gaps={1: [(1200, 7)]})
+    report, text = _report(DFM.load(1, Parameters.two_well(), data_dir=tmp_path / "data"))
+    assert report["lost_records"] == 25 + 7 and len(report["restarts"]) == 1
+    assert "Lost records Messages.csv names: 7, as the Index gaps outside restarts show.\n" in text
+
+
+def test_generations_1_and_2_get_no_restart_section(tmp_path):
+    spec, results = _choice()
+    _recording(tmp_path, spec, results=results, writer=write_gen2_recording, index_gaps={1: [(1000, 5)]})
+    report, text = _report(DFM.load(1, Parameters.two_well(), data_dir=tmp_path / "data"))
+    assert report["restarts"] is None
+    assert "## DFM restarts" not in text and "Lost records Messages.csv names" not in text
+    write_opto_csv(tmp_path / "gen1")
+    report, text = _report(DFM.load(1, Parameters.single_well(), data_dir=tmp_path / "gen1"))
+    assert report["restarts"] is None and "## DFM restarts" not in text
+
+
+def test_the_qc_reports_list_restarts_in_the_text_not_the_csv(tmp_path):
+    spec, results = _restart()
+    exp = _load(_recording(tmp_path, spec, results=results))
+    with contextlib.redirect_stdout(io.StringIO()):
+        out = exp.write_qc_reports()
+    integrity = pd.read_csv(out / "integrity" / "DFM2_integrity_report.csv")
+    assert "restarts" not in integrity.columns and integrity["lost_records"].iloc[0] == 15
+    assert "## DFM restarts\nRestarts: 1\n" in (out / "integrity" / "DFM2_integrity_report.txt").read_text()
+    assert [r["Missing"] for r in exp.dfms[2].restarts()] == [15]
 
 
 # ---------------------------------------------------------------------------

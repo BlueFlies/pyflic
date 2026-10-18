@@ -16,7 +16,7 @@ import pandas as pd
 
 from pyflic.base import messages
 
-from v4_fixtures import fixed_ratio_spec, messages_text, simulate, write_v4_recording
+from v4_fixtures import family_specs, fixed_ratio_spec, messages_text, simulate, write_v4_recording
 
 HEADER = "DFM,Date,Time,Millisecond,Sample,Message,MsgType\n"
 
@@ -104,6 +104,48 @@ def test_the_simulators_messages_read_back(tmp_path):
     assert mine["DFM"].tolist() == [0, 2, 2, 0]
     assert messages.errors(mine)["Index"].tolist() == [803, 1204]
     assert messages_text(spec, index_gaps=gaps).count("\n") == len(frame) + 1
+
+
+def test_record_messages_find_lost_records_and_restarts():
+    """Both writers' lost-records wording and PyMCU's two restart errors;
+    every other message is left out."""
+    frame = messages.parse(
+        HEADER
+        + "0,10/17/2026,10:00:00,0.0,0,Recording started,Unknown\n"
+        + '1,10/17/2026,10:02:13,200.0,1234,"Lost 33 records (6.6 s): Index 1201 to 1233, from 10:02:13.",Error\n'
+        + '1,10/17/2026,10:03:00,0.0,1501,"Lost 1 record (0.2 s): Index 1500, from 10:03:00.",Error\n'
+        + "2,10/17/2026,10:04:00,0.0,40,Lost 5 records (1.0 s): 30 to 34 (counted from the DFM's restart), "
+          "from 10:04:00.,Error\n"
+        + "1,10/17/2026,10:05:00,0.0,2021,(2021) Skipped index: (2000) ,Error\n"
+        + "1,10/17/2026,10:06:00,0.0,2022,(2022) Skipped index: (2021) ,Error\n"
+        + "1,10/17/2026,10:07:00,0.0,1,DFM 1 restarted: its record count went back from 3000 to 1. Its Paradigm "
+          "state and Activation counts started again. Sending its Interval and linkage again.,Error\n"
+        + "1,10/17/2026,10:07:00,0.0,3000,DFM 1 recorded nothing for about 5 s while it restarted: Index 3001 to "
+          "3025 are missing.,Error\n"
+        + "1,10/17/2026,10:08:00,0.0,3100,DFM 1 error: No Ack (repeated 3 more times, the last at 10:08:03),Notice\n")
+    found = messages.record_messages(frame)
+    assert list(found.columns) == list(messages.RECORD_MESSAGE_COLUMNS)
+    assert found["Kind"].tolist() == [messages.LOST_RECORDS] * 4 + [messages.DFM_RESTARTED, messages.RESTART_GAP]
+    assert found["DFM"].tolist() == [1, 1, 2, 1, 1, 1]
+    assert found["First"].tolist() == [1201, 1500, pd.NA, 2001, pd.NA, 3001]
+    assert found["Last"].tolist() == [1233, 1500, pd.NA, 2020, pd.NA, 3025]
+    assert found["Records"].tolist() == [33, 1, 5, 20, pd.NA, 25]
+    assert found["Time"].iloc[0] == pd.Timestamp(datetime(2026, 10, 17, 10, 2, 13, 200000))
+    empty = messages.record_messages(messages.empty())
+    assert empty.empty and list(empty.columns) == list(messages.RECORD_MESSAGE_COLUMNS)
+
+
+def test_the_simulators_restart_messages_are_found(tmp_path):
+    spec = family_specs(minutes=6.0)["restart"]
+    write_v4_recording(tmp_path, spec, index_gaps={1: [(1200, 7)]})
+    found = messages.record_messages(messages.read(tmp_path))
+    assert found[["DFM", "Kind", "First", "Last", "Records"]].values.tolist() == [
+        [2, messages.DFM_RESTARTED, pd.NA, pd.NA, pd.NA],
+        [2, messages.RESTART_GAP, 631, 645, 15],
+        [1, messages.DFM_RESTARTED, pd.NA, pd.NA, pd.NA],
+        [1, messages.RESTART_GAP, 901, 925, 25],
+        [1, messages.LOST_RECORDS, 1201, 1207, 7],
+    ]
 
 
 def test_describe_names_the_source_and_the_record():
