@@ -1142,13 +1142,21 @@ class OptoTab(QtWidgets.QWidget):
 
     exclude_requested = pyqtSignal(list)   # [(dfm_id, chamber), ...]
 
-    #: (header, qc_table column) for the verdict table.
+    #: (header, qc_table column) for the verdict table.  The rule checks'
+    #: columns (firmware 4.0.0) are blank where a group's Paradigms have no
+    #: such rule, and on generations 1 and 2.
     _COLUMNS: tuple[tuple[str, str], ...] = (
         ("DFM", "DFM"), ("Group", "Group"), ("Wells", "Wells"),
         ("Chambers", "Chambers"), ("Roles", "Roles"), ("Treatment", "Treatment"),
         ("Paradigm", "Paradigm"), ("Lit (s)", "LitSec"),
         ("Unexplained", "UnexplainedFraction"), ("From (min)", "UnexplainedOnsetMin"),
         ("Contact, no lick (min)", "ContactWithoutActivitySec"),
+        ("Short", "ShortActivations"), ("Over MaxOn", "OverMaxOnActivations"),
+        ("Cut-offs", "CutOffs"), ("Wrong length", "WrongLengthActivations"),
+        ("Lockout broken", "LockoutViolations"), ("Missed contacts", "MissedContacts"),
+        ("Series wrong", "SeriesMismatches"), ("Non-feeding dark (s)", "NonFeedingDarkSec"),
+        ("Relight (ms)", "RelightDelayMs"), ("Open loop lit", "OpenLoopLitFraction"),
+        ("Interval lag (s)", "IntervalLagSec"), ("Restarts", "Restarts"),
         ("Verdict", "Flags"), ("Likely cause", "LikelyCause"),
     )
 
@@ -1293,15 +1301,20 @@ class OptoTab(QtWidgets.QWidget):
                     text = verdict_text(value)
                     if row.get("Excluded"):
                         text = "excluded — " + text
-                elif column in ("UnexplainedFraction",):
+                elif column in ("UnexplainedFraction", "OpenLoopLitFraction"):
                     text = "—" if pd.isna(value) else f"{100 * float(value):.0f}%"
                 elif column == "ContactWithoutActivitySec":
                     text = "—" if pd.isna(value) else f"{float(value) / 60.0:.0f}"
-                elif column in ("LitSec", "UnexplainedOnsetMin"):
+                elif column in ("LitSec", "UnexplainedOnsetMin", "NonFeedingDarkSec",
+                                "RelightDelayMs"):
                     text = "—" if pd.isna(value) else f"{float(value):.0f}"
+                elif column == "IntervalLagSec":
+                    text = "—" if pd.isna(value) else f"{float(value):.1f}"
                 else:
-                    text = "" if value is None or (isinstance(value, float) and pd.isna(value)) \
-                        else str(value)
+                    ## A nullable count's NA reads blank, not <NA>.
+                    text = "" if value is None or (pd.api.types.is_scalar(value)
+                                                   and not isinstance(value, str)
+                                                   and pd.isna(value)) else str(value)
                 item = QtWidgets.QTableWidgetItem(text)
                 if column == "Flags":
                     item.setForeground(QColor(tones.get(row.get("Verdict"), tones["ok"])))

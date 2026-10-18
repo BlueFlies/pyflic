@@ -593,7 +593,8 @@ def test_the_light_events_carry_the_ledger(choice, tmp_path):
     spec, results = simulated("choice")
     events = choice.opto.events_table()
     assert list(events.columns) == list(oq.OPTO_EVENT_COLUMNS)
-    assert list(oq.OPTO_EVENT_COLUMNS[-9:]) == [*oq.LEDGER_EVENT_COLUMNS, "Family"]
+    ## S1 adds EndedBy after Family (C4).
+    assert list(oq.OPTO_EVENT_COLUMNS[-10:]) == [*oq.LEDGER_EVENT_COLUMNS, "Family", "EndedBy"]
     for column in oq.OPTO_EVENT_INTEGER_COLUMNS:
         assert str(events[column].dtype) == "Int64", column
     assert str(events["Overlap"].dtype) == "boolean"
@@ -813,6 +814,175 @@ def test_the_editors_show_a_row_for_each_constant(qt_app, tmp_path):
     dialog.opto_number_edits["opto_late_records_warn"].setText("40")
     built = dialog._build_design()["global"]["constants"]
     assert built["opto_late_records_warn"] == 40 and built["opto_lost_records_warn"] == 50
+
+
+# ---------------------------------------------------------------------------
+# The rule checks' constants (docs/paradigm-analyses-plan.md, decision 7)
+# ---------------------------------------------------------------------------
+
+RULE_CONSTANTS = {"opto_activation_tolerance_ms": 25,
+                  "opto_activation_length_fail_fraction": 0.05,
+                  "opto_lockout_fail_fraction": 0.02,
+                  "opto_missed_contact_warn_fraction": 0.25,
+                  "opto_non_feeding_lit_warn_fraction": 0.10,
+                  "opto_non_feeding_min_sec": 30,
+                  "opto_non_feeding_dark_warn_fraction": 0.10,
+                  "opto_interval_lag_warn_sec": 5}
+
+
+def test_the_rule_constants_are_defaults_fields_and_validated(tmp_path):
+    from pyflic.base.yaml_lint import lint_flic_config
+
+    for key, default in RULE_CONSTANTS.items():
+        assert oq.DEFAULT_CONSTANTS[key] == default, key
+    assert set(RULE_CONSTANTS) <= {f.key for f in oq.OPTO_CONSTANT_FIELDS}
+    defaults = oq.OptoQCSettings.from_constants(None)
+    assert defaults == oq.OptoQCSettings()
+    settings = oq.OptoQCSettings.from_constants({
+        "opto_activation_tolerance_ms": 40, "opto_activation_length_fail_fraction": 0.2,
+        "opto_lockout_fail_fraction": 0.1, "opto_missed_contact_warn_fraction": 0.5,
+        "opto_non_feeding_lit_warn_fraction": 0.3, "opto_non_feeding_min_sec": 5,
+        "opto_non_feeding_dark_warn_fraction": 0.4, "opto_interval_lag_warn_sec": 12})
+    assert (settings.activation_tolerance_ms, settings.activation_length_fail_fraction,
+            settings.lockout_fail_fraction, settings.missed_contact_fraction,
+            settings.non_feeding_lit_fraction, settings.non_feeding_min_sec,
+            settings.non_feeding_dark_fraction, settings.interval_lag_warn_sec) == \
+        (40, 0.2, 0.1, 0.5, 0.3, 5, 0.4, 12)
+    problems = oq.opto_constant_problems({"opto_activation_tolerance_ms": 2.5,
+                                          "opto_lockout_fail_fraction": 3,
+                                          "opto_interval_lag_warn_sec": -1,
+                                          "opto_non_feeding_dark_warn_fraction": "some"})
+    assert len(problems) == 4
+    root = tmp_path / "exp"
+    (root / "data").mkdir(parents=True)
+    cfg = _config([1])
+    cfg["global"]["constants"] = {"opto_lockout_fail_fraction": 3}
+    (root / "flic_config.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False))
+    assert any(i.severity == "error" and "opto_lockout_fail_fraction" in i.message
+               for i in lint_flic_config(root / "flic_config.yaml"))
+
+
+def test_the_editors_show_a_row_for_each_rule_constant(qt_app, tmp_path):
+    from pyflic.base.config_editor import FLICConfigEditor
+    from pyflic.base.design_editor import ProjectDesignDialog
+
+    exp = tmp_path / "exp"
+    (exp / "data").mkdir(parents=True)
+    cfg = _config([1])
+    cfg["global"]["optogenetics"] = True
+    (exp / "flic_config.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False))
+    win = FLICConfigEditor(initial_path=exp)
+    try:
+        for key, default in RULE_CONSTANTS.items():
+            assert f"{default:g}" in win._opto_constant_widgets[key].placeholderText(), key
+        win._opto_constant_widgets["opto_interval_lag_warn_sec"].setText("8")
+        assert win._collect_yaml()["global"]["constants"]["opto_interval_lag_warn_sec"] == 8
+    finally:
+        win.close()
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "project.yaml").write_text(yaml.safe_dump({"name": "P", "design": {"global": {
+        "chamber_layout": "two_well", "optogenetics": True,
+        "constants": {"opto_activation_tolerance_ms": 40}}}}), encoding="utf-8")
+    dialog = ProjectDesignDialog(start_dir=str(root))
+    assert dialog.opto_number_edits["opto_activation_tolerance_ms"].text() == "40"
+    assert set(RULE_CONSTANTS) <= set(dialog.opto_number_edits)
+    dialog.opto_number_edits["opto_lockout_fail_fraction"].setText("0.05")
+    built = dialog._build_design()["global"]["constants"]
+    assert built["opto_lockout_fail_fraction"] == 0.05
+    assert built["opto_activation_tolerance_ms"] == 40
+
+
+def test_the_summary_names_the_rule_constants_on_generation_3_only(one_of_each, tmp_path):
+    lines = "\n".join(one_of_each.opto.summary_lines())
+    firmware4 = next(line for line in lines.splitlines()
+                     if line.startswith("Firmware 4.0.0 checks:"))
+    for key, default in RULE_CONSTANTS.items():
+        assert f"{key}={default:g}" in firmware4, key
+    gen2 = load(tmp_path / "gen2", "choice1", writer=write_gen2_recording)
+    assert "opto_activation_tolerance_ms" not in "\n".join(gen2.opto.summary_lines())
+
+
+def test_the_qc_viewer_tab_shows_the_rule_columns():
+    pytest.importorskip("PyQt6")
+    from pyflic.base import rule_checks as rc
+    from pyflic.base.qc_viewer import OptoTab
+
+    shown = [column for _header, column in OptoTab._COLUMNS]
+    assert set(rc.RULE_QC_COLUMNS) | {"OpenLoopLitFraction"} <= set(shown)
+    assert shown.index("Restarts") < shown.index("Flags")
+
+
+def test_the_qc_viewer_tab_leaves_missing_counts_blank(qt_app, one_of_each):
+    from pyflic.base.qc_viewer import OptoTab
+
+    tab = OptoTab(one_of_each)
+    try:
+        headers = [h for h, _c in OptoTab._COLUMNS]
+        texts = {tab._table.item(r, headers.index("Lockout broken")).text()
+                 for r in range(tab._table.rowCount())}
+        ## FixedInterval's groups count 0; every other group's column is NA.
+        assert texts == {"0", ""}
+        lag = {tab._table.item(r, headers.index("Interval lag (s)")).text()
+               for r in range(tab._table.rowCount())}
+        assert lag == {"0.2"}
+    finally:
+        tab.close()
+
+
+# ---------------------------------------------------------------------------
+# NonFeeding: its own constants, and its windows expect light
+# ---------------------------------------------------------------------------
+
+def _lit_through_feeding(rows):
+    frame = rows[4]
+    for w in (1, 2):                                          # group 1, W1 + W2
+        frame[f"OnMs{w}"] = pd.array(np.where(frame["Interval"].to_numpy(
+            dtype=float, na_value=0) > 0, 200, 0).astype(np.int64), dtype="Int64")
+
+
+def test_non_feeding_light_during_feeding_reads_its_own_constants(tmp_path):
+    """Decision 7: its own two constants replace the unexplained-light ones
+    it borrowed.  Their defaults are the borrowed values, so its results do
+    not change; the borrowed constants no longer move it, its own do."""
+    assert oq.DEFAULT_CONSTANTS["opto_non_feeding_lit_warn_fraction"] == \
+        oq.DEFAULT_CONSTANTS["opto_unexplained_warn_fraction"]
+    assert oq.DEFAULT_CONSTANTS["opto_non_feeding_min_sec"] == \
+        oq.DEFAULT_CONSTANTS["opto_unexplained_min_sec"]
+    e = load(tmp_path / "exp", "one_of_each", edit=_lit_through_feeding)
+
+    def flags(constants):
+        e.global_constants.clear()
+        e.global_constants.update(constants)
+        return _flags(_groups(e, 4).loc[1])
+
+    assert flags({}) == [oq.NON_FEEDING_LIT_WHILE_FEEDING]
+    assert "opto_non_feeding_lit_warn_fraction is 0.1 and opto_non_feeding_min_sec 30" in \
+        "\n".join(e.opto.lines())
+    ## The borrowed constants, moved past the measured values, change nothing ...
+    assert flags({"opto_unexplained_warn_fraction": 0.99,
+                  "opto_unexplained_min_sec": 100000}) == [oq.NON_FEEDING_LIT_WHILE_FEEDING]
+    ## ... its own do (the light was on through all the feeding: 100%).
+    assert flags({"opto_non_feeding_lit_warn_fraction": 1.0}) == []
+    assert flags({"opto_non_feeding_min_sec": 100000}) == []
+
+
+def test_a_non_feeding_dfm_that_never_lit_is_no_light_recorded(tmp_path):
+    """NonFeeding windows expect light: dark from start to end under
+    optogenetics yes is *no light recorded*, which fails the DFM."""
+    from v4_fixtures import OnMsFault, family_specs
+
+    spec = family_specs()["non_feeding"]
+    root = tmp_path / "exp"
+    write_v4_recording(root / "data", spec, on_ms_faults={
+        1: [OnMsFault(w, 0, spec.duration_min * 60, 0) for w in range(1, 13)]})
+    (root / "flic_config.yaml").write_text(yaml.safe_dump(_config([1, 2]), sort_keys=False))
+    with contextlib.redirect_stdout(io.StringIO()):
+        e = load_experiment_yaml(root, parallel=False, use_disk_cache=False)
+    e.optogenetics = "yes"
+    assert oq.NO_LIGHT in e.opto.result(1).flags
+    assert (_groups(e, 1)["Verdict"] == "failed").all()
+    assert oq.NO_LIGHT not in e.opto.result(2).flags
 
 
 # ---------------------------------------------------------------------------

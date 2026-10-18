@@ -362,11 +362,15 @@ class OptoLightQC:
 
         ``Flags`` lists what fired: *unexplained light*, *light while off*,
         *no light recorded* and, on a firmware 4.0.0 recording, *broken
-        yoking* and *paradigm not in program* fail a group
+        yoking*, *paradigm not in program* and the rule checks that fail
+        (*wrong activation length*, *lockout broken*, *requirement series
+        wrong*, *max on exceeded*, *short activations*) fail a group
         (:data:`oq.FAILING_FLAGS`); the rest are warnings.  ``Verdict``
         is ``ok``, ``warning`` or ``failed``; ``Excluded`` says a failed
         group's chambers leave the analysis (``exclude_failed_opto_chambers``,
-        off by default).  The definitions are in :mod:`pyflic.base.opto_qc`.
+        off by default).  The rule checks' counts are nullable integers.
+        The definitions are in :mod:`pyflic.base.opto_qc` and
+        :mod:`pyflic.base.rule_checks`.
         """
         settings = self.settings()
         rows = []
@@ -378,7 +382,10 @@ class OptoLightQC:
                                        and row["Verdict"] == VERDICT_FAILED
                                        and row["Treatment"])
                 rows.append(row)
-        return pd.DataFrame(rows, columns=list(oq.OPTO_QC_COLUMNS))
+        frame = pd.DataFrame(rows, columns=list(oq.OPTO_QC_COLUMNS))
+        for column in oq.OPTO_QC_INTEGER_COLUMNS:
+            frame[column] = pd.array(pd.to_numeric(frame[column]), dtype="Int64")
+        return frame
 
     def interval_table(self) -> pd.DataFrame:
         rows = [r for d in self.dfm_ids() for r in self.result(d).intervals]
