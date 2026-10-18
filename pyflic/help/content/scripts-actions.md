@@ -27,7 +27,7 @@ The member is already loaded when a script starts, so `load` reads nothing, and 
 | `run_qc` | — | The Hub's **Run QC**: the QC Set minus `global.omit.qc`, into `qc/` — the integrity report, data breaks, simultaneous feeding and bleeding (two-well), the raw / baselined / cumulative-licks plots, and the optogenetic light QC, its figure and the Program timeline; Progressive Ratio's light QC and its two figures into `analysis/` |
 | `run_analysis` | `binsize` | The Hub's **Run analysis**: the core (auto-removal and `removed_chambers.csv`, `summary.txt`, `feeding_summary.csv` and, with Facets, `feeding_summary_facet.csv`), then the Analysis Set minus `global.omit.analyses`, the experiment report last. `binsize` is the binned summary's and the report's |
 | `feeding_csv` | — | Per-chamber feeding summary to CSV |
-| `facet_csv` | — | Per-chamber summary per Facet to `feeding_summary_facet.csv`, which `run_analysis` writes as part of its core; skipped when the experiment has no Facets. Not offered in the Script Editor's palette: write it in the YAML |
+| `facet_csv` | — | Per-chamber summary per Facet to `feeding_summary_facet.csv`, which `run_analysis` writes as part of its core; skipped when the experiment has no Facets |
 | `binned_csv` | `binsize` | Feeding metrics binned over time, to CSV |
 | `weighted_duration` | — | Weighted-duration summary (hedonic experiments), to `treatment_means.csv` |
 | `paired_yoked_diff` | — | Paired − yoked table, one row per chamber group per Facet (progressive ratio) |

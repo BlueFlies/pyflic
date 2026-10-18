@@ -257,6 +257,15 @@ ACTIONS: list[Action] = [
         params=[_START, _END],
     ),
     Action(
+        action="facet_csv",
+        label="Write faceted feeding CSV",
+        blurb="The per-chamber feeding summary for each Facet.",
+        icon="csv", category=Category.ANALYZE, produces="csv",
+        notes="Writes analysis/feeding_summary_facet.csv, which run_analysis "
+              "also writes as part of its core.  Skipped with a log line when "
+              "the experiment has no Facets.",
+    ),
+    Action(
         action="binned_csv",
         label="Write binned feeding CSV",
         blurb="Per-chamber feeding metrics binned over time.",

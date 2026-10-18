@@ -45,6 +45,32 @@ def test_the_two_registries_do_not_overlap():
     assert not (experiment_names & project_names)
 
 
+def _runner_actions() -> set[str]:
+    """Every action name the Experiment Script runner compares a step with."""
+    import ast
+    import inspect
+
+    from pyflic.base.script_editor import runner
+
+    names: set[str] = set()
+    for node in ast.walk(ast.parse(inspect.getsource(runner))):
+        if isinstance(node, ast.Compare) and isinstance(node.left, ast.Name) \
+                and node.left.id == "action":
+            for comparator in node.comparators:
+                names |= {c.value for c in ast.walk(comparator)
+                          if isinstance(c, ast.Constant) and isinstance(c.value, str)}
+    return names
+
+
+def test_the_catalogue_offers_every_action_the_runner_runs():
+    """The Script Editor can only add what its catalogue lists: facet_csv ran
+    but could not be added."""
+    from pyflic.base.script_editor.actions import ACTIONS, get_action
+
+    assert _runner_actions() == {a.action for a in ACTIONS}
+    assert get_action("facet_csv").category == get_action("feeding_csv").category
+
+
 def test_an_experiment_action_in_a_project_script_is_rejected_by_name(tmp_path: Path):
     project = _make_project(tmp_path)
     problems = validate_project_script(
