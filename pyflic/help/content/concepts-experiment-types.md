@@ -42,9 +42,14 @@ mode, with no type-level constraints applied.
 
 | `experiment_type` | Layout | Use it when |
 |---|---|---|
-| *(omitted)* / `Custom` | as stated | No type-level constraints wanted |
-| `Hedonic` | `two_well` | Two-well choice designs where bout duration matters |
-| `ProgressiveRatio` | `two_well` | Paired/yoked operant designs with a light reward and a breaking point |
+| *(omitted)* / `Custom` | as stated | No type-level constraints wanted: a recording with no light, or an OpenLoop, ClosedLoop, FixedInterval or NonFeeding program |
+| `Hedonic` | `two_well` | A two-well hedonic design, where bout duration matters, with no light or under any of those programs |
+| `ProgressiveRatio` | `two_well` | A ratio program (ProgressiveRatio or FixedRatio), with or without yoked controls: a light earned by feeding, and a breaking point |
+
+The Experiment Type describes the feeding design. The light is described by the
+program's Paradigms, whatever the type: every optogenetic experiment gets the light QC and
+the light table of the Paradigms it ran (see
+[Optogenetic experiments](concepts-optogenetics.md)).
 
 ## Migrating
 
@@ -113,21 +118,27 @@ durations, faceted by treatment.
 
 ### Progressive Ratio
 
-A two-well operant assay built on **chamber groups**: each DFM's chambers 1+2, 3+4 and 5+6
-share one light circuit and one treatment. In each group the **paired** fly's feeding at
-the sucrose well (always well A) turns the light on, and the **yoked** fly is lit at the same
-moments whatever it does. The config names the paired chamber of each group per DFM with
-`paired_chambers:`; the yoked one is derived. On DFM firmware 4.0.0 the type covers both
-ratio Paradigms, ProgressiveRatio and FixedRatio. Other optogenetic designs — open loop,
-closed loop, fixed interval, non-feeding — are analysed as a Custom or Hedonic experiment,
-with the [light table](concepts-optogenetics.md#the-light-table) beside the feeding results.
+A two-well operant assay built on **chamber groups**, each lit by one light circuit and
+sharing one treatment. In each group the **paired** fly's feeding at the sucrose well
+(always well A) turns the light on. A group is a pair, whose **yoked** fly is lit at the
+same moments whatever it does, or a single chamber with no yoked control. Per DFM, the
+config names the paired chamber of each pair with `paired_chambers:`, or says
+`chamber_groups: single`, or leaves both out and the linkage of `Program.txt` gives the
+groups. On DFM firmware 4.0.0 the type covers both ratio Paradigms, ProgressiveRatio and
+FixedRatio. Other optogenetic designs — open loop, closed loop, fixed interval, non-feeding
+— are analysed as a Custom or Hedonic experiment, with the
+[light table](concepts-optogenetics.md#the-light-table) beside the feeding results. A
+yoked design among them gets a paired − yoked comparison of feeding too, in the report's
+*Paired and yoked* results.
 
 What the type adds:
 
 - **Training and Test facets**, split at each group's own training end, which the firmware
   marks in the data — so a Progressive Ratio config never states `facet_cutoffs`.
-- **Paired − yoked differences** per chamber group, the primary input to its statistics.
-- A **light QC** that fails a group whose light followed the sensor rather than the fly.
+- **Paired − yoked differences** per pair, the primary input to its statistics when the
+  design has yoked controls.
+- A **light QC** that fails a group whose light followed the sensor rather than the fly,
+  or, on firmware 4.0.0, met a Requirement its program's series does not give.
 - A **breaking point** — the lick-backed light events the paired fly completed before its
   first long pause — and **sucrose persistence**, the same question asked of feeding.
 - Its own constants (`require_training_complete`, `exclude_failed_pr_groups`, the light QC

@@ -6,10 +6,14 @@ every Experiment Type. It follows [v4-data-plan.md](v4-data-plan.md), which
 made pyflic read the new data, and begins with a check of pyflic against the
 firmware and PyMCU as they stood on 10/17/2026.
 
-**Status (2026-10-17): accepted**, all 19 decisions, and being built on
-`v4_Dev` as the streams below. The fixes listed under
-[Where pyflic stands](#where-pyflic-stands) as *fixed* were done first
-(55c4315). The decision and its reasons are in
+**Status (2026-10-18): implemented** on `v4_Dev`, all 19 decisions: streams
+P0 to S5 merged by ab0b9cd, and S6's help, guides and records on top of it.
+Where the build departed from the plan is under [As built](#as-built). Still
+open: the bench recordings of each type that recalibrate the constants (see
+[Not in this plan](#not-in-this-plan), and the bench checkpoint in
+[firmware-4-data-in-pyflic.md](firmware-4-data-in-pyflic.md#bench-checkpoint-for-the-paradigm-analyses)).
+The fixes listed under [Where pyflic stands](#where-pyflic-stands) as *fixed*
+were done first (55c4315). The decision and its reasons are in
 [adr/0017](adr/0017-paradigm-families-not-experiment-types.md), with an
 addendum to [adr/0015](adr/0015-the-opto-program-and-a-light-qc-for-every-type.md)
 for the new checks' severities.
@@ -1077,6 +1081,26 @@ now, and a phase shorter than `MIN_LIGHT_PHASE_MIN` (1 minute) has no rate.
 **Joining the streams** (144ddb2): the Progressive Ratio light QC calls
 `rule_checks.requirement_series_mismatches`. The light table reads the
 tolerance through `OptoQCSettings`.
+
+**S6** (help, guides and records):
+- **The terms and ADRs were already written.** *Paradigm Family* entered
+  `CONTEXT.md`, and ADR-0017 and ADR-0015's addendum were written, when the
+  plan was accepted (41800e4). S6 updated `CONTEXT.md`'s Progressive Ratio
+  entries for solo groups, which the plan's S6 list did not name.
+- **The QC guide's rule checks are a section of their own**, section 7 of
+  `docs/qc-user-guide.md`, one subsection per family. Progressive Ratio,
+  Projects, the checklist and troubleshooting moved to sections 8 to 11.
+- **"Which Experiment Type?"** is a table in `docs/GETTING_STARTED.md`; the
+  help topic *Experiment types* says the same in its table of shipped types.
+- **New help anchors**: `concepts-optogenetics#paradigm-families`,
+  `#each-paradigms-own-rule` and `#paired-and-yoked-designs`,
+  `plots-catalog#rule-figures` and
+  `concepts-progressive-ratio#without-yoked-controls`.
+- **Decision 3 is half built.** Generations 1 and 2 keep their checks, but
+  their report does not name the rule checks that did not run, as the
+  decision asks; only a firmware 4.0.0 DFM without `Program.txt` gets such a
+  sentence. The guides describe the reports as they are.
+- **No README row**: no new guide was added.
 
 **Coordination:**
 - **The checks live in a module of their own**, `rule_checks.py`, so that

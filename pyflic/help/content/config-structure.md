@@ -45,8 +45,10 @@ normally holds only `dfms:` and its own `scripts:`; every `global:` key comes fr
 The Experiment Type — `Hedonic` or `ProgressiveRatio`; omit it for a Custom Experiment,
 which states `chamber_layout: single_well` or `two_well` instead (two-well when omitted).
 A typed config states neither `chamber_layout` nor `params.chamber_size`: the type owns
-them. A Progressive Ratio config also needs
-`paired_chambers` on every DFM (see [DFMs and chambers](config-dfms-chambers.md)). See
+them. A Progressive Ratio config also says, per DFM, how its chambers form chamber groups:
+`paired_chambers` for pairs, `chamber_groups: single` for single chambers, or neither when
+`data/Program.txt`'s linkage gives them (see [DFMs and chambers](config-dfms-chambers.md)).
+See
 [Experiment types](concepts-experiment-types.md).
 
 ## `global.optogenetics`
@@ -137,8 +139,8 @@ A Progressive Ratio experiment adds its own, all with defaults:
 
 | Key | Default | Effect |
 |---|---|---|
-| `require_training_complete` | `true` | Remove both chambers of a chamber group whose paired fly never finished training |
-| `exclude_failed_pr_groups` | `true` | Remove both chambers of a chamber group that fails the light QC (self-triggered light, implausible training); `false` keeps them, still listed in `pr_light_qc.csv` |
+| `require_training_complete` | `true` | Remove every chamber of a chamber group whose paired fly never finished training (both of a pair, the one of a single chamber) |
+| `exclude_failed_pr_groups` | `true` | Remove every chamber of a chamber group that fails the light QC (self-triggered light, implausible training, and on firmware 4.0.0 *requirement series wrong*); `false` keeps them, still listed in `pr_light_qc.csv` |
 | `pr_lick_free_run` | `5` | Consecutive Test light events with no sucrose licks that make a group's light self-triggered |
 | `pr_trend_min_events` | `5` | Test light events needed before the licks-per-event trend is judged |
 | `pr_trend_min_rho` | `0.3` | Spearman's rho below which a group gets the *no increasing trend* warning |
@@ -152,7 +154,7 @@ What the light QC checks, and how the breaking point is defined, is in
 
 Every optogenetic experiment, of any type, reads the optogenetic light QC's constants too —
 `exclude_failed_opto_chambers` (off by default: failed linkage groups are flagged, not
-excluded) and twelve thresholds whose names start `opto_`, five of which apply only to
+excluded) and twenty thresholds whose names start `opto_`, thirteen of which apply only to
 firmware 4.0.0 recordings. They are listed in
 [Optogenetic experiments](concepts-optogenetics.md#thresholds). The Project Design
 dialog and the [Config Editor](app-config-editor.md) show these as fields for a
@@ -266,7 +268,13 @@ dfms:
     params: {pi_direction: right}
     paired_chambers: [2, 3, 6]
     chambers: {1: Exp, 2: Exp, 3: Ctrl, 4: Ctrl, 5: Exp, 6: Exp}
+  3:
+    params: {pi_direction: left}
+    chamber_groups: single               # six chambers, no yoked controls
+    chambers: {1: Ctrl, 2: Exp, 3: Ctrl, 4: Exp, 5: Ctrl, 6: Exp}
 ```
 
-No `facet_cutoffs`, no `chamber_layout`: the type owns both. See
+No `facet_cutoffs`, no `chamber_layout`: the type owns both. With `Program.txt` in `data/`,
+a DFM may name neither `paired_chambers` nor `chamber_groups`, and its linkage gives the
+groups. See
 [Progressive Ratio experiments](concepts-progressive-ratio.md).

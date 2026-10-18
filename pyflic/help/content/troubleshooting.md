@@ -130,10 +130,28 @@ the next recording; this one cannot gain what it did not record. See
 ### A group I expected to keep was excluded
 
 Check its light QC verdict in `pr_light_qc.csv`. **Self-triggered light** (a run of
-lick-free light events) and **implausible training** fail a group, and with
-`exclude_failed_pr_groups` on, both its chambers leave the analysis. The licks-per-event and
-resting-level figures on the QC panel show why. See
+lick-free light events), **implausible training** and, on firmware 4.0.0,
+**requirement series wrong** fail a group, and with `exclude_failed_pr_groups` on, every
+chamber of it leaves the analysis. The licks-per-event and resting-level figures on the QC
+panel show why. *Requirement series wrong* means a light event met a Requirement the Test
+Paradigm's series does not give: check that `Program.txt` is this recording's. See
 [Light QC](concepts-progressive-ratio.md#light-qc).
+
+### "the design has no yoked controls"
+
+Every chamber group is a single chamber, lit by its own fly alone: `chamber_groups: single`,
+or a `Program.txt` whose linkage lights one chamber per circuit. There is then no paired −
+yoked difference and no cumulative difference curve; the breaking point and the rest are
+reported as usual. If the chambers were meant to be pairs, state `paired_chambers` or check
+the program's `Linkage:` line. See
+[Without yoked controls](concepts-progressive-ratio.md#without-yoked-controls).
+
+### "the DFM restarted at minute …"
+
+A DFM that restarts on its own inside a group's Test window starts its ratio again, so the
+Test window ends at the restart: the breaking point is judged up to it, and censored when
+the fly was still responding there. The note is in `pr_light_qc.csv`, `summary.txt` and the
+report. Nothing is lost by it but the Test after the restart.
 
 ### "the firmware counted rising Events per light event; pyflic's licks did not follow"
 
@@ -215,7 +233,8 @@ The integrity report and the light QC read the DFM's own bookkeeping:
 
 | Finding | What happened | What to do |
 |---|---|---|
-| **lost records**: gaps in `Index` | the DFM could not keep records while the MCU was not reading them, and they are gone; PyMCU logs *Skipped index* in `Messages.csv` | a short gap changes little; more than `opto_lost_records_warn` (25 records, 5 s) warns. Treat results across a long gap with care, as for a data break |
+| **lost records**: gaps in `Index` | the DFM could not keep records while the MCU was not reading them, and they are gone; PyMCU logs *Lost N records* (older builds *Skipped index*) in `Messages.csv`, and the integrity report checks its count against the gaps | a short gap changes little; more than `opto_lost_records_warn` (25 records, 5 s) warns, not counting a restart's gap. Treat results across a long gap with care, as for a data break |
+| **DFM restarted**: a gap in `Index` followed by rows under no instruction | the DFM restarted on its own, for example on a power dip; PyMCU resent its instruction, and every well's Paradigm state started over | the integrity report's *DFM restarts* lists each, and whether `Messages.csv` names it; the light QC warns on every group of that DFM, and the Program timeline draws a red band. Acclimation and the Requirement series start again after it. Check the DFM's power and cabling |
 | **repeated records** | PyMCU wrote a block of records twice after a failed file write | nothing: the second copy is dropped at load, matched on `Index` and time, and `summary.txt` and the integrity report say how many |
 | **late records**: `OnMs` above 200 ms | a record came later than its 200 ms | more than `opto_late_records_warn` (10) warns. Look at the `Error` column's interrupt flags in the integrity report |
 | **unknown-instruction rows**: `Interval` `NA` after the start | the DFM ran an instruction outside the program, for example outputs switched by hand during the recording | those rows are not judged. More than `opto_unknown_rows_warn_fraction` (1%) of the rows warns |
@@ -232,11 +251,44 @@ Acclimation cut short by the end of the recording or by a new Paradigm is never 
 
 Under a ratio Paradigm the firmware counts its own feeding bouts, Firmware Events, and
 pyflic counts its feeding events from the same signal. They are different detectors and
-differ at the edges. A trigger well whose two counts differ by more than
+differ at the edges. Like the firmware, pyflic's count leaves out the bouts that start while
+the well's own Activation is lit. A trigger well whose two counts differ by more than
 `opto_event_disagreement_warn_fraction` (25%) of the Firmware Events warns, once either count
 reaches 5. Far more Firmware Events than pyflic events is a drifting well or thresholds that
 miss real feeding; far fewer is pyflic splitting bouts the firmware joins. Compare the
 firmware's `EventGapMs` with your `feeding_event_link_gap`, and look at the baselined trace.
+
+### A Paradigm's rule broken: "wrong activation length", "lockout broken", "requirement series wrong", "max on exceeded", "short activations"
+
+These fail a group on a firmware 4.0.0 recording. The firmware keeps each Paradigm's rule to
+the millisecond, so light that breaks the rule of the Paradigm `Program.txt` names is not a
+fly's doing. The likely cause, in order:
+
+1. **`Program.txt` is not the program that ran.** A file from another recording, or a
+   program edited and re-exported, gives a Paradigm the same name and other settings. The
+   reason names the setting and the value measured: compare them with what you ran.
+2. **The LED or its `OnMs` report is faulty.** Look at the group's rule figure in the
+   report, and its lanes in the Program timeline.
+
+`opto_activation_tolerance_ms` (25 ms) is how far a light period may miss its setting. Do
+not widen it to clear a failure: the firmware's own timing is exact.
+
+### "contact without activation", "non-feeding dark", "interval started late"
+
+Warnings, because they rest on pyflic's lick detection or on PyMCU's timing rather than on
+the firmware's own record:
+
+- **contact without activation**: FixedInterval contact pyflic saw, with the well free,
+  that earned no light. Contact below the firmware's threshold, a sensor that stopped
+  responding, or a `feeding_threshold` that counts noise. Look at the baselined trace.
+- **non-feeding dark**: a NonFeeding light that stayed off when the fly was not feeding. A
+  dead LED, or contact the firmware read and pyflic did not: a drifting baseline.
+- **interval started late**: a Program Interval's first row came more than
+  `opto_interval_lag_warn_sec` (5 s) after its `Program.txt` time. The DFM took its
+  instruction late and PyMCU sent it again; the light before it ran the previous
+  Interval's rule.
+
+See [Each Paradigm's own rule](concepts-optogenetics.md#each-paradigms-own-rule).
 
 ### No Role, or every Role blank
 

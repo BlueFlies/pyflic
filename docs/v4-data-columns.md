@@ -34,14 +34,14 @@ Each per-well column has one copy per well, numbered 1–12 like `W1`–`W12`.
 
 | Column | What it records | What pyflic uses it for |
 |---|---|---|
-| `Interval` | Which step of the program was running: 1 for the first, and so on. `0` marks the few seconds of baseline before the program reached the DFM. | Splitting the recording by program step: the light QC judges each step by its own rule, and **Program Facets** can split every result by step. pyflic's own tables call it `ProgramInterval`. |
+| `Interval` | Which step of the program was running: 1 for the first, and so on. `0` marks the few seconds of baseline before the program reached the DFM. `NA` marks rows under no program step, such as the few seconds after a DFM restarted. | Splitting the recording by program step: the light QC judges each step by its own rule, and **Program Facets** can split every result by step. Also whether each step started on time. pyflic's own tables call it `ProgramInterval`. |
 | `Cycle` | Which pass through a Repeating or Circadian program. | Telling the passes apart, when you ask for one Facet per pass. |
-| `Paradigm` | The name of the light rule in force, as written in the program. | Looking up the rule's type and settings in `Program.txt`. Labels the Program Facets and the Program timeline. |
+| `Paradigm` | The name of the light rule in force, as written in the program. `NA` on the baseline rows (`Interval` 0) and on rows under no program step. | Looking up the rule's type and settings in `Program.txt`, and so which checks and measures apply. Labels the Program Facets and the Program timeline. |
 | `Phase` | `A` while a well is in Acclimation, `M` (Main) after. | **Progressive Ratio training end**: the paired sucrose well's first Main row under the ratio rule. Also the light table's Acclimation columns and a QC check that each fly got the number of Acclimation light periods it should. |
-| `Activations` | A running count of the light periods each well's own rule started. A well lit only through its partner never counts one. | **Light Events** in Progressive Ratio; the light table's `Activations`; the light QC, which asks whether each light period had a lick behind it; roles (a yoked well has light but no Activations). |
-| `Requirement` | Under a ratio rule, how many feeding bouts the well needs for its next light period. | The ratio each light period met, which a Progressive Ratio breaking point now reports as `BreakRequirement`. |
+| `Activations` | A running count of the light periods each well's own rule started. A well lit only through its partner never counts one. | **Light Events** in Progressive Ratio; the light table's `Activations`; the light QC, which asks whether each light period had a lick behind it and kept its rule; roles (a yoked well has light but no Activations). |
+| `Requirement` | Under a ratio rule, how many feeding bouts the well needs for its next light period. | The ratio each light period met, which a Progressive Ratio breaking point now reports as `BreakRequirement`, and which the light QC checks against the program's series. |
 | `Progress` | Under a ratio rule, how many bouts the well has made toward that Requirement. | **Firmware Events**: the feeding bouts the firmware counted, compared with pyflic's own count of feeding events as a QC check. |
-| `OnMs` | How many of the record's 200 ms the well's LED was on, from any cause. | **Exact light time**: `LitSec` in the light table, the `OptoOn_sec` columns of the feeding summary, and the lit time the light QC judges. Older files can only sample the light once every 200 ms. |
+| `OnMs` | How many of the record's 200 ms the well's LED was on, from any cause. | **Exact light time**: `LitSec` in the light table, the `OptoOn_sec` columns of the feeding summary, and the lit time the light QC judges. With `Activations`, it times each light period to the millisecond, so pyflic can check its length against the program. Older files can only sample the light once every 200 ms. |
 
 A value that does not apply is written `NA`: for example `Requirement` and
 `Progress` on a well that is not under a ratio rule. `NA` means "not
@@ -57,7 +57,7 @@ applicable", not lost data.
 | `Dark`, `OptoFreq`, `OptoPW` | Taken from the program step that was running. The light QC checks them against `Program.txt`. |
 | `OptoCol1` | Still the LEDs lit at the instant of each record. On firmware 4.0.0 pyflic measures light from `OnMs` instead; `OptoCol1` remains the source for older files. |
 | `Error` | Labelled by generation in the integrity report: on firmware 4.0.0, 0x01 is *No Ack* and 0x02 is *Overflow*. |
-| `Index` | The DFM's record counter. A gap is records lost on the way to the MCU; the integrity report counts them as **lost records**. |
+| `Index` | The DFM's record counter. A gap is records lost on the way to the MCU; the integrity report counts them as **lost records**. A gap followed by rows with `Interval` `NA` is a DFM that **restarted**: the integrity report names it, and the light QC warns. |
 
 ---
 
@@ -80,42 +80,75 @@ A recording started without a program (`***ALL DFM***` at the top of
 
 ## Where you see it
 
+pyflic groups the six light rules into four **families**, because the
+firmware lights them by the same mechanism, and checks and summarises each
+family its own way:
+
+- **open loop**: OpenLoop, and any well set `On`; lit whatever the fly does;
+- **closed loop**: ClosedLoop, and the Acclimation that FixedInterval and the
+  ratio rules can begin with; lit by contact, for the contact and its Hold;
+- **fixed length**: FixedInterval, ProgressiveRatio and FixedRatio after
+  Acclimation; each earned light period lasts exactly `ActivationMs`;
+- **non-feeding**: NonFeeding; dark while the fly feeds.
+
+The light content follows the rules in `Program.txt`, whatever the
+experiment type. Where each column shows up:
+
 - **The feeding summary** (`analysis/feeding_summary.csv`) of an optogenetic
   experiment gains `Role`, `LitSec` and `Activations` for each chamber.
 - **The light table** (`analysis/light_summary.csv` per chamber,
   `light_wells.csv` per well) holds what the light did: lit time, Activations,
-  Acclimation, Firmware Events, the last ratio met, and each rule's own
-  measures. It carries the same Treatment and factor columns as the feeding
-  summary, so it pools, plots and is compared between treatments the same way.
-  A Project stacks it into `<project>_LightSummary.csv`.
-- **Reports** gain a *Light behaviour* section: Activations, lit time,
-  Firmware Events and the end of Acclimation, by treatment, with the
-  comparisons. The Plot Editor offers the same metrics as publication figures.
+  Acclimation, Firmware Events, the last ratio met, and each family's own
+  measures, such as the median light period and the cut-offs (closed loop),
+  the reward efficiency and the return after the lockout (FixedInterval), the
+  suppressions (NonFeeding), and feeding in the light against feeding in the
+  dark (open loop). It carries the same Treatment and factor columns as the
+  feeding summary, so it pools, plots and is compared between treatments the
+  same way. A Project stacks it into `<project>_LightSummary.csv`.
+- **Reports** gain a *Light behaviour* section, with one part per family the
+  program runs, each comparing that family's own headline measures between
+  treatments. Only the chambers that earn their own light are compared on
+  Activations: a yoked chamber keeps its lit time beside its partner's. The
+  Plot Editor offers every measure as a publication figure.
+- **Paired and yoked designs**, under any experiment type: where a light
+  circuit lights a yoked chamber with a paired one, the paired fly's feeding
+  minus its yoked partner's, by treatment, in `analysis/yoked_comparison.csv`,
+  `<project>_YokedComparison.csv` and the reports' *Paired and yoked*
+  subsection.
 - **Progressive Ratio** reads training, light events and the ratio met
   straight from the recording. `pr_light_events.csv` gains `Requirement`,
   `FirmwareEvents` and `Phase`; `pr_breaking_point.csv` gains
   `BreakRequirement`, `FirmwareEvents` and `ParadigmType`. The breaking point
-  rule itself is unchanged. Fixed ratio programs are supported too.
+  rule itself is unchanged. Fixed ratio programs, designs without yoked
+  controls, and chamber groups taken from the program's linkage are supported
+  too.
 - **Program Facets.** Set `facet_source: program` in the Project design, and
   every summary is split by program step, each labelled with its rule's name.
 - **The optogenetic light QC** judges each rule by its own logic, one light
-  period at a time, from the firmware's own record. It adds checks for yoked
-  wells whose light differs, a rule name missing from `Program.txt`, an
-  Acclimation count that is off, Firmware Events that disagree with pyflic's
-  events, and lost, late or unknown records.
+  period at a time, from the firmware's own record, with the program's
+  settings: a light period's length against its Hold, `ActivationMs` or
+  `MaxOnMs`, the FixedInterval lockout, the ratio series, the NonFeeding light
+  after contact, each open-loop step, and each step's start time. It also
+  checks for yoked wells whose light differs, a rule name missing from
+  `Program.txt`, an Acclimation count that is off, Firmware Events that
+  disagree with pyflic's events, a DFM that restarted, and lost, late or
+  unknown records. The report has a *Rule check* subsection, with a figure,
+  for each rule the program ran. `qc/opto/opto_light_events.csv` lists every
+  light period with its timing to the millisecond and what ended it.
 - **The Program timeline** (`qc/program/`, the report's Quality control, the
   Hub's QC panel and the QC Viewer's *Program* tab) draws each DFM's program
-  steps, and for each well its Acclimation, its Activations and its light.
+  steps, and for each well its Acclimation, its Activations, its light, and
+  the steps that set it `On` or `Off`; a restart is a red band.
 - **The integrity report** counts lost, repeated, late and unknown-instruction
-  records and lists `Messages.csv`'s errors.
+  records, lists each DFM restart, and lists `Messages.csv`'s errors.
 
 ---
 
 ## Worth knowing
 
-- **The baseline rows** at the start (`Interval` 0, a few seconds) count
-  toward whole-recording feeding totals, but toward no program step and no
-  light judgement.
+- **The baseline rows** at the start (`Interval` 0, `Paradigm` `NA`, about
+  five seconds) count toward whole-recording feeding totals, but toward no
+  program step, no light judgement and no light-or-dark feeding rate.
 - **Activations are a well's own; `OnMs` is the light it received.** In a
   paired and yoked design, the yoked fly's wells show light with zero
   Activations. pyflic uses that to tell the roles apart, and to check the

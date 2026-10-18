@@ -52,7 +52,13 @@ recording whose light never came on (every well Off) gets none.
   `Program.txt` does not give.
 - **Below it, one lane per well**, labelled with its chamber and Role. Pale orange shading is
   Acclimation (Phase `A`), each black tick an Activation, and the blue strip the share of
-  each bin the LED was on, from white (dark) to dark blue (lit throughout).
+  each bin the LED was on, from white (dark) to dark blue (lit throughout). On a firmware
+  4.0.0 recording a lane is also hatched where `Program.txt` sets the well `On`, and grey
+  where it sets it `Off`, Program Interval by Program Interval.
+- **A red band labelled "restart"**, across the band and every lane, marks each restart of
+  the DFM (firmware 4.0.0): from the last record before the gap in `Index` to the first row
+  under the instruction again. A restart that only `Messages.csv` names has no rows to place
+  it by, and is not drawn.
 
 How to read it:
 
@@ -67,12 +73,46 @@ How to read it:
   is the DFM running something outside the program. A dark-grey block is a Paradigm the
   `Program.txt` in `data/` does not know, which usually means it is the wrong file; every
   block is dark grey when there is no `Program.txt` at all.
+- **A well set `On` should be lit through its hatching**, and a well set `Off` should have
+  no light of its own in its grey: light there that its group's trigger well did not cause
+  is a fault.
+- **After a red restart band** every trigger well starts again: Acclimation shading and the
+  ticks of a new Requirement series.
 
 On a recording older than firmware 4.0.0 the band is laid out from the program's clock
-times, approximate, and the lanes show the sampled `OptoCol1` light only: no Acclimation and
-no ticks. The bin width is the plot action's `binsize` (10 minutes by default; the Hub uses
-its Analyze panel's **Bin size**). See
+times, approximate, and the lanes show the sampled `OptoCol1` light only: no Acclimation, no
+ticks, no `On` or `Off` shading and no restarts. The bin width is the plot action's
+`binsize` (10 minutes by default; the Hub uses its Analyze panel's **Bin size**). See
 [Optogenetic experiments](concepts-optogenetics.md#the-program-timeline).
+
+### Rule figures
+
+In the experiment report's *Optogenetic light QC*, on a firmware 4.0.0 recording with its
+`Program.txt`: each Paradigm's **Rule check** subsection ends with its rule figure, one
+panel per DFM, that puts the measured light against the rule's setting. Light that keeps the
+rule is grey-blue; light that breaks it, by more than `opto_activation_tolerance_ms` (one
+record more for an Activation timed only to the record), is **red**, as bars and as ticks
+under the axis, so that one failing Activation among hundreds still shows. Only the
+Activations the checks judged are drawn.
+
+| Family | The figure |
+|---|---|
+| Closed loop | lit time per Activation, dashed at the Hold and at `MaxOnMs`: red below the Hold (*short activations*) and above `MaxOnMs` (*max on exceeded*) |
+| Fixed length, interval | the time from the previous Main onset, dashed at the longer of `LockoutMs` and `ActivationMs`: red where an Activation came sooner (*lockout broken*); beside it the lit time, dashed at `ActivationMs` (*wrong activation length*) |
+| Fixed length, ratio | the Requirement each Main Activation met against its number K, over the dashed line of the series: red points it does not give (*requirement series wrong*); beside it the lit time, dashed at `ActivationMs` |
+| Non-feeding | each Activation's relight delay after the fly's last activity sample, dashed at `OnDelayMs`, with no red (it is reported, not judged); with `MaxOnMs`, beside it the lit time, dashed there, red above it (*max on exceeded*) |
+| Open loop | none: the Program timeline shows the schedule |
+
+A Paradigm with Acclimation has a closed-loop figure for its Acclimation, dashed at
+`ActivationMs`, the Hold there. A subsection whose Activations could all not be judged
+(merged with other light, or cut short by an Interval change, a gap in `Index` or the end
+of the data) shows a grey note saying so instead of a figure.
+
+How to read them: on a working system with the right program every bar sits on its dashed
+line or on the side the rule allows, and nothing is red. Red is first a question about
+`Program.txt`: is it the file exported with this recording? If it is, the LED or its `OnMs`
+report is faulty. See
+[Each Paradigm's own rule](concepts-optogenetics.md#each-paradigms-own-rule).
 
 ## Summary plots
 
@@ -154,13 +194,44 @@ Drawn for an optogenetic experiment of any type, from its
 chamber.
 
 **Light behaviour dot plots** — in the experiment report's and the Project Report's *Light
-behaviour* section. One dot plot per headline metric, by Treatment, per Facet when the
-experiment has them: **Activations**, **Lit time (s)**, **Firmware Events** and
-**Acclimation end (min)**. The diamond and bars are the treatment mean ± SEM, and the
-treatment comparisons sit underneath. A metric no Paradigm of the experiment defines is left
-out, and so is everything but lit time on a recording older than firmware 4.0.0. A
-Progressive Ratio experiment shows its paired chambers only: a yoked fly's light is its
-partner's.
+behaviour* section, one subsection per [Paradigm Family](concepts-optogenetics.md#paradigm-families)
+the program runs (fixed length by its branch, and the Acclimation apart). Each has one dot
+plot per headline metric of its family, by Treatment, per Facet when the experiment has
+them, two to a row, from the chambers whose window ran that family:
+
+- **open loop**: Lit time (s), Light feeding index;
+- **closed loop**: Activations, Lit time (s), Median Activation (s), and Cut-offs with a
+  ClosedLoop `MaxOnMs`;
+- **fixed length, interval**: Activations, Reward efficiency, Median return after the
+  lockout (s);
+- **fixed length, ratio**: Activations, Last Requirement met, Firmware Events;
+- **non-feeding**: Fraction of the time lit, Suppressions;
+- **Acclimation**: Acclimation end (min).
+
+The diamond and bars are the treatment mean ± SEM, and the treatment comparisons sit
+underneath. A metric no chamber of the subsection has is left out and named. A metric with
+the same value in every chamber, such as the lit time of open-loop chambers lit for the whole
+program, is named once as *the same in every chamber, so not compared between treatments*.
+The Activation measures compare only the chambers that earn light (Paired, Self, Mutual): a
+Yoked chamber keeps its lit time beside its partner's. A Progressive Ratio experiment shows
+its paired chambers only. A member without a firmware 4.0.0 recording keeps one section
+with the four metrics of before (Activations, Lit time, Firmware Events, Acclimation end),
+everything but lit time empty.
+
+**Feeding in light and dark** — in the open-loop subsection: each open-loop chamber's licks
+per minute in its own light and in the dark, as two points joined by a line, a panel per
+treatment (and per Facet), with each phase's treatment mean as a black diamond. Lines that
+fall from light to dark are a fly that fed more in the light. Only rows under a Program
+Interval count, so the baseline lead-in is not taken as dark, and a phase shorter than a
+minute has no rate. A chamber lit for the whole program therefore has no dark rate and no
+light feeding index; when no chamber was both lit and dark, the figure is a grey note saying
+so.
+
+**Paired against yoked** — in the *Paired and yoked* subsection, for a design with a yoked
+group under any type but Progressive Ratio: one point per yoked group, its paired chamber's
+value against the mean of its yoked chambers', a panel per metric, over the dashed identity
+line; above it, the paired fly's value is the larger. See
+[Paired and yoked designs](concepts-optogenetics.md#paired-and-yoked-designs).
 
 **Light Publication Figures** — in a Project whose Combined Analysis has a light table, the
 [Plot Editor](app-plot-editor.md) offers every numeric column of it as a faceted figure, on
@@ -184,8 +255,19 @@ is listed as *… (light, faceted)* and drawn from `<project>_LightSummary_Facet
 | `faceted_lockedoutcontactsec` | Feeding while locked out (s) |
 | `faceted_unlitsec` | Unlit time (s) |
 | `faceted_suppressions` | Suppressions |
+| `faceted_mainactivations` | Main Activations |
+| `faceted_medianactivationsec` | Median Activation (s) |
+| `faceted_cutoffs` | Cut-offs |
+| `faceted_maxactivations` | Most Activations possible |
+| `faceted_rewardefficiency` | Reward efficiency (fraction) |
+| `faceted_medianreturnsec` | Median return after the lockout (s) |
+| `faceted_mediansuppressionsec` | Median suppression (s) |
+| `faceted_licksperminlit` | Licks in the light (per min) |
+| `faceted_lickspermindark` | Licks in the dark (per min) |
+| `faceted_lightfeedingindex` | Light feeding index, on a fixed axis from −1 to 1 with a line at 0 |
 
-The first four are the headline metrics the reports test.
+The reports test the headline metrics of each family, above; the first four are the ones a
+member without a firmware 4.0.0 recording keeps.
 
 ## Progressive-ratio plots
 
@@ -217,6 +299,12 @@ Project-level faceted publication figures in the [Plot Editor](app-plot-editor.m
 Role when the Combined Analysis carries it. Use the pooled `<project>_PairedYokedDiff.csv`
 or the Project Report for the paired − yoked *difference* statement across members.
 
+A design whose chamber groups are single chambers, with no yoked control, has no paired −
+yoked difference to plot: its paired-minus-yoked figures are empty, titled with the reason,
+and the reports say once that the design has no yoked controls. Its breaking point figures
+are drawn as usual. See
+[Without yoked controls](concepts-progressive-ratio.md#without-yoked-controls).
+
 ### The type's own figures
 
 **Cumulative difference curve** (`plot_pr_cumulative_diff`, and `timecourse_pr_diff` in a
@@ -236,9 +324,10 @@ Treatment on the x axis and Breaking Point on y (no Phase/Role facets). Open sym
 censored; mean ± SEM overlays each treatment.
 
 **Training-aligned traces** (`plot_pr_cumulative_licks`) — per DFM, one panel per chamber
-group: paired and yoked cumulative sucrose-well licks since training end, with the bins in
-which the group's light was on drawn as points and lick-free light events as black rings on
-the paired trace. A QC figure, not a result.
+group: paired and yoked cumulative sucrose-well licks since training end (the paired fly's
+alone in a solo group), with the bins in which the group's light was on drawn as points and
+lick-free light events as black rings on the paired trace. A QC figure, not a result. The
+per-group figures put three panels to a row, so six solo groups take two rows.
 
 **Still-responding curve** (`plot_pr_still_responding`, and the first figure of the Project
 Report's breaking point section) — per treatment, the fraction of paired flies whose
@@ -269,7 +358,9 @@ the sucrose licks credited to each Test-phase light event, against the event's n
 working progressive ratio climbs. Hollow red rings are **lick-free light events**, the
 dashed line is the group's own trend, and the faint grey line is the requirement estimated
 across the experiment (the median slope of the groups' first eight Test events). A long row
-of red rings along zero is the light following the sensor, not the fly.
+of red rings along zero is the light following the sensor, not the fly. Under a fixed ratio
+the requirement does not climb, so the grey line and the "climbs" caption are left out for
+those groups.
 
 **Sucrose Well resting level** (`plot_pr_resting_level`) — per DFM, one panel per chamber
 group: the paired chamber's Sucrose Well as its per-minute median raw signal over the whole

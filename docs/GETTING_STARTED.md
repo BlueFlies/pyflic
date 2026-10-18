@@ -264,10 +264,26 @@ In outline:
    ```
 
 2. **Describe the experiment** in the config editor (`uv run pyflic config`). It saves
-   your answers as `flic_config.yaml` in the recording's folder.
+   your answers as `flic_config.yaml` in the recording's folder. On its Experiment tab you
+   choose the **Experiment Type**; see [Which Experiment Type?](#which-experiment-type)
+   below.
 3. **Open the hub on the folder** and run **Basic analysis**.
 4. **Check the data before you believe any result.** On the hub's **QC** panel, click
    **QC reports**, then **Open QC Viewer**.
+
+### Which Experiment Type?
+
+The Experiment Type describes the feeding design. It does not have to match the light
+program: whatever Paradigms `Program.txt` names, pyflic checks the light against each
+one's rule and reports its own measures, under every type.
+
+| Your experiment | Experiment Type |
+|---|---|
+| No light, or a light program of OpenLoop, ClosedLoop, FixedInterval or NonFeeding Paradigms | **Custom**, with its chamber layout (single-well or two-well) |
+| A two-well hedonic design, where bout duration matters, with no light or under any of those programs | **Hedonic** |
+| A ratio program (ProgressiveRatio or FixedRatio Paradigms), with or without yoked controls | **ProgressiveRatio** |
+
+A paired and yoked design under Custom or Hedonic still gets its paired − yoked comparison.
 
 Two more guides sit beside this one:
 

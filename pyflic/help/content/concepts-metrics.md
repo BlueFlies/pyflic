@@ -74,9 +74,9 @@ group fared. See [Progressive Ratio experiments](concepts-progressive-ratio.md).
 
 | Column | Meaning |
 |---|---|
-| `Group` | The chamber group, 1–3 (chambers 1+2, 3+4, 5+6) |
-| `Role` | `paired` or `yoked` |
-| `TrainingMinutes` | The group's training end, in minutes — the same on both chambers; blank if training never completed |
+| `Group` | The chamber group, numbered in chamber order: 1–3 for pairs (chambers 1+2, 3+4, 5+6, or as `Program.txt` links them), 1–6 for single chambers |
+| `Role` | `paired` or `yoked`; every chamber of a design without yoked controls is `paired` |
+| `TrainingMinutes` | The group's training end, in minutes — the same on both chambers of a pair; blank if training never completed |
 | `TrainingComplete` | Whether the paired fly finished training |
 | `LightOn_sec` | Seconds the group's light was on |
 | `LightQC` | The group's light QC flags; empty when clean |
@@ -85,8 +85,8 @@ group fared. See [Progressive Ratio experiments](concepts-progressive-ratio.md).
 | `PersistACensored` | `PersistA` is a lower bound: the fly was still feeding when its Test window ended |
 
 The paired − yoked difference of each metric is in `paired_yoked_diff.csv` as `d<metric>`
-(`dLicksA`, `dPI`, `dPersistA`, …). The breaking point is a property of the group, not of a
-chamber, so it has its own table, `pr_breaking_point.csv`.
+(`dLicksA`, `dPI`, `dPersistA`, …), for the groups that are pairs. The breaking point is a
+property of the group, not of a chamber, so it has its own table, `pr_breaking_point.csv`.
 
 ## Metrics over time
 

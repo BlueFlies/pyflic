@@ -48,14 +48,18 @@ Each **DFM** tab has its own sub-tabs:
 PyMCU writes `Messages.csv` beside the data: what the MCU logged while it recorded. The
 Integrity sub-tab lists the messages of this DFM and of the MCU itself (DFM 0), with their
 time, the record `Index` they refer to, the text and the type, and counts the errors in its
-title. *Skipped index* is a lost record; a DFM error code points at the `Error` column. The
-integrity report lists the same errors.
+title. *Lost N records* (*Skipped index* from PyMCU builds before 10/17/2026) is records
+lost; *DFM n restarted* and *DFM n recorded nothing for about S s while it restarted* are a
+restart; a DFM error code points at the `Error` column. The integrity report lists the same
+errors, checks the lost records against the `Index` gaps, and names each restart.
 
 ### The Program sub-tab
 
 The [Program timeline](plots-catalog.md#program-timeline) fills the top: the Program
 Intervals coloured by Paradigm type, and per well its Acclimation, its Activations and its
-light. Below it, a table with one row per well at the end of the loaded range:
+light, with its `On` and `Off` stretches and the DFM's restarts on firmware 4.0.0 data.
+Below it, two tabs. **Wells** is a table with one row per well at the end of the loaded
+range:
 
 | Column | What it holds |
 |---|---|
@@ -67,9 +71,23 @@ light. Below it, a table with one row per well at the end of the loaded range:
 | `Requirement`, `Progress` | under a ratio Paradigm: the Firmware Events the next Activation needs, and how many it has |
 | `LitSec` | seconds its LED was on over the loaded range |
 
+**Activations**, on firmware 4.0.0 data, lists every Activation of the DFM's trigger wells,
+one row each, as `qc/opto/opto_light_events.csv` has them:
+
+| Column | What it holds |
+|---|---|
+| `Well`, `OnsetMin` | the well, and the minute its light came on |
+| `Family` | its [Paradigm Family](concepts-optogenetics.md#paradigm-families): closed loop in Acclimation, the Paradigm's own after |
+| `Phase`, `K` | `A` or `M`, and its number among the well's Main Activations of its Paradigm run |
+| `LitMs` | how long it was lit, in milliseconds |
+| `EndedBy` | what ended it: `Hold`, `MaxOnMs`, `length`, `contact`, an Interval change (`interval`), a gap in `Index` (`gap`), the end of the data (`end`), or `unknown` |
+| `RequirementMet` | under a ratio Paradigm, the Requirement it met |
+| `Overlap` | true when other light merged with it, so its length is not its own and the rule checks skip it |
+
 On a recording older than firmware 4.0.0 the timeline is laid out from the program's clock
-times, and only `Paradigm`, `Role` and `LitSec` can be filled. The sub-tab is computed from the
-loaded experiment, not read from `qc/`, so a **Params** recompute redraws it.
+times, only `Paradigm`, `Role` and `LitSec` can be filled, and there is no Activations tab.
+The sub-tab is computed from the loaded experiment, not read from `qc/`, so a **Params**
+recompute redraws it.
 
 A Progressive Ratio experiment's own QC — the light QC table and its figures — is on the
 Hub's QC panel rather than here; see
@@ -82,8 +100,12 @@ Shown for an optogenetic experiment of any type: one row per linkage group, with
 chambers and their `Roles` (`1 Paired, 2 Yoked`), its lit time, the share of it no
 trigger-well lick or touch explains, the minute that began, the contact with no lick — the
 emulated firmware trigger's, or on firmware 4.0.0 data the light of Activations with no lick
-or touch at their onset — and the verdict, coloured by tone. The tab opens on the worst
-group. Selecting a group fills the panes below it:
+or touch at their onset — and the verdict, coloured by tone. On firmware 4.0.0 data the rule
+checks' columns follow: short, over `MaxOnMs`, cut-offs, wrong length, lockout broken, missed
+contacts, series wrong, non-feeding dark, relight delay, the lowest open-loop lit fraction,
+the interval lag and the restarts, blank where the group's Paradigms have no such rule (see
+[Each Paradigm's own rule](concepts-optogenetics.md#each-paradigms-own-rule)). The tab
+opens on the worst group. Selecting a group fills the panes below it:
 
 - **Why** — the verdict, a line per flag with its numbers and likely cause, and the notes
   about its DFM and its program.
