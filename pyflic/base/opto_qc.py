@@ -42,7 +42,13 @@ decisions, so the QC reads them instead of reconstructing them
   pyflic activity at its well is the drifting-baseline signature directly;
 * five more checks read the file's own bookkeeping: broken yoking, an
   Acclimation count that is not the Paradigm's, Firmware Events that
-  disagree with pyflic's, and lost, late or unknown-instruction records.
+  disagree with pyflic's, and lost, late or unknown-instruction records;
+* each Paradigm is checked against its own rule, one Activation at a time,
+  with ``Program.txt``'s settings (:mod:`pyflic.base.rule_checks`,
+  ``docs/paradigm-analyses-plan.md`` stream S1): the light period's length
+  against the Hold, ``ActivationMs`` or ``MaxOnMs``, the lockout, the
+  Requirement series, NonFeeding's light after contact, each open-loop
+  window, each Program Interval's start, and restarts.
 
 Generations 1 and 2 are judged as before, from ``OptoCol1`` and the
 program's clock-time schedule.
@@ -1599,8 +1605,11 @@ def _analyze_paradigm_state(inp: DFMInputs, *, program: op.OptoProgram | None,
     Activation is explained, whole, when its well had a lick or touch within
     the tolerance of its onset; a closed-loop or Acclimation Activation's
     light, and light no Activation owns, is judged sample by sample with the
-    window rule and the Hold.  NonFeeding light is checked only for staying
-    on through feeding, open loop for its lit fraction, off for any light.
+    window rule and the Hold.  NonFeeding light is checked for staying on
+    through feeding, open loop for its lit fraction per window, off for any
+    light.  With a program, each Paradigm's rule checks run per group
+    (:func:`_group_rule_checks`) and the Program Intervals' starts are
+    checked against its times; the DFM's restarts are found either way.
     Without a program the linkage and the Trigger Wells come from the data
     (identical ``OnMs``, Activations), every Activation is judged by the
     window rule with ``opto_default_decay_ms`` and unexplained light warns

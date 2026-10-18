@@ -693,7 +693,8 @@ class OptoLightQC:
                     "Activation owns it: a fixed-length Activation (FixedInterval, ratio Main)",
                     "is explained when its well had a lick or touch within the tolerance of",
                     "its onset; closed-loop and Acclimation light keep the decay rule with",
-                    "the Hold."]
+                    "the Hold.  Each Paradigm is also checked against its own rule, one",
+                    "Activation at a time, with Program.txt's settings (the rule checks)."]
         out.append("")
         program = self.program_table()
         if not program.empty:
