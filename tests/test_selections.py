@@ -167,6 +167,14 @@ def _matches(item: sel.Item, rel: str) -> bool:
 # The sets
 # ---------------------------------------------------------------------------
 
+def test_the_baselined_caption_names_only_the_thresholds_the_plot_draws():
+    """``DFM.plot_baselined`` draws FeedingMax and FeedingMin, no tasting
+    threshold."""
+    caption = sel.item(sel.QC, "baselined_signal").caption
+    assert "feeding_threshold and feeding_minimum" in caption
+    assert "tasting" not in caption
+
+
 def test_the_three_sets_hold_the_plans_items_in_panel_order():
     assert [i.id for i in sel.QC_SET] == [
         "integrity", "data_breaks", "raw_signal", "baselined_signal", "cumulative_licks",
