@@ -115,8 +115,12 @@ def build_experiment_report(
     doc.add(_cover(experiment, qc, name))
     doc.add(rl.Heading("Quality control"), _qc_blocks(experiment, qc))
     doc.add(rl.PageBreak(), rl.Heading("Results"))
+    ## The type's Control Comparisons lead the Results (ADR-0019); a paired −
+    ## yoked comparison that leads is not repeated after the light results.
+    lead, paired_yoked_leads = _control_blocks(experiment, options)
+    doc.add(lead)
     doc.add(experiment.report_results_blocks(_generic_results(experiment, options), options))
-    doc.add(_light_results(experiment, options))
+    doc.add(_light_results(experiment, options, yoked=not paired_yoked_leads))
     doc.add(rl.PageBreak(),
             rl.Heading("Appendix A — All feeding metrics", numbered=False),
             _all_metrics(experiment, options))
@@ -732,7 +736,8 @@ def _facet_frames(rows: pd.DataFrame, facet_col: str | None) -> list[tuple[str, 
     return [("Whole recording", rows)]
 
 
-def _light_results(experiment: Experiment, options: ReportOptions) -> list[Any]:
+def _light_results(experiment: Experiment, options: ReportOptions, *,
+                   yoked: bool = True) -> list[Any]:
     """"Light behaviour", after the feeding results, for an optogenetic
     member: one subsection per Paradigm Family the program runs (decision 9;
     fixed length by its branch, and the Acclimation), each with a dot plot
@@ -742,9 +747,11 @@ def _light_results(experiment: Experiment, options: ReportOptions) -> list[Any]:
     runs no family (no generation-3 DFM, or no program) keeps the four
     metrics of before in one section.  A metric no row defines is left out
     and named.  Then *Paired and yoked* when a Linkage Group yokes chambers
-    to a Paired one (decision 12)."""
+    to a Paired one (decision 12), unless *yoked* is false because it led
+    the Results as the type's Role comparison."""
     if not experiment.is_optogenetic:
         return []
+    tail = _yoked_blocks(experiment, options) if yoked else []
     from . import light_summary as ls
 
     facet = ls.light_summary_facet(experiment)
@@ -757,12 +764,12 @@ def _light_results(experiment: Experiment, options: ReportOptions) -> list[Any]:
     blocks: list[Any] = [rl.Heading("Light behaviour", level=2)]
     if kept is None or kept.empty:
         return blocks + [rl.Callout("No chamber with a treatment has a light table row.",
-                                    tone="warning")] + _yoked_blocks(experiment, options)
+                                    tone="warning")] + tail
     programs, keys = _light_programs(experiment)
     families = rc.light_families(programs)
     if not families:
         return (blocks + _light_headline_blocks(experiment, frame, kept, facet_col, options)
-                + _yoked_blocks(experiment, options))
+                + tail)
     per = "per Facet" if facet_col else "over the whole recording"
     blocks.append(rl.Paragraph(
         f"What the light did, from the light table (analysis/light_summary.csv), one point "
@@ -775,7 +782,7 @@ def _light_results(experiment: Experiment, options: ReportOptions) -> list[Any]:
     for family in families:
         rows = family.rows(kept, keys)
         blocks += _light_family_blocks(experiment, family, rows, facet_col, compare=compare)
-    return blocks + _yoked_blocks(experiment, options)
+    return blocks + tail
 
 
 def _role_sentence(frame: pd.DataFrame, kept: pd.DataFrame) -> str:
@@ -834,6 +841,49 @@ def _light_family_blocks(experiment: Experiment, family, rows: pd.DataFrame | No
             caption=f"Treatment comparisons: light behaviour, {family.title}",
             show_phase=bool(facet_col))
     return blocks
+
+
+def _control_blocks(experiment: Experiment, options: ReportOptions
+                    ) -> tuple[list[Any], bool]:
+    """``(blocks, paired_yoked_leads)``: the type's Control Comparisons
+    (:mod:`control_comparisons`), the Role comparison first, for the front
+    of the Results; nothing under a type with no ``control:`` block.  A
+    Role comparison of Paired and Yoked is the paired − yoked comparison
+    the report already makes: the Paired and yoked module's, moved here
+    (*paired_yoked_leads*, so it is not repeated), or the Ratio module's
+    Paired-Yoked Difference, which opens the results that follow."""
+    from . import control_comparisons as cc
+
+    etype = getattr(experiment, "experiment_type", None)
+    roles, factor = cc.role_pair(etype), cc.treatment_control(etype)
+    if roles is None and factor is None:
+        return [], False
+    plot_frame, frames, facet_col = _summary_frames(experiment, options)
+    names = experiment.well_names or {}
+    two_well = _is_two_well(experiment)
+    blocks: list[Any] = []
+    leads = False
+    if roles is not None and cc.is_paired_yoked(roles):
+        if _has_module(experiment, "yoked"):
+            leads = True
+            blocks += _yoked_blocks(experiment, options) or [
+                rl.Heading("Paired and yoked", level=2),
+                rl.Paragraph("The type compares Paired with Yoked chambers, and no linkage "
+                             "group here lights a Yoked chamber with a Paired one.",
+                             color=rl.MUTED, italic=True)]
+        elif _has_module(experiment, "ratio"):
+            blocks += [rl.Heading("Paired and yoked", level=2),
+                       rl.Paragraph("The type compares Paired with Yoked chambers: the "
+                                    "Paired-Yoked Difference that opens the results below.")]
+    elif roles is not None:
+        blocks += cc.role_blocks(frames, roles, plot_frame=plot_frame, facet_col=facet_col,
+                                 well_names=names, two_well=two_well)
+    if factor is not None:
+        blocks += cc.control_blocks(
+            frames, factor, etype.control_level(experiment.global_config),
+            factors=experiment.design_factors, plot_frame=plot_frame, facet_col=facet_col,
+            well_names=names, two_well=two_well)
+    return blocks, leads
 
 
 def _has_module(source: Any, module_id: str) -> bool:

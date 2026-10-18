@@ -376,6 +376,11 @@ def definition_problems(definition: TypeDefinition) -> list[str]:
         if not definition.expects_light:
             problems.append("'control.roles' needs light: a Role comes from the Opto "
                             "Program, and the type expects no light")
+        if {a, b} == {"Paired", "Yoked"} \
+                and not {"yoked", "ratio"} & set(definition.modules):
+            problems.append("'control.roles' Paired against Yoked is the paired − yoked "
+                            "comparison: include the 'yoked' module (or 'ratio', whose "
+                            "Paired-Yoked Difference it is)")
     if definition.treatment_control is not None \
             and definition.treatment_control not in definition.factors:
         problems.append(f"'control.treatment' names {definition.treatment_control!r}, "

@@ -101,6 +101,7 @@ def test_the_four_modules():
     ({"modules": ["telepathy"]}, "not an Analysis Module"),
     ({"control": {"treatment": "Genotype"}}, "not one of the type's factors"),
     ({"light": "none", "control": {"roles": ["Paired", "Yoked"]}}, "needs light"),
+    ({"control": {"roles": ["Yoked", "Paired"]}}, "include the 'yoked' module"),
 ])
 def test_a_combination_that_cannot_run_is_refused(fields, fragment):
     definition, _ = _definition(**fields)
