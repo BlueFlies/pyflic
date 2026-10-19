@@ -1222,7 +1222,7 @@ def program_text(spec: RecordingSpec) -> str:
         for iv, (start, length) in zip(d.intervals, _elapsed(d)):
             if start < duration:
                 s += "({}) {}, {}, {}, {:g} min\n".format(
-                    (spec.start + start).strftime(stamp), "Dark" if iv.dark else "Lit", iv.paradigm,
+                    (spec.start + start).strftime(stamp), iv.paradigm, "Dark" if iv.dark else "Lit",
                     ",".join(_threshold_text(t) for t in iv.thresholds), length.total_seconds() / 60)
     return s
 

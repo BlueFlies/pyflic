@@ -469,8 +469,8 @@ def test_the_full_length_choice_spec_is_pymcus_example() -> None:
         "***DFM 5***\n"
         "Linkage: 1,1,2,2,3,3,4,4,5,5,6,6\n"
         "Program Type: Linear\n"
-        "(10/16/2026 23:34:00) Dark, Closed, 20,Off,20,Off,20,Off,20,Off,20,Off,20,Off, 30 min\n"
-        "(10/17/2026 00:04:00) Dark, PR10, 20,Off,20,Off,20,Off,20,Off,20,Off,20,Off, 330 min\n")
+        "(10/16/2026 23:34:00) Closed, Dark, 20,Off,20,Off,20,Off,20,Off,20,Off,20,Off, 30 min\n"
+        "(10/17/2026 00:04:00) PR10, Dark, 20,Off,20,Off,20,Off,20,Off,20,Off,20,Off, 330 min\n")
     assert program_text(choice_pr_spec(minutes=360.0, closed_minutes=30.0, dfm_ids=(5,))) == expected
 
 
@@ -480,7 +480,8 @@ def test_the_full_length_choice_spec_is_pymcus_example() -> None:
 
 def test_program_text_matches_the_guides_export_example() -> None:
     # The export example of the retired docs/dfm-firmware-4-data-guide.md (section
-    # 7.1; kept as tests/fixtures/Program_v4.txt), without its Env Mon block.
+    # 7.1; kept as tests/fixtures/Program_v4.txt), without its Env Mon block, and
+    # with each interval's Paradigm before Dark or Lit as PyMCU now writes it.
     closed = ParadigmSpec("Closed", "ClosedLoop", hold_ms=500)
     legacy = replace(closed, name="ClosedLoop-40Hz-8ms-Hold500-MaxOn0")
     choice: tuple[int | str, ...] = (20, OFF) * 6
@@ -505,18 +506,18 @@ Idle (ClosedLoop): Frequency 40 Hz, PulseWidth 8 ms, HoldMs 0 ms, MaxOnMs 0 ms, 
 ***DFM 1***
 Linkage: 1,1,2,2,3,3,4,4,5,5,6,6
 Program Type: Linear
-(10/12/2026 20:00:00) Dark, Closed, 20,Off,20,Off,20,Off,20,Off,20,Off,20,Off, 30 min
-(10/12/2026 20:30:00) Dark, PR10, 20,Off,20,Off,20,Off,20,Off,20,Off,20,Off, 330 min
+(10/12/2026 20:00:00) Closed, Dark, 20,Off,20,Off,20,Off,20,Off,20,Off,20,Off, 30 min
+(10/12/2026 20:30:00) PR10, Dark, 20,Off,20,Off,20,Off,20,Off,20,Off,20,Off, 330 min
 
 ***DFM 2***
 Linkage: 1,1,2,2,3,3,4,4,5,5,6,6
 Program Type: Linear
-(10/12/2026 20:00:00) Lit, Idle, Off,Off,Off,Off,Off,Off,Off,Off,Off,Off,Off,Off, 360 min
+(10/12/2026 20:00:00) Idle, Lit, Off,Off,Off,Off,Off,Off,Off,Off,Off,Off,Off,Off, 360 min
 
 ***DFM 3***
 Linkage: 1,1,2,2,3,3,4,4,5,5,6,6
 Program Type: Linear
-(10/12/2026 20:00:00) Lit, ClosedLoop-40Hz-8ms-Hold500-MaxOn0, 20,Off,20,Off,20,Off,20,Off,20,Off,20,Off, 360 min
+(10/12/2026 20:00:00) ClosedLoop-40Hz-8ms-Hold500-MaxOn0, Lit, 20,Off,20,Off,20,Off,20,Off,20,Off,20,Off, 360 min
 """
     assert program_text(spec) == expected
 
@@ -528,8 +529,8 @@ def test_program_text_lists_series_settings_and_omits_intervals_past_the_end() -
     text = program_text(spec)
     assert ("Expo (ProgressiveRatio): Frequency 40 Hz, PulseWidth 8 ms, ActivationMs 500 ms, Series Exponential, "
             "Scale 2.5, Rate 0.25, Cap 300, EventGapMs 100 ms, Acclimation 2\n") in text
-    assert text.endswith("(10/16/2026 12:00:00) Dark, Expo, 20,Off,Off,Off,Off,Off,Off,Off,Off,Off,Off,Off, 1.5 min\n"
-                         "(10/16/2026 12:01:30) Dark, Expo, 20,Off,Off,Off,Off,Off,Off,Off,Off,Off,Off,Off, 0.5 min\n")
+    assert text.endswith("(10/16/2026 12:00:00) Expo, Dark, 20,Off,Off,Off,Off,Off,Off,Off,Off,Off,Off,Off, 1.5 min\n"
+                         "(10/16/2026 12:01:30) Expo, Dark, 20,Off,Off,Off,Off,Off,Off,Off,Off,Off,Off,Off, 0.5 min\n")
 
 
 def test_messages_text_has_pymcus_rows() -> None:

@@ -91,14 +91,16 @@ PR10 (ProgressiveRatio): Frequency 40 Hz, PulseWidth 8 ms, ActivationMs 500 ms, 
 ***DFM 1***
 Linkage: 1,1,2,2,3,3,4,4,5,5,6,6
 Program Type: Linear
-(10/12/2026 20:00:00) Dark, Closed, 20,Off,20,Off,20,Off,20,Off,20,Off,20,Off, 30 min
-(10/12/2026 20:30:00) Dark, PR10, 20,Off,20,Off,20,Off,20,Off,20,Off,20,Off, 330 min
+(10/12/2026 20:00:00) Closed, Dark, 20,Off,20,Off,20,Off,20,Off,20,Off,20,Off, 30 min
+(10/12/2026 20:30:00) PR10, Dark, 20,Off,20,Off,20,Off,20,Off,20,Off,20,Off, 330 min
 ```
 
 - **The `Paradigms:` block** names every Paradigm, its type in brackets and every setting.
   It is the only place the type and settings appear: a data row carries only the name.
-- **An interval line** gives its start, `Dark` or `Lit`, the Paradigm's name, twelve
-  thresholds and its length. The k-th line of a DFM's section is its Program Interval k.
+- **An interval line** gives its start, the Paradigm's name, `Dark` or `Lit`, twelve
+  thresholds and its length, in the order of the Program file's Interval line. Earlier
+  4.0.0 exports put `Dark` or `Lit` first; pyflic reads both. The k-th line of a DFM's
+  section is its Program Interval k.
 - **A threshold** is a signal level, `On` or `Off`. A level makes the well a **trigger
   well**. `On` keeps it lit regardless (open loop). `Off` never lights it by its own
   behaviour, and such a well runs no Paradigm of its own.

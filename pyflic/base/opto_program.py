@@ -23,8 +23,9 @@ shapes, told apart by content, behind one API:
   converts an old program (``PyMCU/docs/ProgramFormat.md``, "Converting old
   programs");
 * **v4** (PyMCU 4.0.0): a ``Paradigms:`` block names each **Paradigm** with
-  its type and every setting, and interval lines read ``(stamp) Dark|Lit,
-  NAME, t1..t12, N min`` with thresholds a level, ``On`` or ``Off``;
+  its type and every setting, and interval lines read ``(stamp) NAME,
+  Dark|Lit, t1..t12, N min`` (``Dark|Lit, NAME`` in earlier exports) with
+  thresholds a level, ``On`` or ``Off``;
 * **simple**: a recording started without a Program exports one ``***ALL
   DFM***`` block, every well ``Off``; it yields no DFM section.
 
@@ -1026,24 +1027,37 @@ def _lookup(paradigms: dict[str, Paradigm], name: str) -> Paradigm | None:
     return found
 
 
+def _dark_position(tokens: list[str]) -> int | None:
+    """Which of an interval's first two values is a bare ``Dark`` / ``Lit``:
+    1 as PyMCU writes it now, after the Paradigm as in a Program file; 0 in
+    earlier 4.0.0 exports; ``None`` for neither.  A Paradigm can't be named
+    Dark or Lit, so the order is never ambiguous."""
+    for at in (1, 0):
+        if at < len(tokens) and tokens[at].strip().lower() in ("dark", "lit"):
+            return at
+    return None
+
+
 def _parse_v4_interval(index: int, stamp: str, body: str,
                        paradigms: dict[str, Paradigm], warnings: list[str],
                        where: str) -> ProgramInterval:
-    """One ``(stamp) Dark|Lit, NAME, t1..t12, N min`` line.  Raises
-    ``ValueError`` when the line cannot be a program interval."""
+    """One ``(stamp) NAME, Dark|Lit, t1..t12, N min`` line, or the earlier
+    ``Dark|Lit, NAME`` order.  Raises ``ValueError`` when the line cannot be
+    a program interval."""
     text = body.strip()
     if text.endswith("."):
         text = text[:-1]
     tokens = [t.strip() for t in text.split(",")]
     if len(tokens) != N_WELLS + 3:
-        raise ValueError(f"{len(tokens)} values; an interval is Dark or Lit, a Paradigm, "
+        raise ValueError(f"{len(tokens)} values; an interval is a Paradigm, Dark or Lit, "
                          f"{N_WELLS} thresholds and its minutes")
-    head = tokens[0].lower()
-    if head not in ("dark", "lit"):
-        raise ValueError(f"{tokens[0]!r} is not Dark or Lit")
-    paradigm = _lookup(paradigms, tokens[1])
+    at = _dark_position(tokens)
+    if at is None:
+        raise ValueError(f"neither {tokens[0]!r} nor {tokens[1]!r} is Dark or Lit")
+    head, name = tokens[at].lower(), tokens[1 - at]
+    paradigm = _lookup(paradigms, name)
     if paradigm is None:
-        raise ValueError(f"no Paradigm named {tokens[1]!r} in the Paradigms block")
+        raise ValueError(f"no Paradigm named {name!r} in the Paradigms block")
     thresholds = tuple(_parse_threshold(t) for t in tokens[2:2 + N_WELLS])
     match = _MINUTES_RE.match(tokens[-1])
     if match is None:
@@ -1062,7 +1076,8 @@ def _parse_v4_interval(index: int, stamp: str, body: str,
 
 def _grammar_of(lines: list[str]) -> str:
     """Which export *lines* are: a ``Paradigms:`` line or an interval whose
-    head is a bare ``Dark`` / ``Lit`` is 4.0.0; an ``***ALL DFM***`` block with
+    first or second value is a bare ``Dark`` / ``Lit`` is 4.0.0 (a legacy
+    line starts ``Dark Off``, then numbers); an ``***ALL DFM***`` block with
     no DFM section is the simple export; anything else is legacy."""
     v4 = has_dfm = has_all = False
     for raw in lines:
@@ -1081,8 +1096,7 @@ def _grammar_of(lines: list[str]) -> str:
             continue
         interval = _INTERVAL_RE.match(line)
         if interval is not None:
-            head = interval.group("body").split(",", 1)[0].strip().lower()
-            if head in ("dark", "lit"):
+            if _dark_position(interval.group("body").split(",", 2)[:2]) is not None:
                 v4 = True
     if has_all and not has_dfm:
         return GRAMMAR_SIMPLE

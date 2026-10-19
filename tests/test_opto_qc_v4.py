@@ -478,7 +478,7 @@ def test_an_interval_beyond_the_printed_lines_is_judged_by_its_paradigm(tmp_path
     text = program_text(spec)
     lines = text.splitlines()
     pr_line = next(i for i, line in enumerate(lines)
-                   if line.startswith("(") and ", PR10, " in line)
+                   if line.startswith("(") and ") PR10, " in line)
     shortened = "\n".join(lines[:pr_line] + lines[pr_line + 1:]) + "\n"
     e = load(tmp_path / "exp", "choice1", program_text_override=shortened)
     result = e.opto.result(1)

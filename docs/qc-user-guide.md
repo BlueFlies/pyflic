@@ -607,8 +607,11 @@ pyflic tells them apart by their content and reads both.
   is a level, `On` or `Off`:
 
   ```
-  (10/12/2026 20:30:00) Dark, PR10, 20,Off,20,Off,20,Off,20,Off,20,Off,20,Off, 330 min
+  (10/12/2026 20:30:00) PR10, Dark, 20,Off,20,Off,20,Off,20,Off,20,Off,20,Off, 330 min
   ```
+
+  Earlier 4.0.0 exports put `Dark` or `Lit` before the Paradigm's name;
+  pyflic reads both orders.
 
   An old program loaded into PyMCU 4.0.0 appears with generated names such
   as `ClosedLoop-40Hz-8ms-Hold500-MaxOn0`. The `***Env Mon***` section, the

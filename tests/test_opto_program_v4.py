@@ -136,6 +136,27 @@ def test_interval_for_is_the_kth_printed_line(v4):
     assert legacy.interval_for(2, 1) is legacy.section(2).intervals[0]
 
 
+def _paradigm_first(text: str) -> str:
+    """*text* with each interval line's first two values swapped: the
+    Paradigm, then Dark or Lit, as PyMCU now writes them, in the order of a
+    Program file's Interval line."""
+    def swap(match):
+        first, second, rest = match.group("body").split(",", 2)
+        return f"({match.group('stamp')}) {second.strip()}, {first.strip()},{rest}"
+    return "\n".join(swap(m) if (m := op._INTERVAL_RE.match(line)) else line
+                     for line in text.splitlines())
+
+
+def test_an_interval_may_name_its_paradigm_before_dark_or_lit(v4):
+    text = _paradigm_first(V4.read_text(encoding="utf-8"))
+    assert f"{STAMP} Closed, Dark, " in text
+    program = op.parse_program(text)
+    assert program.grammar == op.GRAMMAR_V4
+    assert program.rejected == {} and program.warnings == []
+    for dfm in (1, 2, 3):
+        assert program.section(dfm).intervals == v4.section(dfm).intervals
+
+
 # ---------------------------------------------------------------------------
 # Generated names
 # ---------------------------------------------------------------------------
