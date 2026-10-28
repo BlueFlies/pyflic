@@ -1,5 +1,11 @@
 # Getting Started with pyflic
 
+> **pyflic is under active development.** Its features, screens and installation steps
+> change from time to time, so some details in this guide may be out of date. The latest
+> code and documentation are always on pyflic's GitHub page:
+> <https://github.com/PletcherLab/pyflic>. To move to the newest version, see
+> [Updating pyflic](#updating-pyflic).
+
 This guide takes you from nothing installed to pyflic running on your computer. It
 assumes no experience with Python, GitHub, or the command line. Setup takes about
 15 minutes, most of it waiting for downloads.

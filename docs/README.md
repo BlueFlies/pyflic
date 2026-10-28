@@ -18,6 +18,12 @@ longer guides, the developer references and the decision records.
 - [The firmware 4.0.0 data columns](v4-data-columns.md): the 63 columns a
   firmware 4.0.0 recording adds, and where pyflic uses them.
 
+## For FLIC customers
+
+- [Analysing FLIC Data: Options from the Pletcher Laboratory](flic-analysis-options.md):
+  a short overview of the FLIC R Code and pyflic, where to get each, and why
+  to move to pyflic.
+
 ## References for developers
 
 - [Firmware 4.0.0 data in pyflic](firmware-4-data-in-pyflic.md): what pyflic
