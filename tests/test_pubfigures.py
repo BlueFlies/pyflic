@@ -159,21 +159,12 @@ def test_order_roles_puts_yoked_before_paired():
     assert pubfigures.order_roles(["paired"]) == ["paired"]
 
 
-def test_order_phases_puts_test_above_training():
-    assert pubfigures.order_phases(["Training", "Test"]) == ["Test", "Training"]
-    assert pubfigures.order_phases(["Training"]) == ["Training"]
-
-
-def test_role_grid_uses_test_then_training_row_order():
+def test_role_grid_rows_follow_the_experiment_order():
     df = pubfigures.faceted_data(_pr_facet_frame(), "Licks")
     spec = pubfigures.default_spec("faceted_licks")
-    ## Data encounter order is Training then Test; the Role grid flips rows.
-    assert list(df["Phase"].cat.categories) == ["Training", "Test"]
-    data, _labels, _colors = pubfigures._apply_treatment_order(
-        df, spec, pubfigures.PlotStyle())
-    all_phases = list(data["Phase"].cat.categories)
-    include = pubfigures.order_phases(all_phases)
-    assert include == ["Test", "Training"]
+    ## Training ran first, so its row is drawn above Test's.
+    figure = pubfigures.build_faceted(df, spec, pubfigures.PlotStyle())
+    assert list(figure.data["Phase"].cat.categories) == ["Training", "Test"]
 
 
 def test_role_display_labels_are_capitalized():

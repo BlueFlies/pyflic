@@ -281,8 +281,8 @@ class PlotEditorWindow(QMainWindow):
         self.facet_list.itemChanged.connect(self._apply_content)
         self.facets_group.add(self.facet_list)
         self.facets_group.add_note(
-            "Which phases appear as rows on the right (Test above Training "
-            "when both are shown). Untick to leave a period out.")
+            "Which phases appear as rows on the right, top to bottom in the "
+            "order the experiment ran them. Untick to leave a period out.")
         return self.facets_group
 
     def _build_roles_group(self) -> CardGroup:

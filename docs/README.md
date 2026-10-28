@@ -18,6 +18,14 @@ longer guides, the developer references and the decision records.
 - [The firmware 4.0.0 data columns](v4-data-columns.md): the 63 columns a
   firmware 4.0.0 recording adds, and where pyflic uses them.
 
+## Guide for AI agents
+
+- [Interpreting pyflic results](ai-agent-interpretation-guide.md): for an AI
+  agent that summarises the outputs of a Batch, Project or experiment folder:
+  every output file, how to recognise treatments and controls, how to weigh
+  each QC check, and what each statistical test does and does not show.
+  Written to be included in a larger prompt.
+
 ## References for developers
 
 - [Firmware 4.0.0 data in pyflic](firmware-4-data-in-pyflic.md): what pyflic

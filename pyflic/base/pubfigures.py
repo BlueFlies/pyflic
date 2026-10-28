@@ -48,8 +48,6 @@ DEFAULT_PALETTE = ["#2563eb", "#dc2626", "#16a34a", "#d97706",
 
 #: Progressive Ratio Role columns left-to-right (yoked control, then paired).
 ROLE_ORDER = ("yoked", "paired")
-#: Progressive Ratio Phase rows top-to-bottom when Role is on the columns.
-PHASE_ROW_ORDER = ("Test", "Training")
 
 
 def order_roles(roles) -> list[str]:
@@ -58,15 +56,6 @@ def order_roles(roles) -> list[str]:
                               if r and str(r).lower() != "nan"))
     known = [r for r in ROLE_ORDER if r in seen]
     other = [r for r in seen if r not in ROLE_ORDER]
-    return known + other
-
-
-def order_phases(phases) -> list[str]:
-    """Stable Phase order for Role-grid rows: Test, then Training, then any other."""
-    seen = list(dict.fromkeys(str(p) for p in phases
-                              if p and str(p).lower() != "nan"))
-    known = [p for p in PHASE_ROW_ORDER if p in seen]
-    other = [p for p in seen if p not in PHASE_ROW_ORDER]
     return known + other
 
 
@@ -706,7 +695,8 @@ def build_faceted(df: pd.DataFrame, spec: PlotSpec, style: PlotStyle):
 
     When the tidy frame carries ``Role`` (Progressive Ratio), panels are a
     ``Phase ~ Role`` grid so paired and yoked are never pooled: Roles along
-    the top, phases along the right.  ``spec.roles`` and ``spec.facets``
+    the top, phases down the right in the order the experiment ran them
+    (Training above Test).  ``spec.roles`` and ``spec.facets``
     independently choose which columns and rows appear.
     """
     import plotnine as p9
@@ -714,9 +704,6 @@ def build_faceted(df: pd.DataFrame, spec: PlotSpec, style: PlotStyle):
     data, labels, colors = _apply_treatment_order(df, spec, style)
     all_phases = list(data["Phase"].cat.categories)
     include = [p for p in (spec.facets or all_phases) if p in all_phases]
-    ## With Role columns, Phase is the row facet: Test above Training.
-    if "Role" in data.columns and not data.empty:
-        include = order_phases(include)
     data = data[data["Phase"].isin(include)].copy()
     shown = [str(spec.facet_labels.get(p, p)) for p in include]
     data["Phase"] = pd.Categorical(
