@@ -1,9 +1,10 @@
 # Script actions
 
-Every action a script step can take. `start` and `end` are accepted by nearly all of them
-and are omitted from the tables below — they are minutes, and blank means inherit (see
-[where values come from](scripts-overview.md#where-values-come-from)). `run_qc`,
-`run_analysis` and `run_plots` take neither: they read the whole recording.
+Every action a script step can take. `slice` is accepted by nearly all of them and is
+omitted from the tables below: the [Slice](concepts-slices.md) the step works on, blank to
+inherit the script's, else the whole recording (see
+[Slices](scripts-overview.md#slices)). `run_qc`, `run_analysis` and `run_plots` without a
+`slice` run the whole recording and every Slice the Selection keeps.
 
 ## Load actions
 
@@ -14,7 +15,7 @@ and are omitted from the tables below — they are minutes, and blank means inhe
 | `write_summary` | — | Write `summary.txt` with excluded chambers and experiment metadata |
 
 The member is already loaded when a script starts, so `load` reads nothing, and its
-`parallel`, `start` and `end` change nothing — see
+`parallel` changes nothing — see
 [The member is already loaded](scripts-overview.md#the-member-is-already-loaded).
 `group` defaults to the **script's name** — see
 [exclusions](config-dfms-chambers.md#excluding-chambers).
@@ -181,8 +182,7 @@ a figure. Both take `mode` of `mean_ab` (default), `A`, or `B`.
 ```yaml
 scripts:
   - name: "Standard Analysis"
-    start: 0
-    end: 240
+    slice: first_4h
     steps:
       - action: remove_chambers
       - action: write_summary

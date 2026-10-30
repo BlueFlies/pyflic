@@ -14,13 +14,14 @@ Usage (Python)::
 """
 from __future__ import annotations
 
+import math
 import re
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import yaml
-from PyQt6.QtCore import QSize, Qt
+from PyQt6.QtCore import QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QAction, QColor
 from PyQt6.QtWidgets import (
     QAbstractItemView,
@@ -54,6 +55,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from . import slices as slices_mod
 from .gui_env import sanitize_input_method_environment
 from .ui import ActionButton, Card, Category, TopBar, apply_theme, icon, resolved_mode
 from .ui.icons import help_color
@@ -472,6 +474,409 @@ class FactorsWidget(QWidget):
                 self._table.setItem(r, 1, QTableWidgetItem(", ".join(str(lv) for lv in levels)))
             else:
                 self._table.setItem(r, 1, QTableWidgetItem(str(levels)))
+
+
+# ---------------------------------------------------------------------------
+# SlicesWidget
+# ---------------------------------------------------------------------------
+
+#: A Slice's own columns: (header, tooltip).
+_SLICE_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("Name", "The Slice's name: letters, digits, _ and -.  It names the folder "
+             "slices/<name>/ its QC and results are written to."),
+    ("Start (min)", "The minute the Slice starts; blank is 0."),
+    ("End (min)", "The minute the Slice ends, or end (or blank) for the end of the "
+                  "recording."),
+    ("Own group", "exclusion_group — the remove_chambers.csv group this Slice's "
+                  "removals are read from and written to.  It is the Slice's name "
+                  "unless you change it, and a blank cell becomes the name.  No two "
+                  "analyses share one."),
+    ("Also exclude", "also_exclude — further groups whose chambers this Slice also "
+                     "leaves out, comma-separated.  Nothing is inherited from the "
+                     "whole recording, and nothing is written to these."),
+)
+#: The auto-removal cutoffs a Slice may override (``slices.AUTO_REMOVAL_CONSTANTS``),
+#: one column each: (key, header, kind, tooltip).  *kind* is ``cutoff`` (a
+#: number, or ``off`` for YAML null: the filter off), ``number`` or ``switch``
+#: (yes / no).  Blank takes the design's own; a key with no column here is
+#: kept as the file says.
+_SLICE_CONSTANT_COLUMNS: tuple[tuple[str, str, str, str], ...] = (
+    ("min_untransformed_licks_cutoff", "Min licks", "cutoff",
+     "min_untransformed_licks_cutoff for this Slice — blank takes the design's, a "
+     "number overrides it, off turns the filter off.  A Slice is shorter than the "
+     "recording, so a lower cutoff is often the point."),
+    ("exclude_failed_opto_chambers", "Opto failed", "switch",
+     "exclude_failed_opto_chambers for this Slice — blank takes the design's; yes "
+     "excludes the chambers whose optogenetic light QC fails, no keeps and flags "
+     "them."),
+    ("opto_unexplained_min_sec", "Unexplained (s)", "number",
+     "opto_unexplained_min_sec for this Slice — blank takes the design's; the "
+     "seconds of unexplained light before the optogenetic light QC judges a group."),
+)
+#: The optogenetic light QC's columns, shown only where the design's are.
+_SLICE_OPTO_KEYS = frozenset({"exclude_failed_opto_chambers", "opto_unexplained_min_sec"})
+#: A Slice's keys that have a column; any other is kept as the file says, so
+#: the check names it rather than the editor dropping it.
+_SLICE_BODY_KEYS = frozenset({"start", "end", "exclusion_group", "also_exclude",
+                              "constants"})
+_SLICE_KIND_WORDS = {"cutoff": "a number, or off", "number": "a number",
+                     "switch": "yes or no"}
+_TOLERANCE_TIP = (
+    "slice_tolerance_min — how far short of a Slice's end a recording may stop and "
+    "still cover it; a member that does not cover a Slice is left out of it.  A "
+    "nominal 24-hour run often ends at minute 1439.8.")
+
+
+def _number_text(value: Any) -> str:
+    """A number as a cell shows it, and anything else (``.inf``, a word) as
+    written: ``_fmt_number`` cannot take an infinity."""
+    try:
+        if math.isfinite(float(value)):
+            return _fmt_number(value)
+    except (TypeError, ValueError):
+        pass
+    return str(value)
+
+
+def _group_list(text: str) -> list[str]:
+    """Comma-separated exclusion group names, blanks and repeats dropped."""
+    out: list[str] = []
+    for part in str(text or "").split(","):
+        name = part.strip()
+        if name and name not in out:
+            out.append(name)
+    return out
+
+
+def _group_text(value: Any) -> str:
+    """An ``also_exclude:`` value (a list, or one name) as a field shows it."""
+    if value is None or value == "":
+        return ""
+    if isinstance(value, (list, tuple)):
+        return ", ".join(str(v) for v in value)
+    return str(value)
+
+
+def _slice_entries(node: Any) -> list[tuple[str, Any]]:
+    """``slices:`` as (name, body) pairs in declared order: a mapping keyed by
+    name, or the list of ``{name: ...}`` entries the loader also accepts."""
+    if isinstance(node, Mapping):
+        return [(str(k), v) for k, v in node.items()]
+    if isinstance(node, list):
+        out = []
+        for item in node:
+            body = dict(item) if isinstance(item, Mapping) else {}
+            out.append((str(body.pop("name", "") or ""), body))
+        return out
+    return []
+
+
+def _slice_constant_text(kind: str, value: Any) -> str:
+    """A Slice's constant as its cell shows it."""
+    if kind == "switch":
+        state = _switch_value(value)
+        if state is None:
+            return "" if value is None else str(value)
+        return "yes" if state else "no"
+    if value is None:
+        return "off" if kind == "cutoff" else ""
+    return _number_text(value)
+
+
+def _slice_constant(kind: str, text: str) -> tuple[Any, bool]:
+    """A constant cell's text as its YAML value, and whether it could be read."""
+    word = text.strip().lower()
+    if kind == "switch":
+        state = _switch_value(word)
+        return state, state is not None
+    if kind == "cutoff" and word in ("off", "none", "null"):
+        return None, True
+    try:
+        value = float(text)
+    except ValueError:
+        return None, False
+    if not math.isfinite(value):
+        return None, False
+    return (int(value) if value.is_integer() else value), True
+
+
+class _SliceKept:
+    """A Slice's keys and constants that have no column, as the file stated
+    them.  An object rather than a dict: Qt would turn a dict stored on an
+    item into a sorted map and lose what it cannot convert."""
+
+    __slots__ = ("body", "constants")
+
+    def __init__(self, body: dict, constants: dict) -> None:
+        self.body = body
+        self.constants = constants
+
+
+class SlicesWidget(QWidget):
+    """The design's Slices (ADR-0020): one row per Slice in declared order,
+    and how far short of a Slice's end a recording may stop and still cover it.
+
+    Shared by the Project Design dialog and the Config Editor, so a Slice is
+    stated in one vocabulary wherever a design is edited.  The rows are text;
+    :meth:`get_values` turns them into ``slices:`` and names what it could not
+    read, and ``slices.slice_problems`` — the Project's and the linter's own
+    check — judges the rest.
+    """
+
+    #: Any edit: a row added, removed or typed into, or the tolerance.
+    changed = pyqtSignal()
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._locked = False
+        self._lock_reason = ""
+        self._refusal: str | None = None
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 4, 0, 0)
+        layout.setSpacing(4)
+
+        ## Says why the table is greyed under a type that has no Slices.
+        self._reason = QLabel("")
+        self._reason.setObjectName("PyflicCardSubtitle")
+        self._reason.setWordWrap(True)
+        self._reason.setVisible(False)
+        layout.addWidget(self._reason)
+
+        headers = [*_SLICE_COLUMNS,
+                   *((header, tip) for _k, header, _kind, tip in _SLICE_CONSTANT_COLUMNS)]
+        self._table = QTableWidget(0, len(headers))
+        for column, (text, tip) in enumerate(headers):
+            item = QTableWidgetItem(text)
+            item.setToolTip(tip)
+            self._table.setHorizontalHeaderItem(column, item)
+        header = self._table.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        for column in (0, 3, 4):
+            header.setSectionResizeMode(column, QHeaderView.ResizeMode.Stretch)
+        self._table.verticalHeader().setVisible(False)
+        self._table.setAlternatingRowColors(True)
+        self._table.setMinimumHeight(90)
+        self._table.itemChanged.connect(lambda _item: self.changed.emit())
+        layout.addWidget(self._table, stretch=1)
+
+        self._controls = QWidget()
+        row = QHBoxLayout(self._controls)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(6)
+        self._add_btn = ActionButton("Add Slice", Category.LOAD, icon_name="new")
+        self._add_btn.setMaximumWidth(130)
+        self._add_btn.clicked.connect(self._add_row)
+        self._remove_btn = ActionButton("Remove", Category.QC, icon_name="clear")
+        self._remove_btn.setMaximumWidth(110)
+        self._remove_btn.clicked.connect(self._remove_row)
+        row.addWidget(self._add_btn)
+        row.addWidget(self._remove_btn)
+        row.addStretch(1)
+        ## Beside the buttons rather than a row of its own: it is one number,
+        ## and it only matters once there are Slices.
+        row.addWidget(QLabel("Coverage tolerance (min):"))
+        self._tolerance_edit = QLineEdit()
+        self._tolerance_edit.setMaximumWidth(110)
+        self._tolerance_edit.setPlaceholderText(
+            f"{_fmt_number(slices_mod.DEFAULT_TOLERANCE_MIN)}  (default)")
+        self._tolerance_edit.textChanged.connect(lambda _text: self.changed.emit())
+        row.addWidget(self._tolerance_edit)
+        button = _help_button("concepts-slices#coverage",
+                              "When a recording covers a Slice, and the tolerance")
+        if button is not None:
+            row.addWidget(button, 0, Qt.AlignmentFlag.AlignVCenter)
+        layout.addWidget(self._controls)
+        self._apply_state()
+
+    # ---- editing ------------------------------------------------------
+
+    def _add_row(self) -> None:
+        row = self._append("", {})
+        self._apply_state()
+        self.changed.emit()
+        self._table.setCurrentCell(row, 0)
+        self._table.editItem(self._table.item(row, 0))
+
+    def _remove_row(self) -> None:
+        ## The last row when none is selected: under a type that has no
+        ## Slices the table is greyed and cannot take a selection, and
+        ## removing is then the only way to a design that saves.
+        row = self._table.currentRow()
+        if row < 0:
+            row = self._table.rowCount() - 1
+        if row >= 0:
+            self._table.removeRow(row)
+            self._apply_state()
+            self.changed.emit()
+
+    def _append(self, name: str, body: Any) -> int:
+        """Add a row for the Slice *name* declared as *body*; return its index."""
+        body = dict(body) if isinstance(body, Mapping) else {}
+        constants = body.get("constants")
+        stated = dict(constants) if isinstance(constants, Mapping) else {}
+        columns = {key for key, *_rest in _SLICE_CONSTANT_COLUMNS}
+        extra_body = {k: v for k, v in body.items() if k not in _SLICE_BODY_KEYS}
+        if constants is not None and not isinstance(constants, Mapping):
+            extra_body["constants"] = constants
+        extra_constants = {k: v for k, v in stated.items() if k not in columns}
+        start, end = body.get("start"), body.get("end")
+        open_end = (end is None
+                    or (isinstance(end, str) and end.strip().lower() in slices_mod.OPEN_END_WORDS)
+                    or (isinstance(end, float) and math.isinf(end)))
+        cells = [name,
+                 "" if start is None else _number_text(start),
+                 "end" if open_end else _number_text(end),
+                 ## The group in effect, never a blank that silently means the
+                 ## name: the own group is where this Slice's removals go.
+                 str(body.get("exclusion_group") or name),
+                 _group_text(body.get("also_exclude")),
+                 ## Absent is blank (the design's own); a stated null is off.
+                 *(_slice_constant_text(kind, stated[key]) if key in stated else ""
+                   for key, _header, kind, _tip in _SLICE_CONSTANT_COLUMNS)]
+        row = self._table.rowCount()
+        blocked = self._table.blockSignals(True)
+        self._table.setRowCount(row + 1)
+        for column, text in enumerate(cells):
+            self._table.setItem(row, column, QTableWidgetItem(text))
+        self._table.item(row, 0).setData(
+            Qt.ItemDataRole.UserRole, _SliceKept(extra_body, extra_constants))
+        self._table.blockSignals(blocked)
+        return row
+
+    def _cell(self, row: int, column: int) -> str:
+        item = self._table.item(row, column)
+        return item.text().strip() if item is not None else ""
+
+    def _extra(self, row: int) -> "_SliceKept":
+        """What row *row* was loaded with that has no column: kept on save."""
+        item = self._table.item(row, 0)
+        kept = item.data(Qt.ItemDataRole.UserRole) if item is not None else None
+        return kept if isinstance(kept, _SliceKept) else _SliceKept({}, {})
+
+    # ---- loading and saving -------------------------------------------
+
+    def load_values(self, global_cfg: Mapping[str, Any] | None) -> None:
+        """Fill the rows and the tolerance from a ``global:`` block."""
+        g = dict(global_cfg or {})
+        tolerance = g.get("slice_tolerance_min")
+        self._tolerance_edit.blockSignals(True)
+        self._tolerance_edit.setText("" if tolerance is None else _number_text(tolerance))
+        self._tolerance_edit.blockSignals(False)
+        self._table.setRowCount(0)
+        for name, body in _slice_entries(g.get("slices")):
+            self._append(name, body)
+        self._apply_state()
+
+    def get_values(self) -> tuple[dict[str, Any], list[str]]:
+        """The ``slice_tolerance_min`` and ``slices`` keys the widget states
+        (each only when it states one), and what it could not read.
+
+        ``slices`` is a mapping keyed by name in row order: ``start`` always,
+        ``end: end`` for an open end, and the optional keys only when filled.
+        """
+        out: dict[str, Any] = {}
+        problems: list[str] = []
+        text = self._tolerance_edit.text().strip()
+        if text:
+            value, ok = _slice_constant("number", text)
+            if ok and value >= 0:
+                out["slice_tolerance_min"] = value
+            else:
+                problems.append(f"slice_tolerance_min: the coverage tolerance is a number "
+                                f"of minutes, 0 or more, not {text!r}")
+        from .opto_qc import opto_constant_problems
+
+        declared: dict[str, Any] = {}
+        for row in range(self._table.rowCount()):
+            cells = [self._cell(row, column) for column in range(self._table.columnCount())]
+            name, start, end, own, others = cells[:5]
+            extra = self._extra(row)
+            if not name:
+                if any(cells) or extra.body or extra.constants:
+                    problems.append(f"slices: row {row + 1} has no name")
+                continue
+            where = f"slices.{name}"
+            if name in declared:
+                problems.append(f"{where}: two Slices are named '{name}'")
+                continue
+            ## A number stays a number, anything else is written as typed so
+            ## the check names it ("start must be a minute, not 'six'").
+            body: dict[str, Any] = {
+                "start": _number_or_text(start) if start else 0,
+                "end": "end" if end.lower() in slices_mod.OPEN_END_WORDS
+                       else _number_or_text(end),
+            }
+            ## Always written: a Slice's own group is stated, not implied.
+            body["exclusion_group"] = own or name
+            groups = _group_list(others)
+            if groups:
+                body["also_exclude"] = groups
+            constants = dict(extra.constants)
+            for (key, header, kind, _tip), text in zip(_SLICE_CONSTANT_COLUMNS, cells[5:]):
+                if not text:
+                    continue
+                value, ok = _slice_constant(kind, text)
+                if not ok:
+                    problems.append(f"{where}: {header} is {_SLICE_KIND_WORDS[kind]}, "
+                                    f"not {text!r}")
+                    continue
+                constants[key] = value
+            problems += [f"{where}: {p}" for p in opto_constant_problems(
+                {k: v for k, v in constants.items() if k in _SLICE_OPTO_KEYS})]
+            if constants:
+                body["constants"] = constants
+            for key, value in extra.body.items():
+                body.setdefault(key, value)
+            declared[name] = body
+        if declared:
+            out["slices"] = declared
+        return out, problems
+
+    # ---- what the editor around it decides ----------------------------
+
+    def set_read_only(self, read_only: bool, *, reason: str = "") -> None:
+        """Show the Slices but refuse edits — a Member inherits them."""
+        self._locked = bool(read_only)
+        self._lock_reason = reason if read_only else ""
+        self._apply_state()
+
+    def set_refusal(self, reason: str | None) -> None:
+        """Grey the Slices out with *reason* (a type that has none), or
+        ``None`` to allow them."""
+        self._refusal = reason
+        self._apply_state()
+
+    def set_opto_columns_visible(self, visible: bool) -> None:
+        """Show the optogenetic light QC's columns only where the design's
+        own optogenetic settings are shown.  Presentation only: a hidden
+        column still keeps what it holds."""
+        for column, (key, *_rest) in enumerate(_SLICE_CONSTANT_COLUMNS, len(_SLICE_COLUMNS)):
+            if key in _SLICE_OPTO_KEYS:
+                self._table.setColumnHidden(column, not visible)
+
+    def _apply_state(self) -> None:
+        refused = self._refusal is not None
+        has_rows = self._table.rowCount() > 0
+        editable = not self._locked and not refused
+        self._table.setEditTriggers(
+            QAbstractItemView.EditTrigger.AllEditTriggers if editable
+            else QAbstractItemView.EditTrigger.NoEditTriggers)
+        self._table.setEnabled(not refused)
+        ## Under a type with no Slices an empty table is only noise; one that
+        ## still holds Slices stays, greyed, so they can be removed.
+        self._table.setVisible(not refused or has_rows)
+        self._controls.setVisible(not refused or has_rows)
+        self._add_btn.setEnabled(editable)
+        self._remove_btn.setEnabled(not self._locked and has_rows)
+        self._tolerance_edit.setEnabled(editable)
+        for widget in (self._table, self._add_btn, self._remove_btn):
+            widget.setToolTip(self._lock_reason)
+        self._tolerance_edit.setToolTip(self._lock_reason or _TOLERANCE_TIP)
+        self._reason.setVisible(refused)
+        if refused:
+            self._reason.setText(
+                f"{self._refusal}." + ("  Remove these Slices to save." if has_rows else ""))
 
 
 # ---------------------------------------------------------------------------
@@ -1647,6 +2052,53 @@ class FLICConfigEditor(QMainWindow):
         self._factors_widget = FactorsWidget()
         factors_card.add_body(self._factors_widget)
         top_layout.addWidget(factors_card)
+
+        ## Which remove_chambers.csv groups the whole recording reads, and the
+        ## Slices (ADR-0020) with their own.  One card: a Slice's own group
+        ## may not be the whole recording's, so the two are edited together.
+        slices_card = Card(
+            "Exclusion Groups and Slices",
+            Category.ANALYZE,
+            subtitle=(
+                "Optional. A Slice is a separate analysis of part of the recording, "
+                "with its own exclusions, QC and results; the whole recording is "
+                "always analysed as well."
+            ),
+        )
+        _add_help(slices_card, "concepts-slices#slices-in-the-design",
+                  "Slices: separate analyses of part of the recording")
+        exclusion_form = QFormLayout()
+        exclusion_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        exclusion_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        self._exclusion_group_edit = QLineEdit()
+        self._exclusion_group_edit.setPlaceholderText("general")
+        self._exclusion_group_edit.setMaximumWidth(200)
+        self._exclusion_group_edit.setToolTip(
+            "exclusion_group — the whole recording's own remove_chambers.csv group: "
+            "the one its removals are read from and written to.")
+        self._exclusion_group_edit.textChanged.connect(self._refresh_badges)
+        exclusion_form.addRow("Exclusion Group:", _with_help(
+            self._exclusion_group_edit, "config-structure#globalexclusion-group",
+            "The remove_chambers.csv group the whole recording is read under"))
+        self._also_exclude_edit = QLineEdit()
+        self._also_exclude_edit.setPlaceholderText("e.g. dead  (comma-separated)")
+        self._also_exclude_edit.setMaximumWidth(200)
+        self._also_exclude_edit.setToolTip(
+            "also_exclude — further groups whose chambers the whole recording also "
+            "leaves out; it never writes to them.  A fly dead from the start, listed "
+            "once in such a group, is left out of every analysis that names it.")
+        self._also_exclude_edit.textChanged.connect(self._refresh_badges)
+        exclusion_form.addRow("Also Exclude:", _with_help(
+            self._also_exclude_edit, "concepts-slices#exclusions",
+            "Each analysis's own group, and the groups it also excludes"))
+        slices_card.add_body(exclusion_form)
+        #: Their own tooltips, given back when a Project's design stops owning them.
+        self._exclusion_tips = {edit: edit.toolTip() for edit in (
+            self._exclusion_group_edit, self._also_exclude_edit)}
+        self._slices_widget = SlicesWidget()
+        self._slices_widget.changed.connect(self._refresh_badges)
+        slices_card.add_body(self._slices_widget)
+        top_layout.addWidget(slices_card)
         ## The cards keep their natural height; the slack goes here rather
         ## than stretching a three-row factor table down the window.
         top_layout.addStretch(1)
@@ -1697,6 +2149,7 @@ class FLICConfigEditor(QMainWindow):
         self._refresh_threshold_hints()
         self._update_well_names_visibility()
         self._sync_control_level()
+        self._sync_slices()
         self._update_dfm_buttons()
         self._refresh_badges()
 
@@ -1758,6 +2211,13 @@ class FLICConfigEditor(QMainWindow):
         self._exp_form.setRowVisible(self._control_level_row, factor is not None)
         if factor is not None:
             self._control_level_edit.setPlaceholderText(f"a level of {factor}")
+
+    def _sync_slices(self) -> None:
+        """Grey the Slices out, with the reason, under a type whose Facets
+        come from the data (the Ratio analysis): it has no Slices."""
+        item = self._current_type()
+        self._slices_widget.set_refusal(
+            None if slices_mod.allows_slices(item) else slices_mod.refusal(item))
 
     def _current_type(self):
         """The selected ``ExperimentType``, Custom if anything is amiss."""
@@ -1823,6 +2283,7 @@ class FLICConfigEditor(QMainWindow):
         self._update_well_names_visibility()
         self._sync_pr_widgets()
         self._sync_control_level()
+        self._sync_slices()
         self._refresh_badges()
 
     def _sync_pr_widgets(self) -> None:
@@ -2044,6 +2505,8 @@ class FLICConfigEditor(QMainWindow):
         self._exp_form.setRowVisible(self._opto_header_row, shown)
         for row in self._opto_constant_rows.values():
             self._exp_form.setRowVisible(row, shown)
+        if hasattr(self, "_slices_widget"):
+            self._slices_widget.set_opto_columns_visible(shown)
 
     def _load_opto_constants(self, constants: dict[str, Any]) -> None:
         from .opto_qc import OPTO_CONSTANT_FIELDS
@@ -2222,10 +2685,25 @@ class FLICConfigEditor(QMainWindow):
                     self._global_section()))
             except Exception:  # noqa: BLE001 - validation must never block the UI
                 experiment = []
+            experiment += self._slice_problems()
         dfms: list[str] = []
         for w in self._dfm_widgets:
             dfms.extend(w.chamber_problems())
         return experiment, dfms
+
+    def _slice_problems(self) -> list[str]:
+        """What keeps this experiment's Slices from being saved: the cells
+        the table could not read, then ``slices.slice_problems`` — the
+        linter's own check — on the ``global:`` that would be written.  None
+        for a Member, whose Slices are its Project's."""
+        if self._design:
+            return []
+        try:
+            _declared, problems = self._slices_widget.get_values()
+            return problems + slices_mod.slice_problems(
+                self._global_section(), self._current_type())
+        except Exception:  # noqa: BLE001 - validation must never block the UI
+            return []
 
     def _refresh_badges(self, *_args) -> None:
         if not hasattr(self, "_tabs"):
@@ -2439,6 +2917,17 @@ class FLICConfigEditor(QMainWindow):
         if factors:
             global_section["experimental_design_factors"] = factors
 
+        ## The whole recording's own exclusion group and the groups it also
+        ## excludes, then the Slices (ADR-0020); each only when stated.
+        group = self._exclusion_group_edit.text().strip()
+        if group:
+            global_section["exclusion_group"] = group
+        others = _group_list(self._also_exclude_edit.text())
+        if others:
+            global_section["also_exclude"] = others
+        declared, _problems = self._slices_widget.get_values()
+        global_section.update(declared)
+
         ## The Selection (ADR-0018) has no field here: the Hub's ticks write
         ## it.  Kept as the file says, or a save would undo every untick.
         omit = (self._loaded_raw.get("global") or {}).get("omit")
@@ -2545,6 +3034,10 @@ class FLICConfigEditor(QMainWindow):
                        self._transform_licks_check):
             widget.setEnabled(not governed)
             widget.setToolTip(reason)
+        for widget, tip in self._exclusion_tips.items():
+            widget.setEnabled(not governed)
+            widget.setToolTip(reason or tip)
+        self._slices_widget.set_read_only(governed, reason=reason)
         for check, edit, _key in self._threshold_controls():
             check.setEnabled(not governed)
             check.setToolTip(reason or check.toolTip())
@@ -2689,6 +3182,12 @@ class FLICConfigEditor(QMainWindow):
         self._factors_widget._table.blockSignals(False)
         factors = self._factors_widget.get_factors()
 
+        # Exclusion groups and Slices
+        self._exclusion_group_edit.setText(str(global_cfg.get("exclusion_group") or ""))
+        self._also_exclude_edit.setText(_group_text(global_cfg.get("also_exclude")))
+        self._slices_widget.load_values(global_cfg)
+        self._sync_slices()
+
         # DFM nodes
         dfm_nodes = cfg.get("dfms", cfg.get("DFMs", [])) or []
         if isinstance(dfm_nodes, dict):
@@ -2777,6 +3276,9 @@ class FLICConfigEditor(QMainWindow):
         self._factors_widget._table.blockSignals(True)
         self._factors_widget._table.setRowCount(0)
         self._factors_widget._table.blockSignals(False)
+        self._exclusion_group_edit.clear()
+        self._also_exclude_edit.clear()
+        self._slices_widget.load_values({})
 
         self._dfm_tabs.clear()
         for w in self._dfm_widgets:
@@ -2790,6 +3292,7 @@ class FLICConfigEditor(QMainWindow):
         self._refresh_threshold_hints()
         self._update_well_names_visibility()
         self._sync_control_level()
+        self._sync_slices()
         self._sync_dfm_tabs(1, 2)
         ## A new config starts at the top of the dependency chain: the type
         ## decides the layout, and the layout decides the other tab's shape.
@@ -2905,7 +3408,24 @@ class FLICConfigEditor(QMainWindow):
         box.setDefaultButton(QMessageBox.StandardButton.Cancel)
         return box.exec() == QMessageBox.StandardButton.Save
 
+    def _refuse_slices(self, problems: list[str]) -> None:
+        """Say why the Slices stop this save.  The one refusal here: a Slice
+        that cannot be used is skipped by every run, so writing it would
+        promise an analysis that never happens."""
+        shown = problems[:12]
+        detail = "\n".join(f"  • {t}" for t in shown)
+        if len(problems) > len(shown):
+            detail += f"\n  … and {len(problems) - len(shown)} more"
+        QMessageBox.warning(
+            self, "Slices cannot be saved",
+            f"Not saved — the Slices cannot be used as they stand:\n\n{detail}\n\n"
+            "Correct or remove them on the Experiment tab, then save again.")
+
     def _write_yaml(self, path: Path) -> None:
+        slice_problems = self._slice_problems()
+        if slice_problems:
+            self._refuse_slices(slice_problems)
+            return
         experiment, dfms = self._problems()
         problems = experiment + dfms
         if problems and not self._confirm_save_with_problems(problems):

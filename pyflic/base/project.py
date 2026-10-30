@@ -14,10 +14,17 @@ Two things here differ deliberately from PyTrackingAnalysis:
   than merely noisy, and no shorter list had a defensible boundary.
 * A Member normally **omits** ``global:`` and inherits it, so that authority
   costs no duplication.  A ``global:`` that is present is validated key by key.
+
+The Design may declare **Slices** (ADR-0020): separate analyses of part of
+every Member's recording.  :meth:`Project.for_slice` gives the same Project
+seen through one Slice — its Members' outputs read from ``slices/<name>/``,
+its own written to ``<project>/slices/<name>/`` — and a Slice's Combined
+Analysis pools only the Members whose recording covers it.
 """
 
 from __future__ import annotations
 
+import copy
 import os
 import re
 from pathlib import Path
@@ -25,7 +32,7 @@ from pathlib import Path
 import pandas as pd
 import yaml
 
-from . import experiment_types, windowing
+from . import experiment_types, slices, windowing
 from .utils import is_environmental_monitor
 
 #: The Paired-Yoked Difference columns the pooled statistics test, between
@@ -54,6 +61,12 @@ DESIGN_KEYS: tuple[str, ...] = (
     "facet_labels",
     "facet_source",
     "exclusion_group",
+    ## Slices (ADR-0020): the separate analyses of part of every Member's
+    ## recording, the groups the whole recording also excludes, and how far
+    ## short of a Slice's end a recording may stop and still cover it.
+    "also_exclude",
+    "slices",
+    "slice_tolerance_min",
     "optogenetics",
     ## The Selection (ADR-0018): what every Member's Run QC, Run analysis and
     ## Generate plots leave out, the same for all of them, since a Project's
@@ -358,6 +371,10 @@ class Project:
         self.analysis_path = os.path.join(self.project_directory, "analysis")
         self.figures_path = os.path.join(self.project_directory, "figures")
         self.arena = _NameShim(self.name)  # AI-payload compatibility
+        #: The Slice this view of the Project is (:meth:`for_slice`), or
+        #: ``None`` for the whole recording.
+        self.slice = None
+        self._whole = None
 
         # ---- discover members -------------------------------------
         self.member_names: list[str] = []
@@ -418,6 +435,11 @@ class Project:
                             or {}).items()
         }
         self.exclusion_group = source.get("exclusion_group", "general")
+        ## Slices (ADR-0020): the usable ones; the rest are warnings.
+        self.also_exclude = slices.also_exclude(source)
+        self.slice_tolerance = slices.tolerance(source)
+        self.slices = slices.usable_slices(source, self.experiment_type)
+        self.slice_problems = slices.slice_problems(source, self.experiment_type)
         ## Program Facets (facet_source) and data-derived ones differ in their
         ## windows from DFM to DFM, so the pooled rows group by Facet label.
         self.facet_source = self.experiment_type.resolve_facet_source(source)
@@ -586,6 +608,125 @@ class Project:
         for name in self.member_names:
             if not has_experiment_data(self.member_dir(name)):
                 self.warnings.append(f"{name}: no DFM CSVs in data/")
+        for problem in self.slice_problems:
+            self.warnings.append(f"design: {problem}")
+
+    # ------------------------------------------------------------------
+    # Slices (ADR-0020)
+    # ------------------------------------------------------------------
+
+    @property
+    def slice_name(self) -> str | None:
+        return None if self.slice is None else self.slice.name
+
+    @property
+    def whole(self) -> "Project":
+        """The Project seen through the whole recording."""
+        return self if self._whole is None else self._whole
+
+    def for_slice(self, name: str | None) -> "Project":
+        """This Project seen through the Slice *name* (``None``: the whole
+        recording).  Members load as that Slice, their saved outputs are read
+        from ``slices/<name>/``, and the Combined Analysis, the Project Report
+        and the figures are written to ``<project>/slices/<name>/``."""
+        whole = self.whole
+        if name is None:
+            return whole
+        chosen = next((s for s in whole.slices if s.name == name), None)
+        if chosen is None:
+            raise slices.SliceError(f"Project '{whole.name}': the design declares no usable "
+                                    f"Slice named '{name}'")
+        view = copy.copy(whole)
+        view._whole = whole
+        view.slice = chosen
+        root = slices.output_dir(whole.project_directory, chosen.name)
+        view.analysis_path = str(root / "analysis")
+        view.figures_path = str(root / "figures")
+        view.exclusion_group = chosen.exclusion_group
+        view.also_exclude = chosen.also_exclude
+        return view
+
+    def slice_views(self) -> list["Project"]:
+        """The whole recording, then every usable Slice."""
+        whole = self.whole
+        return [whole] + [whole.for_slice(s.name) for s in whole.slices]
+
+    @property
+    def exclusion_groups(self) -> tuple[str, ...]:
+        """The groups this view excludes: its own first, then also_exclude."""
+        return (self.exclusion_group,) + tuple(
+            g for g in self.also_exclude if g != self.exclusion_group)
+
+    def view_label(self) -> str:
+        """``"whole recording"`` or ``"Slice early (0, 360] min"``."""
+        if self.slice is None:
+            return "whole recording"
+        return f"Slice {self.slice.name} {self.slice.bounds_label()}"
+
+    def member_output_dir(self, name: str) -> str:
+        """Where a Member's outputs for this view live: its directory, or
+        ``slices/<name>/`` inside it."""
+        if self.slice is None:
+            return self.member_dir(name)
+        return str(slices.output_dir(self.member_dir(name), self.slice.name))
+
+    def slice_record(self, name: str) -> dict | None:
+        """The ``slice.json`` the Member's last run of this Slice left."""
+        if self.slice is None:
+            return None
+        return slices.read_record(self.member_dir(name), self.slice.name)
+
+    def not_covered(self) -> dict[str, str]:
+        """``{member: reason}`` for the Members whose recording does not
+        cover this Slice, as their last run of it recorded."""
+        out: dict[str, str] = {}
+        if self.slice is None:
+            return out
+        for name in self.member_names:
+            record = self.slice_record(name)
+            if record is not None and not record.get("covered", True):
+                out[name] = str(record.get("reason") or "does not cover the Slice")
+        return out
+
+    def slice_coverage_frame(self) -> pd.DataFrame | None:
+        """One row per Member for this Slice: covered or not, where its
+        data ends, and why it was left out; ``None`` for the whole recording."""
+        if self.slice is None:
+            return None
+        rows = []
+        for name in self.member_names:
+            record = self.slice_record(name)
+            if record is None:
+                rows.append({"Experiment": name, "Covered": "not run", "ActualEndMin": None,
+                             "Reason": "this Slice has not been run for the Member"})
+                continue
+            rows.append({"Experiment": name,
+                         "Covered": "yes" if record.get("covered", True) else "no",
+                         "ActualEndMin": record.get("actual_end_minutes"),
+                         "Reason": record.get("reason") or ""})
+        return pd.DataFrame(rows, columns=["Experiment", "Covered", "ActualEndMin", "Reason"])
+
+    def open_end_spread_note(self) -> str | None:
+        """For an open-ended Slice, a warning when the pooled Members'
+        recordings end more than the tolerance apart: the Slice then pools
+        unequal spans under one name."""
+        if self.slice is None or not self.slice.open_end:
+            return None
+        ends = {}
+        for name in self.member_names:
+            record = self.slice_record(name)
+            if record and record.get("covered", True) and \
+                    record.get("actual_end_minutes") is not None:
+                ends[name] = float(record["actual_end_minutes"])
+        if len(ends) < 2:
+            return None
+        low, high = min(ends.values()), max(ends.values())
+        if high - low <= self.slice_tolerance:
+            return None
+        detail = ", ".join(f"{n} {v:.1f}" for n, v in sorted(ends.items()))
+        return (f"Slice '{self.slice.name}' runs to the end of each recording, and the pooled "
+                f"Members end {high - low:.1f} min apart (more than the {self.slice_tolerance:g}-min "
+                f"tolerance): {detail}")
 
     # ------------------------------------------------------------------
     # Scripts
@@ -614,10 +755,13 @@ class Project:
 
     def load_member(self, name: str, **kwargs):
         """Load a Member with the Design's ``global:`` supplied for
-        inheritance and per-DFM overrides restricted (ADR-0005)."""
+        inheritance and per-DFM overrides restricted (ADR-0005).  A Slice view
+        loads the Member as its Slice unless ``slice=`` says otherwise."""
         from .yaml_config import load_experiment_yaml
 
-        kwargs.setdefault("exclusion_group", self.exclusion_group)
+        if self.slice is not None:
+            kwargs.setdefault("slice", self.slice.name)
+        kwargs.setdefault("exclusion_group", self.whole.exclusion_group)
         return load_experiment_yaml(
             self.member_dir(name),
             design_global=self.design_global or None,
@@ -784,12 +928,17 @@ class Project:
     def member_report_path(self, name: str) -> str:
         """Where a Member's own experiment report is written
         (``pdf_report.write_experiment_report``'s default)."""
-        return os.path.join(self.member_dir(name), "analysis", "experiment_report.pdf")
+        return os.path.join(self.member_output_dir(name), "analysis", "experiment_report.pdf")
 
     def member_status(self, name: str) -> dict:
-        """Cheap per-Member status from saved artifacts (no data load)."""
+        """Cheap per-Member status from saved artifacts (no data load).
+
+        In a Slice view, ``covered`` is what the Member's last run of the
+        Slice recorded (``None``: never run) and ``reason`` why it was left
+        out; ``stale`` also holds when the Design's Slice no longer matches
+        the one that run used."""
         directory = self.member_dir(name)
-        analysis = os.path.join(directory, "analysis")
+        analysis = os.path.join(self.member_output_dir(name), "analysis")
         summary = os.path.join(analysis, "feeding_summary.csv")
         status = {
             "analyzed": os.path.isfile(summary),
@@ -805,7 +954,17 @@ class Project:
             ## worse than showing nothing — the date is true and the number
             ## it stands for is not.
             "stale": False,
+            "covered": True,
+            "reason": None,
         }
+        if self.slice is not None:
+            record = self.slice_record(name)
+            status["covered"] = None if record is None else bool(record.get("covered", True))
+            status["reason"] = None if record is None else record.get("reason")
+            if status["covered"] is False:
+                status["analyzed"] = False
+            elif record is not None and slices.definition_changed(record, self.slice):
+                status["stale"] = True
         if status["analyzed"]:
             try:
                 status["chambers"] = len(pd.read_csv(summary))
@@ -813,7 +972,7 @@ class Project:
                 pass
             declaration = os.path.join(directory, "remove_chambers.csv")
             try:
-                status["stale"] = (
+                status["stale"] = status["stale"] or (
                     os.path.isfile(declaration)
                     and os.path.getmtime(declaration)
                     > os.path.getmtime(summary))
@@ -822,23 +981,45 @@ class Project:
         return status
 
     def run_all(self, *, make_reports: bool = True,
-                skip_analyzed: bool = False, log=print) -> list[str]:
-        """Run each Member's basic analysis (and report); returns failures."""
+                skip_analyzed: bool = False, log=print,
+                all_slices: bool = True) -> list[str]:
+        """Run each Member's basic analysis (and report); returns failures.
+
+        With *all_slices* (the default) a Project with Slices runs the whole
+        recording and then every Slice of every Member (ADR-0020), so each
+        Slice's Combined Analysis has every Member that covers it.  A Member
+        that does not cover a Slice is recorded as such, not failed."""
         failures: list[str] = []
-        for name in self.member_names:
-            if skip_analyzed and self.member_status(name)["analyzed"]:
-                log(f"[{name}] already analyzed — skipped")
-                continue
-            log(f"[{name}] running analysis...")
-            try:
-                exp = self.load_experiment(name)
-                exp.execute_basic_analysis()
-                if make_reports:
-                    from .pdf_report import write_experiment_report
-                    write_experiment_report(exp)
-            except Exception as err:  # noqa: BLE001
-                failures.append(f"{name}: {err}")
-                log(f"[{name}] FAILED: {type(err).__name__}: {err}")
+        views = self.slice_views() if all_slices else [self]
+        for view in views:
+            if view.slice is not None:
+                log(f"--- {view.view_label()} ---")
+            for name in self.member_names:
+                tag = name if view.slice is None else f"{name} / {view.slice.name}"
+                if skip_analyzed and view.member_status(name)["analyzed"]:
+                    log(f"[{tag}] already analyzed — skipped")
+                    continue
+                log(f"[{tag}] running analysis...")
+                try:
+                    exp = view.load_experiment(name)
+                except slices.SliceNotCovered as err:
+                    slices.write_record(view.member_dir(name), err.slice,
+                                        tol=view.slice_tolerance, dfm_ends=err.dfm_ends,
+                                        reason=err.reason)
+                    log(f"[{tag}] not covered — left out of this Slice: {err.reason}")
+                    continue
+                except Exception as err:  # noqa: BLE001
+                    failures.append(f"{tag}: {err}")
+                    log(f"[{tag}] FAILED: {type(err).__name__}: {err}")
+                    continue
+                try:
+                    exp.execute_basic_analysis()
+                    if make_reports:
+                        from .pdf_report import write_experiment_report
+                        write_experiment_report(exp)
+                except Exception as err:  # noqa: BLE001
+                    failures.append(f"{tag}: {err}")
+                    log(f"[{tag}] FAILED: {type(err).__name__}: {err}")
         return failures
 
     # ------------------------------------------------------------------
@@ -854,8 +1035,13 @@ class Project:
         half a Project without saying so is worse than refusing.
         """
         summaries, facets, missing = [], [], []
+        ## A Slice pools only the Members that cover it (ADR-0020): one left
+        ## out is named by not_covered(), not counted as missing.
+        left_out = self.not_covered()
         for name in self.member_names:
-            path = os.path.join(self.member_dir(name), "analysis",
+            if name in left_out:
+                continue
+            path = os.path.join(self.member_output_dir(name), "analysis",
                                 "feeding_summary.csv")
             if not os.path.isfile(path):
                 missing.append(name)
@@ -863,7 +1049,7 @@ class Project:
             df = pd.read_csv(path)
             df.insert(0, "Experiment", name)
             summaries.append(df)
-            fpath = os.path.join(self.member_dir(name), "analysis",
+            fpath = os.path.join(self.member_output_dir(name), "analysis",
                                  "feeding_summary_facet.csv")
             if os.path.isfile(fpath):
                 fdf = pd.read_csv(fpath)
@@ -878,8 +1064,8 @@ class Project:
         only), with an ``Experiment`` first column, or ``None`` when no Member
         has one."""
         frames = []
-        for name in self.member_names:
-            path = os.path.join(self.member_dir(name), "analysis",
+        for name in self._pooled_members():
+            path = os.path.join(self.member_output_dir(name), "analysis",
                                 "paired_yoked_diff.csv")
             if os.path.isfile(path):
                 df = pd.read_csv(path)
@@ -894,9 +1080,9 @@ class Project:
         ``Experiment`` and ``Source`` first, or ``None`` when no Member has
         one."""
         frames = []
-        for name in self.member_names:
+        for name in self._pooled_members():
             for source, parts in LIGHT_QC_SOURCES:
-                path = os.path.join(self.member_dir(name), *parts)
+                path = os.path.join(self.member_output_dir(name), *parts)
                 if os.path.isfile(path):
                     df = pd.read_csv(path)
                     df.insert(0, "Source", source)
@@ -910,8 +1096,8 @@ class Project:
         no Member has one — a Member analysed before the table existed has
         none, and is not guessed at."""
         frames = []
-        for name in self.member_names:
-            path = os.path.join(self.member_dir(name), "analysis",
+        for name in self._pooled_members():
+            path = os.path.join(self.member_output_dir(name), "analysis",
                                 "pr_breaking_point.csv")
             if os.path.isfile(path):
                 df = pd.read_csv(path)
@@ -927,8 +1113,8 @@ class Project:
         out: dict[str, pd.DataFrame] = {}
         for key, filename in LIGHT_TABLES.items():
             frames = []
-            for name in self.member_names:
-                path = os.path.join(self.member_dir(name), "analysis", filename)
+            for name in self._pooled_members():
+                path = os.path.join(self.member_output_dir(name), "analysis", filename)
                 if os.path.isfile(path):
                     df = pd.read_csv(path)
                     df.insert(0, "Experiment", name)
@@ -941,7 +1127,7 @@ class Project:
         """The Generations of a Member's DFMs, from its saved outputs (no data
         load): the light table's ``Generation`` column, else the ``-
         generation:`` lines of its ``summary.txt``; empty when neither says."""
-        analysis = os.path.join(self.member_dir(name), "analysis")
+        analysis = os.path.join(self.member_output_dir(name), "analysis")
         for filename in (LIGHT_TABLES["LightSummary"], LIGHT_TABLES["LightWells"]):
             path = os.path.join(analysis, filename)
             if os.path.isfile(path):
@@ -973,7 +1159,7 @@ class Project:
             if 2 in self.member_generations(name):
                 out.append(name)
                 continue
-            path = os.path.join(self.member_dir(name), "analysis",
+            path = os.path.join(self.member_output_dir(name), "analysis",
                                 "feeding_summary_facet.csv")
             if os.path.isfile(path):
                 try:
@@ -995,21 +1181,28 @@ class Project:
     def aggregated_exclusions(self) -> pd.DataFrame:
         """Every Member's exclusions in one table (ADR-0005).
 
-        Sources: each Member's ``remove_chambers.csv`` rows for the Design's
-        active exclusion group, and the auto-removal table saved by a run.
+        Sources: each Member's ``remove_chambers.csv`` rows for the groups
+        this view excludes (its own and ``also_exclude``), and the
+        auto-removal table saved by a run.  A Slice reads its own.
         """
         from .exclusions import read_exclusions
 
         rows: list[dict] = []
-        for name in self.member_names:
+        for name in self._pooled_members():
             directory = self.member_dir(name)
             groups = read_exclusions(directory)
-            for dfm_id, chambers in (groups.get(self.exclusion_group) or {}).items():
-                for chamber in chambers:
-                    rows.append({"Experiment": name, "DFM": int(dfm_id),
-                                 "Chamber": int(chamber), "Source": "manual",
-                                 "Note": f"group '{self.exclusion_group}'"})
-            auto = os.path.join(directory, "analysis", "removed_chambers.csv")
+            seen: set[tuple[int, int]] = set()
+            for group in self.exclusion_groups:
+                for dfm_id, chambers in (groups.get(group) or {}).items():
+                    for chamber in chambers:
+                        if (int(dfm_id), int(chamber)) in seen:
+                            continue
+                        seen.add((int(dfm_id), int(chamber)))
+                        rows.append({"Experiment": name, "DFM": int(dfm_id),
+                                     "Chamber": int(chamber), "Source": "manual",
+                                     "Note": f"group '{group}'"})
+            auto = os.path.join(self.member_output_dir(name), "analysis",
+                                "removed_chambers.csv")
             if os.path.isfile(auto):
                 try:
                     adf = pd.read_csv(auto)
@@ -1026,15 +1219,31 @@ class Project:
         columns = ["Experiment", "DFM", "Chamber", "Source", "Note"]
         return pd.DataFrame(rows, columns=columns)
 
+    def _pooled_members(self) -> list[str]:
+        """The Members this view pools: all of them, less any whose
+        recording does not cover the Slice."""
+        left_out = self.not_covered()
+        return [n for n in self.member_names if n not in left_out]
+
     def build_combined_analysis(self) -> dict:
-        """Write the Combined Analysis into ``<project>/analysis/``."""
+        """Write the Combined Analysis into ``<project>/analysis/`` (a Slice
+        view: ``<project>/slices/<name>/analysis/``)."""
         summary, facet, missing = self.combined_frames()
+        left_out = self.not_covered()
         if summary is None:
+            where = "" if self.slice is None else f" for {self.view_label()}"
             raise ValueError(
-                f"No member has a saved analysis yet (missing: "
-                f"{', '.join(missing) or 'none'}). Run the experiments first.")
+                f"No member has a saved analysis{where} yet (missing: "
+                f"{', '.join(missing) or 'none'}"
+                + (f"; not covered: {', '.join(left_out)}" if left_out else "")
+                + "). Run the experiments first.")
         os.makedirs(self.analysis_path, exist_ok=True)
         written: list[str] = []
+        coverage = self.slice_coverage_frame()
+        if coverage is not None:
+            path = os.path.join(self.analysis_path, f"{self.name}_SliceCoverage.csv")
+            coverage.to_csv(path, index=False, na_rep="NA")
+            written.append(path)
 
         path = os.path.join(self.analysis_path, f"{self.name}_Summary.csv")
         summary.to_csv(path, index=False, na_rep="NA")
@@ -1082,7 +1291,23 @@ class Project:
         from .ai import delete_project_narrative
 
         delete_project_narrative(self)
-        return {"written": written, "missing": missing}
+        return {"written": written, "missing": missing, "not_covered": left_out}
+
+    def build_all_combined_analyses(self, log=print) -> dict[str | None, dict]:
+        """The Combined Analysis of the whole recording and of every Slice
+        (ADR-0020), keyed by Slice name (``None``: the whole recording).  A
+        Slice no Member has been run for is skipped and logged; the whole
+        recording raises as :meth:`build_combined_analysis` does."""
+        results: dict[str | None, dict] = {}
+        for view in self.slice_views():
+            if view.slice is None:
+                results[None] = view.build_combined_analysis()
+                continue
+            try:
+                results[view.slice.name] = view.build_combined_analysis()
+            except ValueError as err:
+                log(f"[{view.view_label()}] skipped: {err}")
+        return results
 
     # ------------------------------------------------------------------
     # Facets shared across Members
@@ -1142,7 +1367,7 @@ class Project:
         Member's chambers that ran the same Paradigm."""
         frames: list[tuple[str, pd.DataFrame]] = []
         if facet is None or facet.empty:
-            return [("Whole recording", summary)]
+            return [(slices.whole_label(self.slice), summary)]
         if self.facets_vary_by_dfm and "Facet" in facet.columns:
             order = (list(self.experiment_type.phase_labels)
                      if getattr(self.experiment_type, "data_derived_facets", False) else [])
@@ -1157,7 +1382,7 @@ class Project:
                 mask = facet["FacetRange"].map(windowing.parse_range) == w
                 frames.append((label_of[w], facet[mask]))
             return frames
-        return [("Whole recording", summary)]
+        return [(slices.whole_label(self.slice), summary)]
 
     def diff_comparison_rows(self, diff: pd.DataFrame | None) -> list[dict]:
         """Treatment comparisons on the pooled Paired-Yoked Difference table,
@@ -1383,8 +1608,15 @@ class Project:
         n_exp = (summary["Experiment"].nunique()
                  if "Experiment" in summary.columns else 1)
         out = [bar, f"Combined Analysis — {self.name}", bar, ""]
+        if self.slice is not None:
+            out.append(f"Slice             : {self.slice.name} {self.slice.bounds_label()}, "
+                       f"each Member analysed as if its recording were only these minutes")
         out.append(f"Members pooled : {n_exp} "
-                   f"({', '.join(self.member_names)})")
+                   f"({', '.join(self._pooled_members())})")
+        for name, reason in self.not_covered().items():
+            out.append(f"Not covered       : {name}, left out of this Slice ({reason})")
+        if note := self.open_end_spread_note():
+            out.append(f"WARNING           : {note}")
         out.append(f"Chambers pooled   : {len(summary)}")
         out.append(f"Experiment type   : {self.experiment_type.display_name}")
         out.append(f"Chamber layout    : {self.chamber_layout}")

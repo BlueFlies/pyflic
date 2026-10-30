@@ -28,7 +28,7 @@ panes also carry a `?` at the right of their own tab bar.
 
 | Tab | Shows |
 |---|---|
-| **Load** | Load the experiment and choose the time range |
+| **Load** | Load the experiment and choose the Slice or the time range |
 | **Feeding Summary** | The per-chamber summary table, and the exclusion controls |
 | **DFM *n*** | One tab per device: its QC sub-tabs and the Exclude Wells panel |
 | **Opto Light QC** | Optogenetic experiments only: was the light where the licks were? |
@@ -40,6 +40,9 @@ The **Load Experiment** card names what to load and how:
 
 - **Experiment directory** — the folder holding `flic_config.yaml`, with **Browse…**. A
   member of a Project is loaded through its Project, so it inherits the design.
+- **Slice** — shown when the design declares [Slices](concepts-slices.md): **Whole
+  recording**, or a Slice, which loads its own minutes in place of the Start and End times.
+  See [Viewing a Slice](#viewing-a-slice).
 - **Start time** and **End time** — the minutes to load; an End time of 0 loads to the end
   of the recording. See [Restricting the time range](performance.md#restricting-the-time-range).
 - **Load DFMs in parallel** — read the DFMs side by side; see
@@ -50,6 +53,18 @@ The **Load Experiment** card names what to load and how:
 `flic_config.yaml`, and **Reload Config** re-reads that file and prints a short summary of
 it — the type, the DFMs and their chamber counts — to the log below. The log also carries
 everything the load prints, including each DFM's integrity report.
+
+### Viewing a Slice
+
+Choose a Slice in the **Slice** menu and **Load** to judge that part of the recording on its
+own: only its minutes are loaded, its QC goes into `slices/<name>/qc/`, and **Save
+Exclusions…** offers the Slice's own exclusion group, so a chamber you exclude here leaves
+that Slice and nothing else. See [Exclusions](concepts-slices.md#exclusions). The window
+title names the Slice. A member whose recording stops short of the Slice does not load; the
+log says why ([Coverage](concepts-slices.md#coverage)).
+
+Opened from the Hub, the viewer starts on the Slice the Hub's
+[Slice picker](app-hub.md#the-slice-picker) shows, with the menu set to it.
 
 ## The Feeding Summary tab
 
@@ -258,8 +273,9 @@ place to configure.
 
 On the **Feeding Summary** tab, tick the chambers to exclude — or the wells, on a DFM tab's
 Exclude Wells panel. **Save Exclusions…** asks for a group name, offering the experiment's
-own exclusion group (`general` unless its Project's design names another), and writes your
-current selection to that group in `remove_chambers.csv`. That is the intended path from
+own exclusion group (`general` unless its Project's design names another; a Slice's own
+group when a Slice is loaded), and writes your current selection to that group in
+`remove_chambers.csv`. That is the intended path from
 "this chamber looks wrong" to a recorded, reusable exclusion set — see
 [exclusions](config-dfms-chambers.md#excluding-chambers).
 

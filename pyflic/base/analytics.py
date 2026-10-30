@@ -974,7 +974,14 @@ def yoked_comparison(
     columns = yoked_metric_columns(summary, metrics)
     whole = (windowing.format_ranges(range_minutes) if windowing.is_window_list(range_minutes)
              else windowing.format_range(range_minutes))
-    windows: list[tuple[str, pd.DataFrame]] = [(WHOLE_RECORDING, summary.assign(FacetRange=whole))]
+    ## A Slice's rows are named for it and carry its minutes (ADR-0020).
+    from . import slices
+
+    the_slice = getattr(experiment, "slice", None)
+    if the_slice is not None and windowing.is_full_range(range_minutes):
+        whole = windowing.format_range(the_slice.bounds)
+    windows: list[tuple[str, pd.DataFrame]] = [
+        (slices.whole_label(the_slice), summary.assign(FacetRange=whole))]
     facet = experiment.feeding_summary_facet(transform_licks=transform_licks)
     if facet is not None and not facet.empty and "Facet" in facet.columns:
         windows += [(label, facet[facet["Facet"].astype(str) == label])

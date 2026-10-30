@@ -18,7 +18,9 @@ Workflow
    inherited exactly as the Hub loads it (ADR-0005) — a member config that
    states no ``global:`` of its own is normal, not an error.  Opened from the
    Hub with a member already loaded, the viewer starts on that experiment
-   without re-parsing the DFM CSVs.
+   without re-parsing the DFM CSVs.  When the design declares **Slices**
+   (ADR-0020) a Slice menu loads one in place of the time range; its
+   exclusions are saved to the Slice's own group.
 2. **Feeding Summary tab** — after loading a table of all chambers is shown.
    The "Excl." checkbox in column 0 marks a chamber for exclusion.
 3. **DFM N tabs** — one tab per DFM.  The left side shows the usual QC
@@ -83,6 +85,7 @@ from .ui import (
 )
 from .gui_env import sanitize_input_method_environment
 from .ui import settings as ui_settings
+from .ui.widgets import NoWheelComboBox
 
 
 # ───────────────────────────────────────────────────────────────────────────
@@ -327,20 +330,34 @@ class _LoadWorker(QtCore.QObject):
         range_minutes: tuple[float, float],
         parallel: bool,
         parent: QtCore.QObject | None = None,
+        *,
+        slice_name: str | None = None,
     ) -> None:
         super().__init__(parent)
         self._experiment_dir  = experiment_dir
         self._range_minutes = range_minutes
         self._parallel     = parallel
+        #: A Slice the design declares (ADR-0020), loaded in place of the
+        #: time range: it states its own minutes.
+        self._slice_name   = slice_name
 
     def run(self) -> None:
         from . import project as project_mod
         from .yaml_config import load_experiment_yaml
 
+        ## Exclusions are what the viewer exists to decide, so none is
+        ## applied (exclusion_group=None).  A Slice still names its own group
+        ## as the one its removals are written to.
+        if self._slice_name is not None:
+            window: dict = {"slice": self._slice_name}
+        else:
+            window = {"range_minutes": self._range_minutes}
         with _LogRedirect(self.logged.emit):
             try:
                 exp_dir = Path(self._experiment_dir)
                 parent = exp_dir.parent
+                if self._slice_name is not None:
+                    print(f"Loading Slice {self._slice_name}.", flush=True)
                 if project_mod.is_project_dir(parent) \
                         and not project_mod.is_project_dir(exp_dir):
                     ## A member loads through its Project so the Design's
@@ -352,16 +369,16 @@ class _LoadWorker(QtCore.QObject):
                     project = project_mod.Project(str(parent))
                     exp = project.load_member(
                         exp_dir.name,
-                        range_minutes=self._range_minutes,
                         parallel=self._parallel,
                         exclusion_group=None,
+                        **window,
                     )
                 else:
                     exp = load_experiment_yaml(
                         self._experiment_dir,
-                        range_minutes=self._range_minutes,
                         parallel=self._parallel,
                         exclusion_group=None,
+                        **window,
                     )
                 print("Writing QC reports...", flush=True)
                 exp.write_qc_reports()
@@ -400,6 +417,58 @@ class _QCWorker(QtCore.QObject):
                 self.finished.emit(out)
             except Exception as exc:  # noqa: BLE001
                 self.errored.emit(str(exc))
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# Slices (ADR-0020)
+# ───────────────────────────────────────────────────────────────────────────
+
+#: The Slice menu's first entry: the implicit Slice every experiment has.
+WHOLE_RECORDING_LABEL = "Whole recording"
+
+
+def _declared_slices(experiment_dir: Path) -> list:
+    """The Slices *experiment_dir* can be loaded as: its Project design's for
+    a member, its own ``flic_config.yaml``'s otherwise — none when neither
+    reads, or under a type that has no Slices.  Read before any load, so the
+    menu offers what the Load button can do."""
+    from . import experiment_types
+    from . import project as project_mod
+    from . import slices as slices_mod
+
+    exp_dir = Path(experiment_dir)
+    try:
+        parent = exp_dir.parent
+        if project_mod.is_project_dir(parent) and not project_mod.is_project_dir(exp_dir):
+            return list(project_mod.Project(str(parent)).slices)
+        config = yaml.safe_load((exp_dir / "flic_config.yaml").read_text(encoding="utf-8"))
+        g = dict((config or {}).get("global") or {})
+        etype = experiment_types.get_experiment_type(g.get("experiment_type"), exp_dir)
+        return slices_mod.usable_slices(g, etype)
+    except Exception:  # noqa: BLE001 - no readable design, no Slices to offer
+        return []
+
+
+def _slices_of(exp) -> list:
+    """The Slices a loaded experiment's design declares that it can run."""
+    from . import slices as slices_mod
+
+    g = getattr(exp, "global_config", None)
+    if not isinstance(g, dict):
+        return []
+    try:
+        return slices_mod.usable_slices(g, getattr(exp, "experiment_type", None))
+    except Exception:  # noqa: BLE001 - a menu must not fail the load
+        return []
+
+
+def _slice_of(exp):
+    """The :class:`~pyflic.base.slices.Slice` *exp* was loaded as, or ``None``
+    for the whole recording."""
+    from . import slices as slices_mod
+
+    found = getattr(exp, "slice", None)
+    return found if isinstance(found, slices_mod.Slice) else None
 
 
 # ───────────────────────────────────────────────────────────────────────────
@@ -449,6 +518,24 @@ class LoadTab(QtWidgets.QWidget):
         dir_row.addWidget(self._project_edit, stretch=1)
         dir_row.addWidget(browse_btn)
         form.addRow("Experiment directory:", dir_row)
+        ## A typed path has no signal of its own until it is finished.
+        self._project_edit.editingFinished.connect(self._refresh_slice_choices)
+
+        # ── Slice ─────────────────────────────────────────────────────
+        ## A Slice the design declares (ADR-0020) loads as itself — its own
+        ## minutes and its own exclusion group, the one Save Exclusions…
+        ## then offers — in place of the time range below, which stays for
+        ## a window of the whole recording picked by hand.  The row is
+        ## hidden while the design declares none.
+        self._form = form
+        ## The wheel scrolls the form, never the Slice.
+        self._slice_combo = NoWheelComboBox()
+        self._slice_combo.addItem(WHOLE_RECORDING_LABEL, None)
+        self._slice_combo.setToolTip(
+            "Load the whole recording, or a Slice the design declares: its "
+            "own minutes, and its own exclusion group, which Save "
+            "Exclusions… writes to.")
+        form.addRow("Slice:", self._slice_combo)
 
         # ── Time range ────────────────────────────────────────────────
         self._start_spin = QtWidgets.QDoubleSpinBox()
@@ -465,6 +552,8 @@ class LoadTab(QtWidgets.QWidget):
 
         form.addRow("Start time:", self._start_spin)
         form.addRow("End time:",   self._end_spin)
+        self._slice_combo.currentIndexChanged.connect(self._sync_range_spins)
+        self._refresh_slice_choices()
 
         # ── Parallel ──────────────────────────────────────────────────
         self._parallel_cb = QtWidgets.QCheckBox("Load DFMs in parallel")
@@ -517,9 +606,57 @@ class LoadTab(QtWidgets.QWidget):
         )
         if d:
             self._project_edit.setText(d)
+            self._refresh_slice_choices()
 
     def _current_experiment_dir(self) -> Path:
         return Path(self._project_edit.text().strip()).expanduser().resolve()
+
+    # ── Slices (ADR-0020) ─────────────────────────────────────────────
+
+    def selected_slice(self) -> str | None:
+        """The Slice the Load button loads; ``None`` is the whole recording."""
+        data = self._slice_combo.currentData()
+        return data if isinstance(data, str) and data else None
+
+    def set_slices(self, declared: list, selected: str | None = None) -> None:
+        """Offer the whole recording and *declared*, choosing *selected*
+        (else keeping the choice, while it is still offered)."""
+        keep = selected if selected is not None else self.selected_slice()
+        combo = self._slice_combo
+        combo.blockSignals(True)
+        try:
+            combo.clear()
+            combo.addItem(WHOLE_RECORDING_LABEL, None)
+            for item in declared:
+                combo.addItem(f"{item.name}  {item.bounds_label()}", item.name)
+            index = combo.findData(keep) if keep is not None else 0
+            combo.setCurrentIndex(max(index, 0))
+        finally:
+            combo.blockSignals(False)
+        self._form.setRowVisible(combo, bool(declared))
+        self._sync_range_spins()
+
+    def show_loaded(self, exp) -> None:
+        """Show the Slice *exp* was loaded as — the Hub hands over the Slice
+        it shows — so Load reloads the same one."""
+        loaded = _slice_of(exp)
+        declared = _slices_of(exp) or _declared_slices(self._current_experiment_dir())
+        self.set_slices(declared, None if loaded is None else loaded.name)
+        if loaded is None:
+            ## set_slices keeps a choice it is not told to change.
+            self._slice_combo.setCurrentIndex(0)
+
+    def _refresh_slice_choices(self) -> None:
+        self.set_slices(_declared_slices(self._current_experiment_dir()))
+
+    def _sync_range_spins(self, *_args) -> None:
+        """The time range is the whole recording's: a Slice states its own."""
+        whole = self.selected_slice() is None
+        for spin in (self._start_spin, self._end_spin):
+            spin.setEnabled(whole)
+            spin.setToolTip("" if whole else
+                            "A Slice loads its own minutes.  Choose Whole recording "
+                            "to load a window of your own.")
 
     def _on_edit_config(self) -> None:
         """Launch pyflic-config in the current experiment directory."""
@@ -579,13 +716,16 @@ class LoadTab(QtWidgets.QWidget):
         self._experiment_dir = experiment_dir
         range_minutes = (float(self._start_spin.value()), float(self._end_spin.value()))
         parallel = self._parallel_cb.isChecked()
+        slice_name = self.selected_slice()
 
         self._log.clear()
-        self._status_label.setText("Loading…")
+        self._status_label.setText("Loading…" if slice_name is None
+                                   else f"Loading Slice {slice_name}…")
         self._load_btn.setEnabled(False)
         self._progress.setVisible(True)
 
-        self._worker = _LoadWorker(experiment_dir, range_minutes, parallel)
+        self._worker = _LoadWorker(experiment_dir, range_minutes, parallel,
+                                   slice_name=slice_name)
         self._thread = QtCore.QThread()
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
@@ -1794,8 +1934,14 @@ class MainWindow(QtWidgets.QMainWindow):
     def _on_experiment_loaded(self, exp) -> None:
         self._exp = exp
         self._experiment_dir = Path(exp.experiment_dir)
-        self.setWindowTitle(f"FLIC QC Viewer  —  {self._experiment_dir}")
-        self._top_bar.set_title(f"FLIC QC Viewer — {self._experiment_dir.name}")
+        ## The Slice it was loaded as (ADR-0020) is in every title: its
+        ## exclusions are its own, and saved to its own group.
+        the_slice = _slice_of(exp)
+        shown = "" if the_slice is None else (
+            f" · Slice {the_slice.name} {the_slice.bounds_label()}")
+        self.setWindowTitle(f"FLIC QC Viewer  —  {self._experiment_dir}{shown}")
+        self._top_bar.set_title(f"FLIC QC Viewer — {self._experiment_dir.name}{shown}")
+        self._load_tab.show_loaded(exp)
 
         # Remove any previously-loaded tabs (keep only Load tab at index 0)
         while self._tabs.count() > 1:
@@ -1883,6 +2029,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._btn_run_qc.setEnabled(True)
         n_dfms = len(self._dfm_tab_widgets)
         message = f"Loaded {n_dfms} DFM(s) from {self._experiment_dir}"
+        if the_slice is not None:
+            message += (f" as Slice {the_slice.name}: exclusions are saved to its own "
+                        f"group, '{self._active_group()}'")
         if not qc_dir.exists():
             ## Handed a loaded experiment whose QC was never written: the
             ## signal-plot tabs will say "not found" — name the fix.

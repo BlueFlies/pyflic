@@ -91,6 +91,25 @@ class _LoadedDFM:
     #: What the loader changed in the data, for the integrity text and
     #: ``summary.txt``.
     notes: tuple[str, ...] = ()
+    #: The last minute of the recording before any range clipped it: whether
+    #: a Slice is covered is read from this (ADR-0020).
+    recording_end: float = float("nan")
+
+
+class EmptyRangeError(ValueError):
+    """The requested range holds no rows of this DFM's recording: it starts
+    after the recording ended.  Carries where the recording ended, so a
+    Slice load can say why the Member does not cover it."""
+
+    def __init__(self, dfm_id: int, recording_end: float):
+        super().__init__(f"DFM {dfm_id}: no data in the requested range (the recording "
+                         f"ends at minute {recording_end:.1f})")
+        self.dfm_id = int(dfm_id)
+        self.recording_end = float(recording_end)
+
+    def __reduce__(self):
+        ## A process pool pickles the error back to the parent.
+        return (type(self), (self.dfm_id, self.recording_end))
 
 
 def _index_blocks(values: np.ndarray, limit: int = 3) -> str:
@@ -215,15 +234,21 @@ def _load_dfm_csvs(dfm_id: int, data_dir: str | Path = ".", range_minutes: Seque
         df = df[~repeated]
         if state is not None:
             state = state.subset(~repeated)
+    minutes = pd.to_numeric(df["Minutes"], errors="coerce")
+    recording_end = float(minutes.max()) if len(minutes) else float("nan")
     if range_is_specified(range_minutes):
+        ## (a, b], the rule every Facet window follows, so adjacent Slices
+        ## share no row and lose none at their common boundary.
         a, b = range_bounds(range_minutes)
-        keep = ((df["Minutes"] > a) & (df["Minutes"] < b)).to_numpy(dtype=bool)
+        keep = ((minutes > a) & (minutes <= b)).to_numpy(dtype=bool)
         df = df[keep]
         if state is not None:
             state = state.subset(keep)
+        if df.empty:
+            raise EmptyRangeError(dfm_id, recording_end)
     return _LoadedDFM(df=df.reset_index(drop=True), version=version, source_files=files,
                       generation=generation, paradigm=state, repeated_records=n_repeated,
-                      notes=notes)
+                      notes=notes, recording_end=recording_end)
 
 
 @dataclass(slots=True)
@@ -249,6 +274,8 @@ class DFM:
     #: integrity report and ``summary.txt`` show the notes.
     repeated_records: int = 0
     load_notes: tuple[str, ...] = ()
+    #: The recording's last minute before a range clipped it (ADR-0020).
+    recording_end_minutes: float | None = None
 
     well_names: dict[str, str] | None = None  # e.g. {"A": "Sucrose", "B": "Yeast"}
 
@@ -296,6 +323,7 @@ class DFM:
             training_info=TRAINING_INFO[int(loaded.generation)],
             repeated_records=int(loaded.repeated_records),
             load_notes=tuple(loaded.notes),
+            recording_end_minutes=float(loaded.recording_end),
         )
 
         if correct_for_dual_feeding is None:
@@ -336,6 +364,7 @@ class DFM:
             training_info=self.training_info,
             repeated_records=self.repeated_records,
             load_notes=self.load_notes,
+            recording_end_minutes=self.recording_end_minutes,
             well_names=self.well_names,
             in_training_data=(None if self.in_training_data is None
                               else self.in_training_data.copy()),

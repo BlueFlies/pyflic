@@ -382,6 +382,10 @@ class PlotSpec:
     #: covers, so a series ending early never changes the average by leaving
     #: it (cumulative curves since a per-group training end).
     common_range: bool = False
+    #: The Slice whose Combined Analysis the figure draws from (ADR-0020), or
+    #: ``None`` for the whole recording.  Stated in the Spec so the figure is
+    #: regenerable from it; rendered into ``slices/<name>/figures/``.
+    slice: str | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -399,6 +403,7 @@ class PlotSpec:
         }
         if spec.y_limits is not None:
             spec.y_limits = [float(v) for v in spec.y_limits]
+        spec.slice = str(spec.slice).strip() or None if spec.slice is not None else None
         return spec
 
 
@@ -1074,6 +1079,20 @@ def save_figure(g, path: str, fmt: str = "svg") -> str:
 # Project-level rendering
 # --------------------------------------------------------------------------
 
+def _member_out(project, name: str) -> str:
+    """A Member's outputs in the Project's view: its directory, or
+    ``slices/<name>/`` inside it for a Slice (ADR-0020)."""
+    method = getattr(project, "member_output_dir", None)
+    return method(name) if method is not None else project.member_dir(name)
+
+
+def _pooled(project) -> list[str]:
+    """The Members the view pools: a Slice leaves out those that do not
+    cover it."""
+    method = getattr(project, "_pooled_members", None)
+    return method() if method is not None else list(project.member_names)
+
+
 def project_frames(project):
     """``(facet_frame, binned_frame)`` for a Project's pooled figures.
 
@@ -1091,8 +1110,8 @@ def project_frames(project):
                  if os.path.isfile(summary_path) else None)
 
     binned_frames = []
-    for name in project.member_names:
-        path = os.path.join(project.member_dir(name), "analysis",
+    for name in _pooled(project):
+        path = os.path.join(_member_out(project, name), "analysis",
                             "binned_feeding_summary.csv")
         if os.path.isfile(path):
             df = pd.read_csv(path)
@@ -1109,8 +1128,8 @@ def project_source_frame(project, source: str):
     if filename is None:
         return None
     frames = []
-    for name in project.member_names:
-        path = os.path.join(project.member_dir(name), "analysis", filename)
+    for name in _pooled(project):
+        path = os.path.join(_member_out(project, name), "analysis", filename)
         if os.path.isfile(path):
             df = pd.read_csv(path)
             df.insert(0, "Experiment", name)
@@ -1175,19 +1194,28 @@ def render_all(project, fmt: str = "svg", out_dir: str | None = None,
     unattended Batch Run.
     """
     specs = load_project_specs(project.project_directory)
-    facet, binned = project_frames(project)
-    target = out_dir or os.path.join(project.project_directory, FIGURES_DIRNAME)
-    os.makedirs(target, exist_ok=True)
+    whole = getattr(project, "whole", project)
+    ## Each Spec names the Slice it draws from (ADR-0020); the frames of each
+    ## view are read once.
+    views: dict[str | None, tuple] = {}
 
-    ## The Facet column already carries each row's display label, so its
-    ## first-seen order is the phase order — for fixed cutoffs and for a type
-    ## whose windows come from the data alike (ADR-0013).
-    label_order = None
-    if facet is not None and "Facet" in facet.columns:
-        label_order = list(dict.fromkeys(facet["Facet"].astype(str)))
-    elif facet is not None and "FacetRange" in facet.columns:
-        _, label_of = project.window_labels(facet)
-        label_order = list(dict.fromkeys(label_of.values()))
+    def view_of(name: str | None):
+        if name not in views:
+            view = whole if name is None else whole.for_slice(name)
+            facet, binned = project_frames(view)
+            ## The Facet column already carries each row's display label, so
+            ## its first-seen order is the phase order — for fixed cutoffs and
+            ## for a type whose windows come from the data alike (ADR-0013).
+            label_order = None
+            if facet is not None and "Facet" in facet.columns:
+                label_order = list(dict.fromkeys(facet["Facet"].astype(str)))
+            elif facet is not None and "FacetRange" in facet.columns:
+                _, label_of = view.window_labels(facet)
+                label_order = list(dict.fromkeys(label_of.values()))
+            target = out_dir or (os.path.join(project.project_directory, FIGURES_DIRNAME)
+                                 if name is None else view.figures_path)
+            views[name] = (view, facet, binned, label_order, target)
+        return views[name]
 
     well_a = str((project.design_global.get("well_names") or {}).get("A")
                  or "well A")
@@ -1203,9 +1231,15 @@ def render_all(project, fmt: str = "svg", out_dir: str | None = None,
         info = PLOT_TYPES[plot_id]
         metric = info["metric"]
         family = info["family"]
-        source = frame_for(plot_id, facet, binned, project)
+        try:
+            view, facet, binned, label_order, target = view_of(spec.slice)
+        except ValueError as err:
+            log(f"    skipped {plot_id}: {err}")
+            continue
+        source = frame_for(plot_id, facet, binned, view)
         if source is None or source.empty:
-            log(f"    skipped {plot_id}: no {source_of(plot_id)} data")
+            where = "" if spec.slice is None else f" in Slice {spec.slice}"
+            log(f"    skipped {plot_id}: no {source_of(plot_id)} data{where}")
             continue
         if family == FAMILY_TIMECOURSE:
             df = timecourse_data(source, metric)
@@ -1219,6 +1253,7 @@ def render_all(project, fmt: str = "svg", out_dir: str | None = None,
             continue
         try:
             g = build_figure(plot_id, df, spec, specs.style_for(spec))
+            os.makedirs(target, exist_ok=True)
             path = save_figure(g, os.path.join(target, f"{plot_id}.{fmt}"), fmt)
         except Exception as err:  # noqa: BLE001
             log(f"    skipped {plot_id}: {type(err).__name__}: {err}")

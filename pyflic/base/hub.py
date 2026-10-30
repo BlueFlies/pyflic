@@ -74,6 +74,7 @@ from . import batch as batch_mod
 from . import layout as layout_mod
 from . import project as project_mod
 from . import selections as sel
+from . import slices as slices_mod
 from .gui_env import sanitize_input_method_environment
 from .light_summary import NO_TRAINING_INFORMATION
 from .light_summary import no_training_information as _no_training_information
@@ -90,7 +91,7 @@ from .ui import (
 )
 from .ui import settings as ui_settings
 from .ui.tiles import TILE_HEIGHT, ClickAwayFilter, StatusReadout, StatusTile, TilePanel
-from .ui.widgets import ActionButton, Card, CardGroup
+from .ui.widgets import ActionButton, Card, CardGroup, NoWheelComboBox
 
 #: Top strip: (key, title, icon, category, panel width).  Order is strip
 #: order — the containment hierarchy reads left to right (a Batch holds
@@ -127,6 +128,16 @@ EXPERIMENT_SUBTILES = tuple(spec[0] for spec in SUBTILE_SPECS)
 #: What the selection panels were built for before their first build: not
 #: ``None``, which is "built with nothing loaded".
 _NOT_BUILT = object()
+
+#: The Slice picker's first entry: the implicit Slice every experiment has.
+WHOLE_RECORDING_LABEL = "Whole recording"
+#: The title of the Slices group on the QC, Analyze and Plots panels.
+SLICES_GROUP = "Slices"
+
+
+def _slice_label(item: slices_mod.Slice) -> str:
+    """``"early  (0, 360] min"``: a Slice as the picker and its box name it."""
+    return f"{item.name}  {item.bounds_label()}"
 
 
 def _help_button(ref: str, tooltip: str) -> QWidget | None:
@@ -238,6 +249,9 @@ class AnalysisHubWindow(QMainWindow):
         self._selection_hosts: dict[str, QWidget] = {}
         self._selection_boxes: dict[str, dict[str, QCheckBox]] = {}
         self._selection_groups: dict[str, dict[str, CardGroup]] = {}
+        #: The Slices group's box of each Slice, by set kind and Slice name:
+        #: one Selection shown on three panels (ADR-0020).
+        self._slice_boxes: dict[str, dict[str, QCheckBox]] = {}
         #: The member the panels were last built for; a sentinel until the
         #: first build, so that one runs with nothing loaded too.
         self._selection_member: Any = _NOT_BUILT
@@ -372,6 +386,9 @@ class AnalysisHubWindow(QMainWindow):
         (sel.PLOTS, "Progressive Ratio"): "plots-catalog#progressive-ratio-plots",
         (sel.PLOTS, "Hedonic"): "plots-catalog#hedonic-plots",
     }
+    #: The Slices group's help, on each of the three panels: not a group of
+    #: a set, so not in the map above.
+    _SLICES_HELP = "app-hub#slices"
 
     def _install_panel_help(self) -> None:
         """Put a ``?`` in each panel's card title rows, one after the dock's
@@ -669,6 +686,34 @@ class AnalysisHubWindow(QMainWindow):
     def _build_project_experiments_card(self) -> None:
         card = Card("Experiments", Category.NEUTRAL, icon_name="member")
         self.project_experiments_card = card
+        ## The Slice the Hub shows (ADR-0020): the table's Analyzed and Report
+        ## columns, what a double-click loads, and so what the QC Viewer and
+        ## the plots show.  One Slice at a time, so a loaded member is always
+        ## seen through the one picked.  Hidden while the design declares
+        ## none: the whole recording is then all there is.
+        self.slice_row = QWidget()
+        slice_row = QHBoxLayout(self.slice_row)
+        slice_row.setContentsMargins(0, 0, 0, 0)
+        slice_row.addWidget(QLabel("Slice:"))
+        ## The wheel scrolls the panel, never the Slice: picking one reloads
+        ## the loaded member.
+        self.slice_picker = NoWheelComboBox()
+        self.slice_picker.setMinimumWidth(200)
+        self.slice_picker.addItem(WHOLE_RECORDING_LABEL, None)
+        self.slice_picker.setToolTip(
+            "Which Slice the Hub shows: the table's Analyzed and Report "
+            "columns, what a double-click loads, the QC Viewer and the plots.  "
+            "Picking another reloads the loaded member as that Slice.  Run QC, "
+            "Run analysis and Generate plots run every ticked Slice whichever "
+            "is shown.")
+        ## activated, not currentIndexChanged: a refresh that rebuilds the
+        ## list must never start a load.
+        self.slice_picker.activated.connect(self._on_slice_picked)
+        slice_row.addWidget(self.slice_picker, 1)
+        _add_row_help(slice_row, "app-hub#the-slice-picker",
+                      "The Slice picker: what it shows, and what it reloads")
+        card.add_body(self.slice_row)
+        self.slice_row.setVisible(False)
         self.project_table = self._table(["Member", "DFMs", "Chambers",
                                           "Analyzed", "Report"])
         self.project_table.setToolTip(
@@ -789,13 +834,22 @@ class AnalysisHubWindow(QMainWindow):
         ## the QC, Analyze and Plots panels' ticks look as if they reach it.
         buttons[0].setToolTip(
             "Run each member's QC reports, Basic analysis and experiment "
-            "report, as before.  It does not read the QC, Analyze and Plots "
+            "report, as before, for the whole recording and every Slice the "
+            "design declares.  It does not read the QC, Analyze and Plots "
             "panels' ticks, and it removes no earlier output.")
+        buttons[1].setToolTip(
+            "Pool the members' saved summaries into the Combined Analysis: "
+            "the whole recording's, and each Slice's from the members that "
+            "cover it.")
+        buttons[2].setToolTip(
+            "Write the Project Report of the whole recording and of each "
+            "Slice, building any Combined Analysis that is missing.")
         self.view_reports_btn = ActionButton("View reports", Category.NEUTRAL,
                                              "report")
         self.view_reports_btn.setToolTip(
             "Open the Project Report, and each member's own report, in the "
-            "system PDF viewer.")
+            "system PDF viewer — those of the Slice the Experiments card "
+            "shows.")
         self.view_reports_btn.clicked.connect(self._view_reports)
         buttons.append(self.view_reports_btn)
         sheet_btn = ActionButton("Apply exclusion sheet…", Category.NEUTRAL,
@@ -1076,6 +1130,7 @@ class AnalysisHubWindow(QMainWindow):
         groups: dict[str, CardGroup] = {}
         self._selection_boxes[kind] = boxes
         self._selection_groups[kind] = groups
+        self._slice_boxes[kind] = {}
         if exp is None:
             layout.addWidget(self._muted(
                 "Load a member to see what "
@@ -1113,7 +1168,44 @@ class AnalysisHubWindow(QMainWindow):
             layout.addWidget(group)
             groups[title] = group
         self._add_not_offered(layout, not_offered)
+        self._add_slices_group(kind, exp, layout)
         self._settle_geometry(host)
+
+    def _add_slices_group(self, kind: str, exp, layout) -> None:
+        """The Slices group (ADR-0020): a box per Slice the design declares,
+        ticked unless ``global.omit.slices`` leaves it out, last above the
+        Run button, because it says what the run covers rather than what it
+        writes.  The same Selection on all three panels, so a tick on one is
+        a tick on each.  No group when the design declares no Slices."""
+        boxes: dict[str, QCheckBox] = {}
+        self._slice_boxes[kind] = boxes
+        declared = self._usable_slices(exp)
+        if not declared:
+            return
+        try:
+            left_out = sel.omitted_slices(exp)
+        except Exception:  # noqa: BLE001 - a status display must not fail
+            left_out = frozenset()
+        ## The whole recording has no box: it always runs, and saying so is
+        ## what keeps a missing box from reading as a fault.
+        group = CardGroup(SLICES_GROUP, note=(
+            "The whole recording always runs.  Each ticked Slice runs too, "
+            "into slices/<name>/."))
+        for item in declared:
+            box = QCheckBox(_slice_label(item))
+            box.setChecked(item.name not in left_out)
+            box.setToolTip(
+                f"Run QC, Run analysis and Generate plots also run Slice "
+                f"{item.name}: minutes {item.bounds_label()}, with its own "
+                f"exclusion group '{item.exclusion_group}'.  A member whose "
+                f"recording does not cover it is left out of it, not failed.")
+            box.toggled.connect(
+                lambda on, name=item.name: self._set_slice_included(name, on))
+            group.add(box)
+            boxes[item.name] = box
+        self._add_group_help(kind, SLICES_GROUP, group, ref=self._SLICES_HELP)
+        layout.addWidget(group)
+        self._selection_groups[kind][SLICES_GROUP] = group
 
     @staticmethod
     def _settle_geometry(widget: QWidget) -> None:
@@ -1162,8 +1254,9 @@ class AnalysisHubWindow(QMainWindow):
             lambda on, k=kind, i=item: self._set_included(k, i, on))
         return box
 
-    def _add_group_help(self, kind: str, title: str, group: CardGroup) -> None:
-        ref = self._GROUP_HELP.get((kind, title))
+    def _add_group_help(self, kind: str, title: str, group: CardGroup, *,
+                        ref: str | None = None) -> None:
+        ref = ref or self._GROUP_HELP.get((kind, title))
         if ref is None:
             return
         try:
@@ -1209,11 +1302,38 @@ class AnalysisHubWindow(QMainWindow):
             ## method, so the timer dies with the window.
             QTimer.singleShot(0, self._rebuild_selection)
             return
-        self.log.append_line(self._selection_line(kind, item, included, path))
+        self.log.append_line(self._selection_line(kind, item.label, included, path))
 
-    def _selection_line(self, kind: str, item: sel.Item, included: bool,
+    def _set_slice_included(self, name: str, included: bool) -> None:
+        """Write a Slice's tick to the Selection at once, as an item's is
+        written, and put the same tick on the other two panels."""
+        exp = self.experiment
+        if exp is None:
+            return
+        try:
+            path = sel.set_slice_included(exp, name, included,
+                                          project=self.project)
+        except Exception as err:  # noqa: BLE001 - a message, not a traceback
+            self._log_issue(f"[selection] Slice {name}: not saved — {err}")
+            QMessageBox.warning(self, "Selection not saved", str(err))
+            ## Deferred, as in _set_included: the rebuild deletes this box.
+            QTimer.singleShot(0, self._rebuild_selection)
+            return
+        ## One Selection on three panels: the boxes elsewhere follow without
+        ## writing it again.
+        for boxes in self._slice_boxes.values():
+            box = boxes.get(name)
+            if box is not None and box.isChecked() != included:
+                box.blockSignals(True)
+                box.setChecked(included)
+                box.blockSignals(False)
+        self.log.append_line(self._selection_line(
+            sel.SLICES, f"Slice {name}", included, path))
+
+    def _selection_line(self, kind: str, label: str, included: bool,
                         path: Path) -> str:
-        """The log line for one tick: the item, the choice and the file."""
+        """The log line for one tick: the item or Slice, the choice and the
+        file."""
         choice = "included in" if included else "left out of"
         if path.name == project_mod.PROJECT_FILENAME:
             ## A Member's Selection is its Project's: say so, or unticking
@@ -1226,11 +1346,12 @@ class AnalysisHubWindow(QMainWindow):
         else:
             scope = f"every run of {self.experiment_name}"
             key = f"global.{sel.OMIT_KEY}.{kind}"
-        return f"[selection] {item.label}: {choice} {scope} ({key} in {path})"
+        return f"[selection] {label}: {choice} {scope} ({key} in {path})"
 
     def _run_selection(self, kind: str) -> None:
         """Run QC, Run analysis or Generate plots: the script action of the
-        same name, so a click and a script's step write the same files."""
+        same name, so a click and a script's step write the same files —
+        the whole recording's, then each ticked Slice's (ADR-0020)."""
         if kind == sel.QC:
             step: dict[str, Any] = {"action": "run_qc"}
         elif kind == sel.ANALYSES:
@@ -1240,8 +1361,56 @@ class AnalysisHubWindow(QMainWindow):
             step = {"action": "run_plots",
                     "metric": self.plot_metric.currentData() or "Licks",
                     "binsize": self.spin_binsize.value()}
+        if kind == sel.PLOTS and self.experiment is not None \
+                and self._usable_slices(self.experiment):
+            self._generate_plots_by_slice(step)
+            return
         self._run_experiment_action(step, label=sel.RUN_NAMES[kind],
                                     replace_tabs=kind == sel.PLOTS)
+
+    def _generate_plots_by_slice(self, step: dict) -> None:
+        """Generate plots for a design with Slices: the run_plots step's own
+        loop — each_slice, then run_plots on each — so the files are the
+        step's, keeping the figures of the shown Slice only.
+
+        Not the step itself: it hands back every Slice's figures under the
+        same titles, and a tab replaced by the next Slice's figure would
+        show a Slice nobody picked under the whole recording's name.  A
+        Slice's tabs carry its name, so they never replace the whole
+        recording's."""
+        if not self._require_experiment():
+            return
+        from .run_selection import each_slice, run_plots
+
+        exp = self.experiment
+        shown = getattr(exp, "slice_name", None)
+        metric = str(step.get("metric") or "Licks")
+        binsize = float(step["binsize"])
+
+        def task():
+            figures: list[tuple[str, Any]] = []
+            ran: list[str | None] = []
+            for target in each_slice(exp, log=print):
+                ran.append(target.slice_name)
+                run = run_plots(target, metric=metric, binsize_min=binsize,
+                                log=print,
+                                keep_figures=target.slice_name == shown)
+                figures += [(title if shown is None else f"{title} · {shown}", fig)
+                            for title, fig in run.figures]
+            if shown not in ran:
+                ## Unticked, or not covered: nothing was drawn for it, so no
+                ## tab can show it.  Said, so an empty result is not
+                ## mistaken for a failed one.
+                print(f"Slice {shown} was not in this run, so no figure is "
+                      "shown: its box in the Slices group is unticked, or the "
+                      "member does not cover it.")
+            return figures
+
+        def on_done(result):
+            self._show_figures(result, replace=True)
+            self.refresh()
+
+        self._start(task, sel.RUN_NAMES[sel.PLOTS], on_done)
 
     def _build_scripts_panel(self) -> None:
         """The **member** script level, and only that.
@@ -1873,12 +2042,21 @@ class AnalysisHubWindow(QMainWindow):
                 "max_workers": workers or None}
 
     def _load_member(self, name: str) -> bool:
+        """Load *name* as the picked Slice (ADR-0020), in the worker."""
         project = self.project
         if project is None:
             return False
+        view = self._project_view()
+        shown = getattr(view, "slice", None)
+        kwargs = self._load_kwargs()
 
         def task():
-            return project.load_experiment(name, **self._load_kwargs())
+            ## A recording that stops short of the Slice is an answer, not
+            ## a failure: it comes back to say why.
+            try:
+                return view.load_member(name, **kwargs)
+            except slices_mod.SliceNotCovered as err:
+                return err
 
         def done(exp):
             ## The selection can change while the load runs; attaching the
@@ -1889,19 +2067,33 @@ class AnalysisHubWindow(QMainWindow):
                     f"[load] '{name}' finished loading after the selection "
                     "changed — discarded.")
                 return
+            if isinstance(exp, slices_mod.SliceNotCovered):
+                self._say_not_covered(name, exp)
+                return
             self.experiment = exp
             self.experiment_name = name
             self.refresh()
             self._reveal_experiment_group()
 
-        return self._start(task, f"Loading member '{name}'", done,
-                           note=self._LOADING_NOTE)
+        label = f"Loading member '{name}'"
+        if shown is not None:
+            label += f" as Slice {shown.name} {shown.bounds_label()}"
+        return self._start(task, label, done, note=self._LOADING_NOTE)
 
-    def _load_standalone(self, path: str) -> bool:
+    def _load_standalone(self, path: str, *, slice_name: str | None = None) -> bool:
+        """Load the Experiment Directory *path*, as Slice *slice_name* when
+        one is named, in the worker."""
         from .yaml_config import load_experiment_yaml
 
+        kwargs = self._load_kwargs()
+        if slice_name is not None:
+            kwargs["slice"] = slice_name
+
         def task():
-            return load_experiment_yaml(path, **self._load_kwargs())
+            try:
+                return load_experiment_yaml(path, **kwargs)
+            except slices_mod.SliceNotCovered as err:
+                return err
 
         def done(exp):
             if self.project is not None:
@@ -1909,13 +2101,125 @@ class AnalysisHubWindow(QMainWindow):
                     f"[load] {path} finished loading after a Project was "
                     "opened — discarded.")
                 return
+            if isinstance(exp, slices_mod.SliceNotCovered):
+                self._say_not_covered(os.path.basename(path), exp)
+                return
             self.experiment = exp
             self.experiment_name = os.path.basename(path)
             self.refresh()
             self._reveal_experiment_group()
 
-        return self._start(task, f"Loading {path}", done,
-                           note=self._LOADING_NOTE)
+        label = f"Loading {path}"
+        if slice_name is not None:
+            label += f" as Slice {slice_name}"
+        return self._start(task, label, done, note=self._LOADING_NOTE)
+
+    def _say_not_covered(self, name: str, err: slices_mod.SliceNotCovered) -> None:
+        """A load refused because the recording does not cover the Slice:
+        say why, and leave what was loaded as it was (the refresh puts the
+        picker back on the Slice it is loaded as)."""
+        where = f"Slice {err.slice.name} {err.slice.bounds_label()}"
+        self.log.append_line(f"[load] {name} does not cover {where}: {err.reason}")
+        kept = ""
+        if self.experiment is not None:
+            loaded = getattr(self.experiment, "slice_name", None)
+            kept = (f"\n\n{self.experiment_name} stays loaded as "
+                    + ("the whole recording." if loaded is None
+                       else f"Slice {loaded}."))
+        self.refresh()
+        QMessageBox.information(
+            self, "Slice not covered",
+            f"{name}'s recording does not cover {where}:\n\n{err.reason}.\n\n"
+            "A member whose recording stops short of a Slice is left out of "
+            f"it; the Slice's results pool the members that cover it.{kept}")
+
+    # ---- the Slice picker (ADR-0020) --------------------------------
+
+    @staticmethod
+    def _usable_slices(exp) -> list[slices_mod.Slice]:
+        """The Slices *exp*'s design declares that it can run: none for a
+        type that has no Slices."""
+        try:
+            return slices_mod.usable_slices(
+                getattr(exp, "global_config", None),
+                getattr(exp, "experiment_type", None))
+        except Exception:  # noqa: BLE001 - a status display must not fail
+            return []
+
+    def _declared_slices(self) -> list[slices_mod.Slice]:
+        """The Slices of what the Hub has open: the Project's design, or a
+        standalone experiment's own config."""
+        if self.project is not None:
+            return list(getattr(self.project, "slices", None) or [])
+        if self.experiment is not None:
+            return self._usable_slices(self.experiment)
+        return []
+
+    def _shown_slice(self) -> str | None:
+        """The Slice the picker shows; ``None`` is the whole recording."""
+        data = self.slice_picker.currentData()
+        return data if isinstance(data, str) and data else None
+
+    def _project_view(self):
+        """The open Project seen through the picked Slice."""
+        picked = self._shown_slice()
+        if self.project is None or picked is None:
+            return self.project
+        try:
+            return self.project.for_slice(picked)
+        except slices_mod.SliceError:
+            return self.project
+
+    def _refresh_slice_picker(self) -> None:
+        """Offer the Slices of what is open, the row hidden when there are
+        none.  A loaded member was loaded as one Slice, and the picker
+        follows it: a load that failed or was refused leaves the picker on
+        the Slice the member still is."""
+        declared = self._declared_slices()
+        wanted = [(None, WHOLE_RECORDING_LABEL)] + [
+            (item.name, _slice_label(item)) for item in declared]
+        picker = self.slice_picker
+        current = self._shown_slice()
+        if self.experiment is not None:
+            loaded = getattr(self.experiment, "slice_name", None)
+            current = loaded if isinstance(loaded, str) else None
+        names = [name for name, _label in wanted]
+        picker.blockSignals(True)
+        try:
+            if [(picker.itemData(i), picker.itemText(i))
+                    for i in range(picker.count())] != wanted:
+                picker.clear()
+                for name, label in wanted:
+                    picker.addItem(label, name)
+            picker.setCurrentIndex(names.index(current) if current in names else 0)
+        finally:
+            picker.blockSignals(False)
+        self.slice_row.setVisible(bool(declared))
+
+    def _on_slice_picked(self, _index: int) -> None:
+        """A Slice picked by hand.  The table follows at once; a loaded
+        member is loaded again as the Slice, as a double-click on its row
+        would, so the QC Viewer and the plots show what the picker says."""
+        exp = self.experiment
+        picked = self._shown_slice()
+        if exp is None or getattr(exp, "slice_name", None) == picked:
+            self.refresh()
+            return
+        if self.project is not None:
+            started = self._load_member(self.experiment_name)
+        elif exp.experiment_dir:
+            started = self._load_standalone(str(exp.experiment_dir),
+                                            slice_name=picked)
+        else:
+            started = False
+        if not started:
+            ## Refused, a task being under way: the picker goes back to the
+            ## Slice the member is loaded as.
+            self.refresh()
+            return
+        ## Not refresh(): it would put the picker back on the Slice the
+        ## member is loaded as until the new one arrives.
+        self._refresh_project()
 
     def _reveal_experiment_group(self) -> None:
         """Expand the experiment sub-strip after a load — QC · Analyze ·
@@ -2150,19 +2454,22 @@ class AnalysisHubWindow(QMainWindow):
         self._start(task, "Analyze all members")
 
     def _build_combined(self) -> None:
+        """The Combined Analysis of the whole recording and of every Slice
+        (ADR-0020); a Slice no member has run yet is skipped and logged."""
         if not self._require_project():
             return
         project = self.project
-        self._start(lambda: project.build_combined_analysis(),
+        self._start(lambda: project.build_all_combined_analyses(log=print),
                     "Build combined analysis", lambda _r: self.refresh())
 
     def _project_report(self) -> None:
+        """The Project Report of the whole recording and of every Slice."""
         if not self._require_project():
             return
-        from .project_report import write_project_report
+        from .project_report import write_all_project_reports
 
         project = self.project
-        self._start(lambda: write_project_report(project),
+        self._start(lambda: write_all_project_reports(project, log=print),
                     "Create project report", lambda _r: self.refresh())
 
     def _render_figures(self) -> None:
@@ -2466,11 +2773,14 @@ class AnalysisHubWindow(QMainWindow):
         self._reload_project()
 
     def _view_reports(self) -> None:
-        """Open the Project Report and each member's own report."""
+        """Open the Project Report and each member's own report, of the
+        Slice the picker shows — the ones the table's Report column means."""
         if not self._require_project():
             return
-        project = self.project
-        paths = [Path(project.project_directory) / f"{project.name}_report.pdf"]
+        from .project_report import report_path
+
+        project = self._project_view()
+        paths = [Path(report_path(project))]
         paths += [Path(project.member_report_path(name))
                   for name in project.member_names]
         found = [path for path in paths if path.is_file()]
@@ -2804,7 +3114,9 @@ class AnalysisHubWindow(QMainWindow):
         from .qc_viewer import MainWindow as QCViewerWindow
 
         ## Hand over the loaded experiment: re-parsing every DFM CSV in the
-        ## viewer's own Load tab is minutes of work the Hub already did.
+        ## viewer's own Load tab is minutes of work the Hub already did.  It
+        ## is the picked Slice (ADR-0020), which the viewer's own Slice menu
+        ## then shows, and its exclusions go to that Slice's own group.
         self._qc = QCViewerWindow(Path(self.experiment.experiment_dir),
                                   experiment=self.experiment)
         self._qc.show()
@@ -3055,6 +3367,8 @@ class AnalysisHubWindow(QMainWindow):
 
     def refresh(self) -> None:
         self._refresh_batch()
+        ## Before the Project: its table shows the picked Slice.
+        self._refresh_slice_picker()
         self._refresh_project()
         self._refresh_experiment_tiles()
         self._refresh_ai()
@@ -3239,6 +3553,8 @@ class AnalysisHubWindow(QMainWindow):
             self.design_btn.setText("Project design…")
             return
         project = self.project
+        ## The status columns read the picked Slice's outputs (ADR-0020).
+        view = self._project_view()
 
         ## One classification pass feeds the table, the buttons and the tile:
         ## the Project's membership test asks only "is there a config", and a
@@ -3247,7 +3563,7 @@ class AnalysisHubWindow(QMainWindow):
         analyzed = stale = 0
         row = 0
         for name in project.member_names:
-            status = project.member_status(name)
+            status = view.member_status(name)
             analyzed += 1 if status["analyzed"] else 0
             stale += 1 if status["stale"] else 0
             table.insertRow(row)
@@ -3257,8 +3573,12 @@ class AnalysisHubWindow(QMainWindow):
                 ## The stale rule (ADR-0010): results computed before the
                 ## current exclusion declaration describe a population nobody
                 ## asked for, so they read as needing a re-run rather than as
-                ## an unqualified yes.
+                ## an unqualified yes.  A Slice whose definition changed
+                ## since its run is stale the same way.
                 analyzed_text = "re-run needed" if status["stale"] else "yes"
+            elif status.get("covered") is False:
+                ## Left out of the Slice, not behind on it: no re-run helps.
+                analyzed_text = "not covered"
             for column, text in enumerate(
                     [str(status["dfms"]),
                      str(status["chambers"])
@@ -3266,6 +3586,10 @@ class AnalysisHubWindow(QMainWindow):
                      analyzed_text,
                      "yes" if status["report"] else "no"], start=1):
                 table.setItem(row, column, QTableWidgetItem(text))
+            if status.get("covered") is False:
+                table.item(row, 3).setToolTip(
+                    f"{name} does not cover {view.view_label()}: "
+                    f"{status.get('reason') or 'its recording stops short of it'}.")
             item = layouts.get(name)
             if item is not None and item.blocked:
                 self._paint_blocked_row(table, row, item)
@@ -3302,6 +3626,10 @@ class AnalysisHubWindow(QMainWindow):
         blocked = sum(1 for i in layouts.values() if i.blocked)
         summary = [f"{len(project.member_names)} member(s)",
                    f"{analyzed} analyzed"]
+        shown = getattr(view, "slice", None)
+        if shown is not None:
+            ## The counts are the picked Slice's: say which.
+            summary[0] += f" · {shown.name}"
         if blocked:
             summary[1] = f"{analyzed} analyzed · {blocked} blocked"
         elif stale:
@@ -3346,6 +3674,11 @@ class AnalysisHubWindow(QMainWindow):
         if not declared:
             parts.append("no design declared — members are validated against "
                          "each other")
+        declared_slices = list(getattr(project, "slices", None) or [])
+        if declared_slices:
+            parts.append(f"{len(declared_slices)} Slice(s): "
+                         + ", ".join(_slice_label(s) for s in declared_slices)
+                         + f" · shown: {view.view_label()}")
         for warning in getattr(project, "warnings", []) or []:
             parts.append(f"⚠ {warning}")
         self.project_summary.setText("<br>".join(parts))
@@ -3558,6 +3891,10 @@ class AnalysisHubWindow(QMainWindow):
         else:
             rows.append(("Project", "none open"))
         loaded = self.experiment_name or "no member loaded"
+        ## The Slice it is loaded as (ADR-0020), on the same line.
+        shown = getattr(self.experiment, "slice", None)
+        if isinstance(shown, slices_mod.Slice):
+            loaded = f"{loaded} · Slice {_slice_label(shown)}"
         ## On the member's own line, which the strip always shows: a fifth
         ## row would go to the tooltip when a Batch is open.
         if self.experiment is not None and _no_training_information(self.experiment):

@@ -60,6 +60,7 @@ TOC: tuple[Section, ...] = (
             "concepts-progressive-ratio",
             "concepts-project",
             "concepts-facets",
+            "concepts-slices",
             "concepts-exclusions",
             "concepts-ai-summary",
         ),

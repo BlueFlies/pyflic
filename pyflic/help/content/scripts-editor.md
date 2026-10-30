@@ -73,7 +73,7 @@ re-reads the file, which is what you want if you have also edited the YAML in a 
 editor. Closing the window with unsaved changes asks whether to save them.
 
 Saving rewrites the whole file, so **comments and formatting in it are not kept**. Keys the
-editor does not show — a script's `notes:` or its `start:` and `end:`, a Project's
+editor does not show — a script's `notes:` or its `slice:`, a Project's
 `experiment_scripts:` — are kept.
 
 ## Order matters
@@ -90,10 +90,10 @@ already loaded when a script starts. See
 
 ## Inherited parameters
 
-`start`, `end` and, on most steps that take it, `binsize` have an **inherit from UI /
+`slice` and, on most steps that take it, `binsize` have an **inherit from UI /
 script** box in the inspector, ticked on a new step. Ticked, the parameter is left out of
-the step and inherits: `start` and `end` from the script's own `start:` and `end:`, else
-the whole recording; `binsize` from the Analyze panel's **Bin size** box when the script
+the step and inherits: `slice` from the script's own `slice:`, else the whole recording;
+`binsize` from the Analyze panel's **Bin size** box when the script
 runs from the Scripts panel, else 30 minutes. The light figure, the Program timeline and
 the Progressive Ratio curves have no such box: their `binsize` has its own default. See
 [Where values come from](scripts-overview.md#where-values-come-from).
@@ -101,7 +101,7 @@ the Progressive Ratio curves have no such box: their `binsize` has its own defau
 This is why a script can be re-run at another bin just by changing the Bin size box: leave
 `binsize` inherited on the steps and they follow it. Untick the box and set a value when the
 bin is part of the analysis rather than a thing you vary. The editor has no field for the
-script's own `start:` and `end:`; write those in the YAML.
+script's own `slice:`; write it in the YAML.
 
 ## Naming scripts
 

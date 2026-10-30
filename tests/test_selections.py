@@ -710,8 +710,11 @@ def test_the_three_actions_are_in_the_catalogue():
 
     names = {a.action for a in ACTIONS}
     assert EXISTING_ACTIONS | {"run_analysis", "run_plots"} == names
-    assert [p.key for p in get_action("run_analysis").params] == ["binsize"]
-    assert [p.key for p in get_action("run_plots").params] == ["metric", "binsize"]
+    ## A run names its Slice, or covers the whole recording and every Slice
+    ## the Selection keeps (ADR-0020).
+    assert [p.key for p in get_action("run_analysis").params] == ["binsize", "slice"]
+    assert [p.key for p in get_action("run_plots").params] == ["metric", "binsize", "slice"]
+    assert [p.key for p in get_action("run_qc").params] == ["slice"]
     assert get_action("run_plots").produces == "figure"
 
 

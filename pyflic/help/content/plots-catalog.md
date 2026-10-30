@@ -316,10 +316,9 @@ So for a Progressive Ratio member the standard plots behave differently:
   split every group by role, so a treatment becomes two series — `w1118 · paired` and
   `w1118 · yoked` — rather than one.
 
-Leave Start/End empty and the difference is taken over each group's own Training and Test
-Facets. Give an explicit window and that one window is used for every group instead, with
-the Facet column reading `Custom`: the Facets are per Chamber Group, so a single shared
-window is a different question rather than a filter on the same one.
+The difference is taken over each group's own Training and Test Facets: the Facets are per
+Chamber Group, which is also why a Progressive Ratio experiment has no
+[Slices](concepts-slices.md#progressive-ratio-and-fixed-ratio).
 
 Project-level faceted publication figures in the [Plot Editor](app-plot-editor.md) panel by
 Role when the Combined Analysis carries it. Use the pooled `<project>_PairedYokedDiff.csv`

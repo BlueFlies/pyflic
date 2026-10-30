@@ -25,8 +25,8 @@ button in the top bar, opens the [Script Editor](scripts-editor.md) on the saved
 ## The two tabs
 
 **Experiment** — everything that applies to the recording as a whole: the Experiment
-Type, the Chamber Layout it implies, well names, the detection parameters, and the factors
-of your design.
+Type, the Chamber Layout it implies, well names, the detection parameters, the factors
+of your design, and its exclusion groups and Slices.
 
 **DFMs & Chambers** — one tab down the left side per device, each with its own chamber
 assignments and parameter overrides. **Add DFM** and **Remove DFM** sit below the list;
@@ -35,7 +35,8 @@ Remove acts on the DFM you have selected and names it before it discards anythin
 **Problems are counted on the tab they live on.** A ⚠ and a number on a tab label means
 something there needs attention — a Hedonic experiment with no well names, a chamber
 missing a factor level. Saving with problems outstanding is allowed; the editor lists them
-first so you are choosing to.
+first so you are choosing to. The one exception is a Slice that cannot be used, which stops
+the save (see [Exclusion Groups and Slices](#exclusion-groups-and-slices)).
 
 ## The Experiment tab
 
@@ -121,6 +122,42 @@ factor, each a dropdown of that factor's levels, which is the main reason to use
 rather than hand editing: adding a factor by hand means rewriting every chamber assignment
 in the file. See [Factorial designs](config-factors.md).
 
+### Exclusion Groups and Slices
+
+Optional. Which `remove_chambers.csv` groups each analysis reads, and the
+[Slices](concepts-slices.md): separate analyses of part of the recording.
+
+- **Exclusion Group**: the whole recording's own group, the one its removals are read
+  from and written to (`general` when blank). See
+  [`global.exclusion_group`](config-structure.md#globalexclusion-group).
+- **Also Exclude**: further groups, comma-separated, whose chambers the whole recording
+  also leaves out without writing to them, such as `dead` for flies dead from the start.
+  See [Exclusions](concepts-slices.md#exclusions).
+- **The Slices table**, one row per Slice:
+  - **Name**.
+  - **Start (min)**. Blank is 0.
+  - **End (min)**. `end`, or blank, runs to the end of the recording.
+  - **Own group**: the group this Slice's exclusions are read from and written to. It is
+    the Slice's name unless you change it; a blank cell becomes the name, and the group is
+    always written to the file.
+  - **Also exclude**.
+  - The cutoffs a Slice may override. **Min licks** takes a number, or `off`. While the
+    optogenetic settings are shown, **Opto failed** takes `yes` or `no`, and
+    **Unexplained (s)** takes a number of seconds.
+
+  A blank cutoff keeps the experiment's own. **Add Slice** adds a row, and **Remove**
+  removes the selected one.
+- **Coverage tolerance (min)**: how far short of a Slice's end a recording may stop and
+  still cover it. Blank is 5. See [Coverage](concepts-slices.md#coverage).
+
+The rows are written under `global.slices:` in the order shown, each with only what you
+filled in. **A Slice that cannot be used stops the save.** That includes an end before its
+start, a reserved name (`whole`, `all`, `none`), or an own group that another analysis
+already has. The editor counts these on the tab, lists them when you save, and writes nothing
+until they are corrected or removed, because every run would skip such a Slice. For a type
+with the Ratio analysis (Progressive Ratio, Fixed Ratio) the table is greyed out, with the
+reason: [such a type has no Slices](concepts-slices.md#progressive-ratio-and-fixed-ratio).
+
 ## The DFMs & Chambers tab
 
 ### DFM Identity
@@ -168,7 +205,8 @@ inherits. Per-DFM overrides are how counterbalancing is set up; see
 ## A member's config
 
 Opened on a Project's member, the editor fills the global settings from `project.yaml`,
-marks them read-only with a banner, and writes only `dfms:` — see
+the exclusion groups and Slices among them, marks them read-only with a banner, and writes
+only `dfms:` — see
 [Projects and members](concepts-project.md). Any save keeps the keys the editor does not
 show, `scripts:` above all, as they were.
 
@@ -178,8 +216,9 @@ show, `scripts:` above all, as they were.
 Experiment Type from Chamber Layout still open: `experiment_type: two_well` opens as a
 Custom Experiment with that layout, and saving migrates it.
 
-**Exclusions do not live here.** `excluded_chambers` in YAML is ignored at load
-time. Chamber exclusions belong in `remove_chambers.csv` — see
+**Excluded chambers are not listed here.** The editor names the exclusion groups; which
+chambers a group holds is `remove_chambers.csv`'s to say. `excluded_chambers` in YAML is
+ignored at load time. See
 [exclusions](config-dfms-chambers.md#excluding-chambers).
 
 ## After saving

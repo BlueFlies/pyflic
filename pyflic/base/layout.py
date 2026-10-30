@@ -72,7 +72,7 @@ _IGNORED_PREFIXES = ("~$", ".")
 #: Project's own ``data/`` (one that also holds DFM CSVs, or a stray copy)
 #: reads as an Unfiled Recording, and filing it would nest ``data/data/``.
 _NOT_MEMBERS = {DATA_DIRNAME, EXTRA_DIRNAME, "analysis", "qc", "figures",
-                "__pycache__"}
+                "slices", "__pycache__"}
 
 # Status values.  The empty string is "not experiment-shaped at all", which is
 # not a problem to report — most subdirectories of anything are not.

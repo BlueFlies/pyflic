@@ -53,8 +53,10 @@ in another, and the members themselves are different experiments.
 The `design:` section of `project.yaml` owns **every** key under a member's `global:` —
 the experiment type and chamber layout, the detection parameters, `well_names`,
 `transform_licks`, the `constants:` cutoffs, the design factors, the Facets
-(`facet_cutoffs`, `facet_labels`, `facet_source`), `optogenetics`, the `exclusion_group`,
-the `control_level`, and the Selection (`omit:`) that the QC, Analyze and Plots panels'
+(`facet_cutoffs`, `facet_labels`, `facet_source`), `optogenetics`, the exclusion groups
+(`exclusion_group`, `also_exclude`), the [Slices](concepts-slices.md) (`slices`,
+`slice_tolerance_min`), the `control_level`, and the Selection (`omit:`) that the QC,
+Analyze and Plots panels'
 ticks write (see [The ticks are configuration](app-hub.md#the-ticks-are-configuration)).
 
 A member that contradicts any of them, or states a `global:` key the design does not own,
@@ -107,7 +109,7 @@ writes its copy, `experiment_type.yaml`, beside it, and a new Project starts its
 ### The Project design dialog
 
 One dialog, titled *New Project*, *Edit Project design* or *Initialize existing directory*
-by what it is doing, with three cards:
+by what it is doing, with four cards:
 
 - **Project** — the **Directory** (its **Browse…** can make a new folder), the **Project
   name** (the folder's name by default, and fixed when initializing in place) and
@@ -118,9 +120,17 @@ by what it is doing, with three cards:
   **Chamber layout** (fixed by a type that owns it); **Well A** and **Well B**; **Transform
   licks**; **Optogenetics** (auto, yes or no); the **Facet source**, **Facet cutoffs** and
   **Phase names** ([Facets](concepts-facets.md)); the **Exclusion group** every member's
-  `remove_chambers.csv` is read under; the **Control level**, for a type with a
-  [Treatment control](concepts-experiment-types.md#control-comparisons); and the **Design
-  factors**.
+  `remove_chambers.csv` is read under, and **Also exclude**, the groups the whole recording
+  also leaves out ([Exclusions](concepts-slices.md#exclusions)); the **Control level**, for
+  a type with a [Treatment control](concepts-experiment-types.md#control-comparisons); and
+  the **Design factors**.
+- **Slices**: the [Slices](concepts-slices.md#slices-in-the-design) every member runs,
+  one row each. A row gives the name, the start and end minute (`end`, or blank, for the end
+  of the recording), the Slice's own exclusion group (its name unless you change it), the groups it also
+  excludes, and the auto-removal cutoffs it overrides (blank keeps the design's). Below the
+  rows is the **Coverage tolerance** ([Coverage](concepts-slices.md#coverage)). A Slice that
+  cannot be used stops the save, and the dialog lists why. For a type with the Ratio
+  analysis the card is greyed out with the reason, since such a type has no Slices.
 - **Detection parameters** — the [detection parameters](reference-parameters.md), one rule
   for every member; the **Auto-filter thresholds**, each with a **Use** box (unticked turns
   that filter off; ticked and blank takes the type's default); for a type with the

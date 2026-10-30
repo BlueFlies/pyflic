@@ -59,9 +59,9 @@ every member at once. See [Projects and members](concepts-project.md).
 
 ### Only part of my recording loaded
 
-Check the start and end minutes: a script's `start` and `end` (on the script or on its
-steps), or the QC Viewer's **Start time** and **End time**. An end of `0` means through the
-end of the recording; any other value truncates. Multi-segment experiments stitch in filename order, so a
+Check which [Slice](concepts-slices.md) you are looking at: a Slice's results hold only its
+own minutes, and live in `slices/<name>/`. In the QC Viewer, check **Start time** and **End
+time**: an end of `0` means through the end of the recording; any other value truncates. Multi-segment experiments stitch in filename order, so a
 misnamed segment can land out of sequence.
 
 ### "DFM 99 is the Environmental Monitor, not a DFM"

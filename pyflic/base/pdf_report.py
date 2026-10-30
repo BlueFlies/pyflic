@@ -135,7 +135,8 @@ def build_experiment_report(
 
 def _member_name(experiment: Experiment) -> str:
     if experiment.experiment_dir is not None:
-        return Path(experiment.experiment_dir).name
+        name = Path(experiment.experiment_dir).name
+        return name if experiment.slice is None else f"{name} · Slice {experiment.slice.name}"
     return "experiment"
 
 
@@ -261,6 +262,11 @@ def _cover(experiment: Experiment, qc: dict, name: str) -> list[Any]:
     rows: list[tuple[str, str]] = []
     if experiment.experiment_dir is not None:
         rows.append(("Directory", str(experiment.experiment_dir)))
+    if experiment.slice is not None:
+        ## A Slice is its own analysis of these minutes (ADR-0020).
+        rows.append(("Slice", f"{experiment.slice.name}, minutes "
+                              f"{experiment.slice.bounds_label()}, analysed as if the "
+                              f"recording were only these minutes"))
     rows.append(("DFMs", ", ".join(str(d) for d in sorted(experiment.dfms))))
     rows.extend(_recording_rows(experiment))
     rows.append(("Treatments", _treatment_counts(experiment)))
@@ -351,12 +357,12 @@ def _integrity_callout(experiment: Experiment, qc: dict) -> rl.Callout:
 
 def _exclusion_frame(experiment: Experiment) -> pd.DataFrame:
     rows = []
-    group = experiment.exclusion_group or "file"
+    group = experiment.exclusion_groups_label()
     for dfm_id, chambers in sorted((experiment.excluded_chambers or {}).items()):
         for chamber in chambers:
             rows.append({"DFM": int(dfm_id), "Chamber": int(chamber), "Treatment": "",
                          "Source": "by hand",
-                         "Reason": f"remove_chambers.csv, group '{group}'"})
+                         "Reason": f"remove_chambers.csv, group {group}"})
     filtered = experiment.filtered_chambers
     if filtered is not None and not filtered.empty:
         for _, r in filtered.iterrows():
@@ -550,7 +556,9 @@ def _summary_frames(experiment: Experiment, options: ReportOptions
         return facet, frames, "Facet"
     summary = experiment.feeding_summary(range_minutes=options.range_minutes,
                                          transform_licks=options.transform_licks)
-    return summary, [("Whole recording", summary)], None
+    from .slices import whole_label
+
+    return summary, [(whole_label(experiment.slice), summary)], None
 
 
 def _value(frame: pd.DataFrame, metric: str) -> pd.Series:

@@ -15,6 +15,9 @@ longer guides, the developer references and the decision records.
 - [Analysing a Progressive Ratio assay](progressive-ratio-user-guide.md): the
   Progressive Ratio assay end to end: settings, analyses, figures and
   statistics.
+- [Slices: analysing part of a recording on its own](slices-user-guide.md):
+  for users of the older ranged runs (`analysis_0_360/`): defining Slices,
+  giving each the right excluded chambers, and where their results appear.
 - [The firmware 4.0.0 data columns](v4-data-columns.md): the 63 columns a
   firmware 4.0.0 recording adds, and where pyflic uses them.
 

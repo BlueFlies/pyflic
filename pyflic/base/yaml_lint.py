@@ -34,6 +34,8 @@ _KNOWN_GLOBAL_KEYS = {
     "omit",
     # The Treatment control's level, under a type with one (ADR-0019).
     "control_level",
+    # Slices: separate analyses of part of the recording (ADR-0020).
+    "slices", "also_exclude", "slice_tolerance_min",
 }
 _KNOWN_PARAM_KEYS = {
     "baseline_window_minutes", "baseline_window_min", "baseline_window",
@@ -178,6 +180,7 @@ def lint_flic_config(path: str | Path) -> list[LintIssue]:
         if k not in _KNOWN_GLOBAL_KEYS:
             _emit(issues, "warning", f"unknown global key {k!r}", path=f"global.{k}")
     _lint_omit(issues, path, g)
+    _lint_slices(issues, path, g)
 
     g_params = g.get("params") or g.get("parameters") or {}
     chamber_size_global = None
@@ -462,6 +465,31 @@ def _lint_omit(issues: list[LintIssue], path: Path, g: dict) -> None:
         for problem in validate_omit(design_global if isinstance(design_global, dict) else {}):
             _emit(issues, "warning", f"{PROJECT_FILENAME} design: {problem}",
                   path="design.global.omit")
+
+
+def _lint_slices(issues: list[LintIssue], path: Path, g: dict) -> None:
+    """The Slices (``global.slices:``, ADR-0020): this config's own, and, for
+    a Member, the Project design's, which its runs read.  A Slice that cannot
+    be used is an error: loading it fails, and the Project leaves it out."""
+    from . import slices as _slices
+    from .experiment_types import get_experiment_type
+    from .project import PROJECT_FILENAME, read_design
+
+    def check(source: dict, where: str, prefix: str = "") -> None:
+        try:
+            etype = get_experiment_type(source.get("experiment_type"), path.parent)
+        except ValueError:
+            etype = None
+        for problem in _slices.slice_problems(source, etype):
+            _emit(issues, "error", f"{prefix}{problem}", path=where)
+
+    if g.get("slices") is not None:
+        check(g, "global.slices")
+    project_dir = path.parent.parent
+    if (project_dir / PROJECT_FILENAME).is_file():
+        design_global = read_design(project_dir).get("global") or {}
+        if isinstance(design_global, dict) and design_global.get("slices") is not None:
+            check(design_global, "design.global.slices", f"{PROJECT_FILENAME} design: ")
 
 
 def _lint_facet_source(issues: list[LintIssue], path: Path, g: dict, dfm_items,

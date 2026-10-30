@@ -26,6 +26,14 @@ Note `exclusion_group`: it defaults to applying the `general` group. Pass `None`
 want the unfiltered design, and be deliberate about which you want, because the two give
 different numbers. See [exclusions](config-dfms-chambers.md#excluding-chambers).
 
+To load a [Slice](concepts-slices.md) the design declares, pass its name:
+`load_experiment_yaml(path, slice="first_6h")`. The recording is clipped to the Slice, its
+own exclusion groups replace the whole recording's, and its outputs go to
+`slices/first_6h/`. A loaded experiment's `exp.load_slice("first_6h")` does the same with the
+options it was loaded with, and raises `SliceNotCovered` when the recording stops short of
+the Slice's end. For a Project, `project.for_slice("first_6h")` is the Project seen through
+that Slice: its `load_member`, `combined_frames` and `build_combined_analysis` work on it.
+
 ## Loading a Project's members
 
 A member of a Project inherits the design's `global:` block, so load it through its

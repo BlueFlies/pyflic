@@ -30,6 +30,10 @@ QC, ANALYSES, PLOTS = "qc", "analyses", "plots"
 OMIT_KINDS: tuple[str, ...] = (QC, ANALYSES, PLOTS)
 #: The ``global:`` key that holds the Selection.
 OMIT_KEY = "omit"
+#: The Slices a run leaves out (``global.omit.slices``, ADR-0020): not a set
+#: of outputs but which of the design's Slices the Hub's runs cover beside
+#: the whole recording, which always runs.
+SLICES = "slices"
 
 #: What an item can require of a member (``Item.requires``): a two-well
 #: layout, an optogenetic experiment, or an Analysis Module its Experiment
@@ -398,6 +402,19 @@ def validate_omit(config: Any) -> list[str]:
                 "item ids, e.g. {analyses: [event_statistics]}"]
     problems: list[str] = []
     for kind, value in section.items():
+        if kind == SLICES:
+            from . import slices as _slices
+
+            if value is not None and not isinstance(value, (list, tuple, str)):
+                problems.append(f"global.omit.{SLICES} must be a list of Slice names")
+                continue
+            declared = _slices.slice_names(g)
+            for name in _ids(value):
+                if name not in declared:
+                    problems.append(f"global.omit.{SLICES} names {name!r}, which the design "
+                                    f"does not declare (declared: "
+                                    f"{', '.join(declared) or 'none'})")
+            continue
         if kind not in _SETS:
             problems.append(f"global.omit.{kind} is not something a run can leave out "
                             f"(use {', '.join(OMIT_KINDS)})")
@@ -462,7 +479,8 @@ def selection_where(experiment: Any, kind: str) -> str:
     return f"{path.name} global.omit.{kind}"
 
 
-def _toggled(section: Any, kind: str, item_id: str, included: bool) -> dict:
+def _toggled(section: Any, kind: str, item_id: str, included: bool,
+             known: list[str] | None = None) -> dict:
     """The ``omit:`` block *section* with *item_id* of *kind* ticked
     (*included*) or unticked.  Ids are kept in panel order, an id no run
     knows (hand-written, or from a later version) after them; an empty list
@@ -473,14 +491,16 @@ def _toggled(section: Any, kind: str, item_id: str, included: bool) -> dict:
         current = [i for i in current if i != item_id]
     elif item_id not in current:
         current.append(item_id)
-    known = [i.id for i in items(kind)]
+    if known is None:
+        known = [i.id for i in items(kind)]
     ordered = [i for i in known if i in current] + [i for i in current if i not in known]
     if ordered:
         block[kind] = ordered
     else:
         block.pop(kind, None)
-    return {**{k: block[k] for k in OMIT_KINDS if k in block},
-            **{k: v for k, v in block.items() if k not in OMIT_KINDS}}
+    order = (*OMIT_KINDS, SLICES)
+    return {**{k: block[k] for k in order if k in block},
+            **{k: v for k, v in block.items() if k not in order}}
 
 
 def _read_yaml(path: Path) -> dict:
@@ -504,6 +524,39 @@ def _set_omit(g: dict, block: dict) -> None:
         g.pop(OMIT_KEY, None)
 
 
+def omitted_slices(experiment_or_config: Any) -> frozenset[str]:
+    """The Slices the Hub's runs leave out (``global.omit.slices``)."""
+    section = _global_of(experiment_or_config).get(OMIT_KEY)
+    if not isinstance(section, Mapping):
+        return frozenset()
+    return frozenset(_ids(section.get(SLICES)))
+
+
+def selected_slices(experiment_or_config: Any) -> list[str]:
+    """The design's usable Slices a run covers beside the whole recording,
+    in the order declared: every one ``omit.slices`` does not leave out."""
+    from . import slices as _slices
+
+    g = _global_of(experiment_or_config)
+    etype = getattr(experiment_or_config, "experiment_type", None)
+    left_out = omitted_slices(experiment_or_config)
+    return [n for n in _slices.slice_names(g, etype) if n not in left_out]
+
+
+def set_slice_included(experiment: Any, name: str, included: bool, *,
+                       project: Any = None) -> Path:
+    """Tick (*included*) or untick the Slice *name*, written to the
+    Selection as :func:`set_included` writes an item."""
+    from . import slices as _slices
+
+    declared = _slices.slice_names(_global_of(experiment))
+    if name not in declared:
+        raise ValueError(f"The design declares no Slice named {name!r} "
+                         f"(declared: {', '.join(declared) or 'none'}).")
+    return _write_selection(experiment, SLICES, name, included, project=project,
+                            known=declared)
+
+
 def set_included(experiment: Any, kind: str, item_id: str, included: bool, *,
                  project: Any = None) -> Path:
     """Tick (*included*) or untick one item, written to the Selection at once
@@ -525,6 +578,11 @@ def set_included(experiment: Any, kind: str, item_id: str, included: bool, *,
     """
     _check_kind(kind)
     item(kind, item_id)                    # an unknown id is a typo, not a choice
+    return _write_selection(experiment, kind, item_id, included, project=project)
+
+
+def _write_selection(experiment: Any, kind: str, item_id: str, included: bool, *,
+                     project: Any = None, known: list[str] | None = None) -> Path:
     from .project import PROJECT_FILENAME
 
     target = selection_file(experiment)
@@ -533,13 +591,13 @@ def set_included(experiment: Any, kind: str, item_id: str, included: bool, *,
         design = payload.get("design")
         design = dict(design) if isinstance(design, Mapping) else {}
         g = dict(design.get("global") or {})
-        _set_omit(g, _toggled(g.get(OMIT_KEY), kind, item_id, included))
+        _set_omit(g, _toggled(g.get(OMIT_KEY), kind, item_id, included, known))
         design["global"] = g
         payload["design"] = design
     else:
         g = payload.get("global")
         g = dict(g) if isinstance(g, Mapping) else {}
-        _set_omit(g, _toggled(g.get(OMIT_KEY), kind, item_id, included))
+        _set_omit(g, _toggled(g.get(OMIT_KEY), kind, item_id, included, known))
         if g:
             payload["global"] = g
         else:

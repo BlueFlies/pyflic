@@ -30,7 +30,8 @@ import pandas as pd
 
 from . import report_content as rc
 from . import report_layout as rl
-from .analytics import WHOLE_RECORDING, treatment_comparisons, zero_tests
+from .analytics import treatment_comparisons, zero_tests
+from .slices import is_whole_label
 
 #: How each default metric reads in a label, with the unit it carries.
 _NOUNS: dict[str, tuple[str, str]] = {"Licks": ("licks", ""), "Events": ("events", ""),
@@ -53,7 +54,7 @@ def yoked_windows(frame: pd.DataFrame | None) -> list[tuple[str, pd.DataFrame]]:
     if frame is None or frame.empty or "Facet" not in frame.columns:
         return []
     labels = list(dict.fromkeys(frame["Facet"].astype(str)))
-    facets = [label for label in labels if label != WHOLE_RECORDING] or labels
+    facets = [label for label in labels if not is_whole_label(label)] or labels
     return [(label, frame[frame["Facet"].astype(str) == label]) for label in facets]
 
 
@@ -122,7 +123,7 @@ def yoked_table_blocks(frame: pd.DataFrame | None, *, well_names: dict | None = 
     metrics = difference_columns(frame)
     if not frames or not metrics:
         return []
-    show_phase = len(frames) > 1 or frames[0][0] != WHOLE_RECORDING
+    show_phase = len(frames) > 1 or not is_whole_label(frames[0][0])
     labels = {m: _label(m) for m in metrics}
     rows = [{**r, "metric": labels[r["metric"]]}
             for r in difference_rows(frames, metrics, mixed_p0=mixed_p0)]
@@ -221,7 +222,7 @@ def yoked_figure_blocks(frame: pd.DataFrame | None, *, well_names: dict | None =
                "larger.")
     blocks: list[Any] = []
     for label, rows in windows:
-        title = ("Paired against yoked" if label == WHOLE_RECORDING
+        title = ("Paired against yoked" if is_whole_label(label)
                  else f"Paired against yoked: {label}")
         blocks.append(rl.Plot(lambda rows=rows: yoked_figure(rows, well_names=well_names,
                                                              factors=factors),

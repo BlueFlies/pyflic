@@ -51,7 +51,8 @@ def member_table(project) -> pd.DataFrame:
             "Generation": ", ".join(str(g) for g in generations) or "—",
             "Chambers analysed": status["chambers"] if status["chambers"] is not None else "—",
             "Excluded": int(excluded.get(name, 0)),
-            "Analysed": ("re-run needed" if status.get("stale") else
+            "Analysed": ("not covered" if status.get("covered") is False else
+                         "re-run needed" if status.get("stale") else
                          "yes" if status["analyzed"] else "NO"),
             "Faceted": "yes" if status["faceted"] else "no",
             "Report": "yes" if status["report"] else "no",
@@ -176,10 +177,35 @@ def write_project_report(project, path: str | Path | None = None, *,
         log("    building combined analysis first...")
         project.build_combined_analysis()
     if path is None:
-        path = os.path.join(project.project_directory, f"{project.name}_report.pdf")
+        path = report_path(project)
     path = str(path)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     build_project_report(project, ai_summary=ai_summary).save(path)
     return path
+
+
+def report_path(project) -> str:
+    """``<project>/<name>_report.pdf``; a Slice's is
+    ``<project>/slices/<slice>/<name>_<slice>_report.pdf`` (ADR-0020)."""
+    if getattr(project, "slice", None) is None:
+        return os.path.join(project.project_directory, f"{project.name}_report.pdf")
+    from . import slices
+
+    root = slices.output_dir(project.project_directory, project.slice.name)
+    return str(root / f"{project.name}_{project.slice.name}_report.pdf")
+
+
+def write_all_project_reports(project, *, ai_summary: bool = False,
+                              log=print) -> list[str]:
+    """The Project Report of the whole recording and of every Slice
+    (ADR-0020).  A Slice no Member has been run for is skipped and logged."""
+    paths = [write_project_report(project.whole, ai_summary=ai_summary, log=log)]
+    for view in project.slice_views()[1:]:
+        try:
+            paths.append(write_project_report(view, ai_summary=ai_summary, log=log))
+        except ValueError as err:
+            log(f"[{view.view_label()}] report skipped: {err}")
+    return paths
 
 
 def build_project_report(project, *, ai_summary: bool = False) -> rl.ReportDocument:
@@ -188,7 +214,7 @@ def build_project_report(project, *, ai_summary: bool = False) -> rl.ReportDocum
     if summary is None:
         raise ValueError(
             f"No member in '{project.name}' has a saved analysis to pool.")
-    doc = rl.ReportDocument("Project report", project.name)
+    doc = rl.ReportDocument("Project report", _title(project))
     doc.add(_cover(project, summary, missing))
     doc.add(rl.PageBreak(), rl.Heading("Members"),
             rl.Paragraph("Each member is one experiment directory; the pooled figures and "
@@ -221,6 +247,12 @@ def _analysed_tone(value: Any) -> str | None:
 # Cover
 # ---------------------------------------------------------------------------
 
+def _title(project) -> str:
+    if getattr(project, "slice", None) is None:
+        return project.name
+    return f"{project.name} · Slice {project.slice.name}"
+
+
 def _cover(project, summary: pd.DataFrame, missing: list[str]) -> list[Any]:
     etype = project.experiment_type
     n_members = len(project.member_names)
@@ -231,6 +263,12 @@ def _cover(project, summary: pd.DataFrame, missing: list[str]) -> list[Any]:
         ("Members", ", ".join(project.member_names) or "none"),
         ("Chambers pooled", str(len(summary))),
     ]
+    left_out = project.not_covered() if hasattr(project, "not_covered") else {}
+    if getattr(project, "slice", None) is not None:
+        rows.insert(1, ("Slice", f"{project.slice.name}, minutes "
+                                 f"{project.slice.bounds_label()}: each Member analysed as if "
+                                 f"its recording were only these minutes, with the Slice's "
+                                 f"own exclusions"))
     if "Treatment" in summary.columns:
         counts = summary["Treatment"].astype(str).value_counts()
         rows.append(("Treatments", " · ".join(f"{t}: {n} chambers"
@@ -246,7 +284,7 @@ def _cover(project, summary: pd.DataFrame, missing: list[str]) -> list[Any]:
     rows.append(("Facets", _facets_line(project)))
     if project.notes:
         rows.append(("Notes", str(project.notes)))
-    blocks: list[Any] = [rl.Cover("Project report", project.name, lines),
+    blocks: list[Any] = [rl.Cover("Project report", _title(project), lines),
                          rl.KeyValues(rows)]
     intro = etype.report_intro()
     if intro and not getattr(etype, "is_custom", False):
@@ -256,9 +294,18 @@ def _cover(project, summary: pd.DataFrame, missing: list[str]) -> list[Any]:
         blocks.append(rl.Callout(
             f"{len(missing)} member(s) have no saved analysis and are NOT in any pooled "
             f"number here: {', '.join(missing)}.", tone="failed", title="Members"))
-    else:
+    elif not left_out:
         blocks.append(rl.Callout(f"All {n_members} member(s) are analysed and pooled.",
                                  tone="ok", title="Members"))
+    if left_out:
+        detail = "; ".join(f"{name}: {reason}" for name, reason in left_out.items())
+        blocks.append(rl.Callout(
+            f"{len(left_out)} member(s) do not cover this Slice and are left out of it: "
+            f"{detail}.", tone="info", title="Not covered"))
+    spread = project.open_end_spread_note() if hasattr(project, "open_end_spread_note") \
+        else None
+    if spread:
+        blocks.append(rl.Callout(spread + ".", tone="warning", title="Unequal spans"))
     exclusions = project.aggregated_exclusions()
     if exclusions.empty:
         blocks.append(rl.Callout("No chamber was excluded in any member.", tone="ok",

@@ -1,4 +1,5 @@
-"""Migration checks for the Project overhaul (ADR-0005 through ADR-0008).
+"""Migration checks for the Project overhaul (ADR-0005 through ADR-0008) and
+for the Slices that brought separate windowed analyses back (ADR-0020).
 
 There is no migration tool: the overhaul is a hard break, and this module is
 the whole crossing.  It names each construct that no longer works and the form
@@ -12,6 +13,7 @@ Consumed by ``pyflic lint``, which runs it beside the schema linter.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -110,6 +112,9 @@ def check_config(config_path: Path, *, in_project: bool = False
                     f"move them to the project design; only "
                     f"{sorted(PHYSICAL_DFM_KEYS)} may vary per DFM", rel))
 
+    # ---- Script windows retired by Slices (ADR-0020) -------------------
+    issues += script_window_issues(cfg.get("scripts") or [], rel)
+
     # ---- Experiment Scripts named 'batch' (ADR-0006) -------------------
     for script in (cfg.get("scripts") or []):
         if isinstance(script, dict) and \
@@ -120,6 +125,53 @@ def check_config(config_path: Path, *, in_project: bool = False
                 "meaning — subdir-batch mode is retired",
                 "rename it (a Batch Run now executes a *Project* Script named "
                 "by batch.yaml, one level up)", rel))
+    return issues
+
+
+def _window(holder: dict) -> tuple[float, float] | None:
+    """The start/end a step or script states, or ``None`` for none (or the
+    whole recording, ``0``/``0``)."""
+    try:
+        start = float(holder.get("start") or 0.0)
+        end = float(holder.get("end") or 0.0)
+    except (TypeError, ValueError):
+        return None
+    return None if (start, end) == (0.0, 0.0) else (start, end)
+
+
+def _slice_example(start: float, end: float) -> str:
+    def tidy(v: float):
+        return int(v) if float(v).is_integer() else v
+
+    stop = "end" if end <= 0 else tidy(end)
+    name = f"m{tidy(start)}_{stop}".replace(".", "p")
+    return f"{name}: {{start: {tidy(start)}, end: {stop}}}"
+
+
+def script_window_issues(scripts, rel: str | None = None) -> list[MigrationIssue]:
+    """A step or script stating ``start``/``end`` (ADR-0020): retired, and
+    skipped when it runs.  Each names the Slice that analyses those minutes on
+    their own, as the old ``analysis_<start>_<end>/`` runs did."""
+    issues: list[MigrationIssue] = []
+    for script in scripts:
+        if not isinstance(script, dict):
+            continue
+        name = str(script.get("name") or "?")
+        windows: list[tuple[float, float]] = []
+        if (w := _window(script)) is not None:
+            windows.append(w)
+        for step in (script.get("steps") or []):
+            if isinstance(step, dict) and (w := _window(step)) is not None \
+                    and w not in windows:
+                windows.append(w)
+        for start, end in windows:
+            example = _slice_example(start, end)
+            issues.append(MigrationIssue(
+                "warning",
+                f"script '{name}' states start/end ({start:g}, {end:g}): a script "
+                f"window is retired, and a step that states one is skipped",
+                f"declare a Slice under global: slices: (e.g. '{example}') and "
+                f"name it with slice: on the steps or the script (ADR-0020)", rel))
     return issues
 
 
@@ -162,12 +214,23 @@ def check_directory(directory: Path, *, in_project: bool = False
                 "move anything you still need, then delete it; pyflic will "
                 "never touch it", rel))
         elif entry.name.startswith(("analysis_", "qc_")):
+            ## The window the folder was named after, when it says one: the
+            ## Slice that analyses those minutes on their own again.
+            match = re.fullmatch(r"(?:analysis|qc)_(\d+(?:\.\d+)?)_(\d+(?:\.\d+)?)",
+                                 entry.name)
+            slice_fix = ""
+            if match:
+                slice_fix = (f"to analyse those minutes on their own again, with "
+                             f"their own exclusions, declare a Slice under global: "
+                             f"slices: (e.g. '{_slice_example(float(match[1]), float(match[2]))}', "
+                             f"ADR-0020); for the same windows as columns, ")
             issues.append(MigrationIssue(
                 "warning",
                 f"{entry.name}/ is an orphaned windowed output directory — a "
-                f"time window is a Facet column now (ADR-0008)",
-                "set 'facet_cutoffs' under global: to get the same windows as "
-                "columns in feeding_summary_facet.csv, then delete it", rel))
+                f"time window is a Facet column or a Slice now (ADR-0008, ADR-0020)",
+                f"{slice_fix}set 'facet_cutoffs' under global: to get the same "
+                f"windows as columns in feeding_summary_facet.csv; pyflic never "
+                f"reads, moves or deletes it", rel))
         elif entry.name == ".pyflic_cache":
             issues.append(MigrationIssue(
                 "warning",
@@ -198,6 +261,9 @@ def check_tree(root: Path) -> list[MigrationIssue]:
                 "validated against each other instead of against an authority",
                 "add a design: global: block naming the shared settings "
                 "(ADR-0005)", str(root)))
+        ## The central Experiment Scripts the Members share.
+        issues += script_window_issues(meta.get("experiment_scripts") or [],
+                                       str(root / "project.yaml"))
         for entry in sorted(root.iterdir()):
             if entry.is_dir() and is_experiment_dir(entry):
                 issues += check_directory(entry, in_project=True)

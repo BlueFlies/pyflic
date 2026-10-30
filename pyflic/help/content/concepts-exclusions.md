@@ -11,7 +11,9 @@ general,2,5,fly escaped
 
 The `group` column lets one member carry several exclusion sets; the Project's Design
 names the active one with `exclusion_group:` (default `general`), so every member is
-filtered by the same rule. That file is the audit trail, and everything below only ever
+filtered by the same rule. Each [Slice](concepts-slices.md#exclusions) has its own group, and
+`also_exclude:` names groups an analysis excludes as well, such as one for flies dead from
+the start. That file is the audit trail, and everything below only ever
 writes into it — as does the QC Viewer's **Save Exclusions…**, for one member at a time
 (see [Saving exclusions](app-qc-viewer.md#saving-exclusions)).
 

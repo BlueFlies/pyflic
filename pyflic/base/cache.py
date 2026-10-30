@@ -8,6 +8,10 @@ Cache entries live in ``experiment_dir/.pyflic_cache/`` and are keyed by:
     DFM CSV under ``experiment_dir/data/``, and of ``Program.txt`` and
     ``Messages.csv`` there when present
   - The (range_minutes, transform_licks) request
+  - What else shaped the summary as loaded (``extra``): the design's
+    ``global:`` block a Member inherits from ``project.yaml``, the chambers
+    its exclusion groups removed, and the Slice (ADR-0020).  Without it an
+    exclusion edit or a Design change returned the summary from before it.
 
 Cache hits skip the per-DFM feeding/tasting recomputation entirely.
 """
@@ -26,7 +30,8 @@ _CACHE_DIR_NAME = ".pyflic_cache"
 # Bump this when feeding-summary computation logic changes so stale caches
 # from prior releases are automatically invalidated.  "3": firmware 4.0.0
 # recordings, whose light seconds come from OnMs (docs/v4-data-plan.md, 0b).
-_CACHE_VERSION = "3"
+# "4": the key carries the exclusions, the design and the Slice (ADR-0020).
+_CACHE_VERSION = "4"
 
 #: Files beside the DFM CSVs that change what an analysis reports: the Opto
 #: Program and PyMCU's message log.  Matched case-insensitively, as
@@ -65,6 +70,7 @@ def feeding_summary_key(
     *,
     range_minutes: Sequence[float],
     transform_licks: bool,
+    extra: str = "",
 ) -> str:
     a, b = float(range_minutes[0]), float(range_minutes[1])
     parts = [
@@ -73,6 +79,7 @@ def feeding_summary_key(
         _data_hash(experiment_dir),
         f"r{a:g}_{b:g}",
         f"tx{int(bool(transform_licks))}",
+        _hash_bytes(str(extra).encode("utf-8")),
     ]
     return "_".join(parts)
 
@@ -88,9 +95,11 @@ def feeding_summary_path(
     *,
     range_minutes: Sequence[float],
     transform_licks: bool,
+    extra: str = "",
 ) -> Path:
     key = feeding_summary_key(
         experiment_dir, range_minutes=range_minutes, transform_licks=transform_licks,
+        extra=extra,
     )
     return cache_dir(experiment_dir) / f"feeding_summary_{key}.csv"
 
@@ -100,12 +109,14 @@ def load_feeding_summary(
     *,
     range_minutes: Sequence[float],
     transform_licks: bool,
+    extra: str = "",
 ) -> pd.DataFrame | None:
     """Return cached feeding summary, or ``None`` if no entry."""
     p = feeding_summary_path(
         experiment_dir,
         range_minutes=range_minutes,
         transform_licks=transform_licks,
+        extra=extra,
     )
     if not p.is_file():
         return None
@@ -125,11 +136,13 @@ def save_feeding_summary(
     *,
     range_minutes: Sequence[float],
     transform_licks: bool,
+    extra: str = "",
 ) -> Path:
     p = feeding_summary_path(
         experiment_dir,
         range_minutes=range_minutes,
         transform_licks=transform_licks,
+        extra=extra,
     )
     df.to_csv(p, index=False)
     return p

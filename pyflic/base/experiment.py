@@ -72,6 +72,16 @@ class Experiment:
     filter_criteria_summary: str = field(default="")
     excluded_chambers: dict[int, list[int]] = field(default_factory=dict)
     exclusion_group: str | None = None
+    #: The Slice this experiment is (ADR-0020), or ``None`` for the whole
+    #: recording; its outputs then go to ``slices/<name>/``.
+    slice: Any = None
+    #: The groups excluded beside the own ``exclusion_group`` (never written).
+    also_exclude: tuple[str, ...] = ()
+    #: Where each DFM's recording ended, for a Slice's ``slice.json``.
+    slice_dfm_ends: dict[int, float] = field(default_factory=dict)
+    #: How the loader was called, so :meth:`load_slice` loads a sibling Slice
+    #: the same way (a Member's design, the parallel options).
+    load_options: dict = field(default_factory=dict)
     #: The ``optogenetics:`` setting (auto | yes | no) and the Opto Program read
     #: from ``data/Program.txt`` (:mod:`pyflic.base.opto_program`), or why that
     #: file could not be used.  ``program_notes`` records what the loader took
@@ -116,6 +126,13 @@ class Experiment:
                 for tc in treatment.chambers
             }
         return self._opto_snapshot
+
+    def exclusion_groups_label(self) -> str:
+        """``'general'``, or ``'early' + 'dead'`` with ``also_exclude``."""
+        if not self.exclusion_group:
+            return "file"
+        groups = [self.exclusion_group, *self.also_exclude]
+        return " + ".join(f"'{g}'" for g in groups)
 
     def get_dfm(self, dfm_id: int) -> DFM | None:
         """Return the DFM with the given id, or None if it does not exist."""
@@ -301,13 +318,63 @@ class Experiment:
 
     @property
     def _output_root(self) -> Path | None:
-        """The Experiment Directory itself.
+        """The Experiment Directory, or ``slices/<name>/`` inside it for a
+        Slice (ADR-0020).
 
-        Kept as a property because callers reference it, but there is no longer
-        anything between the Experiment Directory and its outputs: ADR-0005
-        retired ``<stem>_results/`` along with multi-YAML directories.
+        ADR-0005 retired ``<stem>_results/`` along with multi-YAML
+        directories; a Slice is the one thing between the Experiment Directory
+        and its outputs, so the whole recording's stay exactly where they were.
         """
-        return self.experiment_dir
+        if self.experiment_dir is None or self.slice is None:
+            return self.experiment_dir
+        from . import slices
+
+        return slices.output_dir(self.experiment_dir, self.slice.name)
+
+    @property
+    def slice_name(self) -> str | None:
+        """The Slice's name, or ``None`` for the whole recording."""
+        return None if self.slice is None else self.slice.name
+
+    def load_slice(self, name: str | None) -> "Experiment":
+        """The Slice *name* of this recording, loaded the way this one was
+        (``None`` is the whole recording).  Raises
+        :class:`~pyflic.base.slices.SliceNotCovered` when the recording does
+        not reach the Slice's end."""
+        from .yaml_config import load_experiment_yaml
+
+        if self.experiment_dir is None:
+            raise ValueError("a Slice is loaded from an Experiment Directory")
+        options = dict(self.load_options)
+        if options.get("in_project"):
+            ## A Member's design is re-read from project.yaml, the authority: the
+            ## copy taken at load misses a Selection tick or a design edit made
+            ## since, and the sibling would run with the old one.
+            from .project import PROJECT_FILENAME, read_design
+
+            project_dir = Path(self.experiment_dir).parent
+            if (project_dir / PROJECT_FILENAME).is_file():
+                options["design_global"] = dict(read_design(project_dir).get("global")
+                                                or {}) or options.get("design_global")
+        if name is None:
+            ## The whole recording's own group: a Member's comes from the
+            ## design, a standalone experiment's default is general.
+            from . import slices
+
+            options["exclusion_group"] = slices.whole_recording_group(self.global_config)
+        return load_experiment_yaml(self.experiment_dir, slice=name, **options)
+
+    def write_slice_record(self) -> Path | None:
+        """Write ``slices/<name>/slice.json`` for a covered Slice: the
+        definition it ran with, which the stale rule compares with the Design.
+        Nothing for the whole recording."""
+        if self.slice is None or self.experiment_dir is None:
+            return None
+        from . import slices
+
+        return slices.write_record(self.experiment_dir, self.slice,
+                                   tol=slices.tolerance(self.global_config),
+                                   dfm_ends=self.slice_dfm_ends, reason=None)
 
     @property
     def analysis_dir(self) -> Path | None:
@@ -693,7 +760,13 @@ class Experiment:
             buf.write(f"Config: {self.config_path}\n")
         if self.data_dir is not None:
             buf.write(f"Data dir: {self.data_dir}\n")
-        if self.range_minutes is not None:
+        if self.slice is not None:
+            buf.write(f"Slice: {self.slice.name} {self.slice.bounds_label()}: analysed as if "
+                      f"the recording were only these minutes\n")
+            if self.slice.constants:
+                overrides = ", ".join(f"{k} = {v}" for k, v in sorted(self.slice.constants.items()))
+                buf.write(f"Slice cutoffs: {overrides}\n")
+        elif self.range_minutes is not None:
             buf.write(f"Requested range minutes: {self.range_minutes}\n")
         if self.parallel is not None:
             buf.write(f"Parallel: {self.parallel}\n")
@@ -739,8 +812,7 @@ class Experiment:
             buf.write(design_df.to_string(index=False))
             buf.write("\n\n")
 
-        group_label = f"'{self.exclusion_group}'" if self.exclusion_group else "file"
-        buf.write(f"Chambers excluded (group {group_label})\n")
+        buf.write(f"Chambers excluded (group {self.exclusion_groups_label()})\n")
         buf.write("-" * 40 + "\n")
         if self.excluded_chambers:
             total = 0
@@ -2509,27 +2581,65 @@ class Experiment:
                 (self.config or {}).get("global") or {})
         return tuple(self.facet_cutoffs) if self.facet_cutoffs else None
 
-    def facet_windows(self):
-        """``[(start, end), ...]`` for this experiment, or ``[]`` when unfaceted."""
+    def _cutoff_facets(self) -> list[tuple[str, tuple]]:
+        """``[(label, window), ...]`` for the cutoff Facets, before a Slice
+        intersects them: labelled from the whole recording's windows, so a
+        Facet keeps its name in every Slice and pools under it."""
         from . import windowing
 
         cutoffs = self.resolved_facet_cutoffs()
-        return list(windowing.facet_windows(cutoffs)) if cutoffs else []
-
-    def facet_labels(self):
-        """Display labels parallel to :meth:`facet_windows`; for Program
-        Facets, the ordered union of every DFM's labels."""
-        from . import windowing
-
-        if self.facet_source != "cutoffs":
-            return list(self._program_facet_plan().labels)
-        windows = self.facet_windows()
+        windows = list(windowing.facet_windows(cutoffs)) if cutoffs else []
         if not windows:
             return []
         if self.experiment_type is not None:
-            return self.experiment_type.phase_labels_for(
+            labels = self.experiment_type.phase_labels_for(
                 windows, (self.config or {}).get("global") or {})
-        return [windowing.minute_label(w) for w in windows]
+        else:
+            labels = [windowing.minute_label(w) for w in windows]
+        return list(zip(labels, windows))
+
+    def _slice_facets(self) -> list[tuple[str, tuple]]:
+        """The cutoff Facets intersected with the Slice (ADR-0020), the
+        empty ones dropped; all of them for the whole recording."""
+        facets = self._cutoff_facets()
+        if self.slice is None:
+            return facets
+        from . import slices
+
+        out = []
+        for label, window in facets:
+            kept = slices.intersect_window(window, self.slice.bounds)
+            if kept is not None:
+                out.append((label, kept))
+        return out
+
+    def facet_windows(self):
+        """``[(start, end), ...]`` for this experiment, or ``[]`` when
+        unfaceted; within a Slice, each intersected with it."""
+        return [window for _label, window in self._slice_facets()]
+
+    def facet_labels(self):
+        """Display labels parallel to :meth:`facet_windows`; for Program
+        Facets, the ordered union of every DFM's labels (within a Slice, those
+        with a window left in it)."""
+        if self.facet_source != "cutoffs":
+            labels = list(self._program_facet_plan().labels)
+            if self.slice is None:
+                return labels
+            kept = {label for d in self.dfms for label, _w in self.facet_windows_for(d)}
+            return [label for label in labels if label in kept]
+        return [label for label, _window in self._slice_facets()]
+
+    def dropped_facets(self) -> list[str]:
+        """The Facets a Slice leaves no minute of: listed, never silently
+        absent."""
+        if self.slice is None:
+            return []
+        if self.facet_source != "cutoffs":
+            labels = list(self._program_facet_plan().labels)
+            return [label for label in labels if label not in self.facet_labels()]
+        kept = {label for label, _w in self._slice_facets()}
+        return [label for label, _w in self._cutoff_facets() if label not in kept]
 
     @property
     def facet_source(self) -> str:
@@ -2579,8 +2689,18 @@ class Experiment:
         if self.facet_source == "cutoffs":
             return [(label, [tuple(window)])
                     for window, label in zip(self.facet_windows(), self.facet_labels())]
-        return [(label, list(windows))
-                for label, windows in self._program_facet_plan().windows.get(int(dfm_id), [])]
+        facets = [(label, list(windows))
+                  for label, windows in self._program_facet_plan().windows.get(int(dfm_id), [])]
+        if self.slice is None:
+            return facets
+        from . import slices
+
+        out = []
+        for label, windows in facets:
+            kept = slices.intersect_windows(windows, self.slice.bounds)
+            if kept:
+                out.append((label, kept))
+        return out
 
     def facet_notes(self) -> list[str]:
         """What ``summary.txt`` says about the Facets: nothing for cutoffs;
@@ -2589,12 +2709,16 @@ class Experiment:
         from . import program_facets
 
         source = self.facet_source
+        lines: list[str] = []
+        if self.slice is not None and (dropped := self.dropped_facets()):
+            lines.append(f"Slice '{self.slice.name}' {self.slice.bounds_label()}: Facet(s) "
+                         f"{', '.join(dropped)} dropped, no minute of them is in the Slice")
         if not program_facets.is_program_source(source):
-            return []
+            return lines
         plan = self._program_facet_plan()
-        lines = [f"Facets: {program_facets.SOURCE_LABELS[source]} "
-                 f"(facet_source: {source}); {len(plan.labels)} Facet(s): "
-                 f"{', '.join(plan.labels) or 'none'}"]
+        lines += [f"Facets: {program_facets.SOURCE_LABELS[source]} "
+                  f"(facet_source: {source}); {len(plan.labels)} Facet(s): "
+                  f"{', '.join(plan.labels) or 'none'}"]
         lines += [f"  DFM {d}: {program_facets.CLOCK_SCHEDULE_NOTE} (generation "
                   f"{self.dfms[d].generation} records no Program Interval)"
                   for d in plan.clock_dfms]
@@ -2913,8 +3037,9 @@ class Experiment:
         print(f"  DFMs    : {sorted(self.dfms.keys())}", flush=True)
         print("=" * 50, flush=True)
 
-        group_label = f"'{self.exclusion_group}'" if self.exclusion_group else "file"
-        print(f"\nChambers excluded (group {group_label})", flush=True)
+        if self.slice is not None:
+            print(f"  Slice   : {self.slice.name} {self.slice.bounds_label()}", flush=True)
+        print(f"\nChambers excluded (group {self.exclusion_groups_label()})", flush=True)
         print("-" * 40, flush=True)
         if self.excluded_chambers:
             total = 0
@@ -3029,6 +3154,8 @@ class Experiment:
         )
         print(f"  Done → {plot_path}", flush=True)
 
+        record_path = self.write_slice_record()
+
         print("\n" + "=" * 50, flush=True)
         print("Analysis complete.", flush=True)
         print("=" * 50, flush=True)
@@ -3040,6 +3167,7 @@ class Experiment:
             "feeding_summary": feeding_csv_path,
             "feeding_summary_facet": facet_csv_path,
             "feeding_summary_plot": plot_path,
+            **({"slice_record": record_path} if record_path is not None else {}),
             **opto_paths,
             **light_paths,
         }

@@ -26,3 +26,10 @@ Facet column.
 - Existing `analysis_<start>_<end>/` and `<stem>_results/` directories are orphaned.
   pyflic never deletes them; `pyflic lint` reports them (there is no migration tool
   — see CONTEXT.md § Migration).
+
+## Amended by ADR-0020 (2026-10-29)
+
+A Facet windows one analysis, with one set of chambers. A part of the recording that must be
+analysed on its own, with its own exclusions, is now a **Slice**: declared once in the
+Design, written to `slices/<name>/`, and pooled by name. Windowed output directories return
+in that form only; a Facet is still a column.

@@ -199,11 +199,11 @@ them, so a PR config never states `facet_cutoffs` or `facet_source`. A Facet
 is still one named label per row, so every consumer of the Facet column works
 unchanged. Facets are a
 **column**, not a directory: analysis writes `feeding_summary.csv` plus
-`feeding_summary_facet.csv` carrying a Facet column. The Hub's Start/End
-controls select a Facet rather than filtering the load. Replaces the
-retired `analysis_<start>_<end>/` output directories.
+`feeding_summary_facet.csv` carrying a Facet column. Facets window *one*
+analysis; a separate analysis of part of the recording is a **Slice**, and
+Facets split each Slice in turn.
 _Avoid_: window, range, time bin (a bin is the separate `binsize` concept
-used by binned summaries).
+used by binned summaries), slice (a separate analysis, not a column).
 
 **Program Facet**:
 A Facet taken from the Opto Program rather than from minute cutoffs, chosen by
@@ -220,15 +220,35 @@ which states its Program Interval on every row; laid out from the program's
 clock schedule, and so approximate, before it.
 _Avoid_: interval facet, phase (a Phase is a well's Acclimation state).
 
+**Slice**:
+A named part of a recording, from a start minute to an end minute or to the
+end of the recording, analysed as if the recording were only that part: its
+own exclusion groups (none inherited from the whole recording), its own
+auto-removal cutoffs when it states them, its own QC and its own results. The
+Design declares the Slices, so every Member runs every Slice its recording
+**covers** (reaches the Slice's end, within the Design's tolerance), and the
+Combined Analysis pools a Slice by name from those Members alone. The whole
+recording is the implicit Slice every experiment has. Slices may overlap,
+and are never compared with one another: each has its own chamber population.
+A type whose Facets come from the data — one with the Ratio analysis,
+Progressive Ratio or Fixed Ratio — has no Slices.
+_Avoid_: range, window, epoch, analysis window, segment (a DFM file's part).
+
 **Excluded Chamber**:
-A chamber removed from every result. Two live sources, both applied before
+A chamber removed from every result of one analysis — the whole recording,
+or one **Slice**. Two live sources, both applied before
 pooling: a row in that Member's `remove_chambers.csv` under the active
 exclusion group, and `auto_remove_chambers()` driven by the Design's
 `constants:` cutoffs. (A third, `excluded_chambers:` in a `dfms:` entry, was
 already deprecated before this overhaul — the loader warns and ignores it.)
 The file stays per-Member — which chambers are bad is a fact about that
-recording — but the Design names the active `exclusion_group:`, so every
-Member is filtered by the same rule. Authoring in bulk is the **Exclusion
+recording — but the Design names the groups, so every Member is filtered by
+the same rule. Each analysis, the whole recording or a Slice, has one **own
+group** (`exclusion_group:`), the only one its removals are written into, and
+may also exclude the chambers of other groups (`also_exclude:`), never
+inheriting any. A fly dead from the start is listed once, in a group every
+analysis also excludes; a chamber that fails at hour 10 leaves the whole
+recording and stays in a Slice that ends at hour 6. Authoring in bulk is the **Exclusion
 Sheet**'s job, one level up. A Member whose declaration is newer than its saved
 `feeding_summary.csv` reads **"re-run needed"** rather than "analyzed": those
 results describe a chamber population nobody asked for, and a date beside them
@@ -241,7 +261,9 @@ separate, always-reported concern).
 **Combined Analysis**:
 The Project-level results built by stacking each Member's *filtered*
 feeding summaries (auto-removals already applied) with an added `Experiment`
-column. Because DFM ids repeat across Members, DFM is only ever
+column. Built once for the whole recording and once per **Slice**, each
+from the Members whose recording covers it; a Member left out of a Slice is
+named, never silently missing. Because DFM ids repeat across Members, DFM is only ever
 interpreted **within** an Experiment. Statistics run twice: per-chamber
 pooled tests matching the plots, beside a linear mixed model with treatment
 fixed and **DFM nested within Experiment** as the random structure.
@@ -330,15 +352,17 @@ removed chambers), which every run writes because every other item reads it.
 _Avoid_: menu, button list, the options.
 
 **Selection**:
-Which items of the three sets a member's runs include, recorded as what they
-leave *out*: `global.omit:` with `qc:`, `analyses:` and `plots:` lists of
+Which items of the three sets a member's runs include, and which **Slices**
+they run, recorded as what they
+leave *out*: `global.omit:` with `qc:`, `analyses:`, `plots:` and `slices:` lists of
 item ids, in the Project's design for a Member and in `flic_config.yaml` for
 a standalone experiment. A config with no `omit:` runs everything, and an
 item a later version adds is included until someone unticks it. The Hub's
 buttons and a script's `run_qc` / `run_analysis` / `run_plots` steps read the
 same Selection, so they produce the same files; a run states what it left
 out, apart from what did not apply, and removes nothing. *Analyze all* and a
-Batch Run's `run_all_analyses` do not read it: they run Basic analysis.
+Batch Run's `run_all_analyses` do not read it: they run Basic analysis, for
+the whole recording and every Slice.
 _Avoid_: ticks as session state, "include list", preset.
 
 **Experiment Script**:
@@ -849,6 +873,10 @@ _Avoid_: manual, documentation, the docs, USAGE.
 - A **Project**'s **Design** is the authority for every `global:` key in its
   Members; the `dfms:` block stays free, as do per-DFM overrides of the
   physical keys. A Member normally omits `global:` entirely and inherits.
+- A **Design** declares the **Slices**. Every **Member** runs each Slice its
+  recording covers, and a Slice's **Combined Analysis** pools only those
+  Members. **Facets** split each Slice, intersected with it; **Excluded
+  Chambers** are declared per Slice.
 - An **Experiment Type** states the light it expects — none, any, or a set of
   **Paradigm types** — and the **Opto Program** is checked against it;
   OpenLoop light (a whole DFM, or Wells set `On`) and dark Program Intervals
@@ -955,6 +983,12 @@ _Avoid_: manual, documentation, the docs, USAGE.
 
 ## Flagged ambiguities
 
+- "range" and "window" named both a Facet and the retired
+  `analysis_<start>_<end>/` directories, and the request that brought those
+  directories back called the Members "replicates". Resolved: a window within
+  one analysis is a **Facet**; a separate analysis of part of the recording,
+  with its own exclusions and results, is a **Slice**; the experiments pooled
+  are **Members**. "Slice" is not a verb for binning or faceting.
 - "replicate" was the sibling app's word for a Project's children and was
   borrowed wholesale. Resolved: a pyflic Project's children are **Members** —
   different experiments addressing one question, not repeats — and the word

@@ -8,7 +8,7 @@ from typing import Any, Iterable, Literal, Mapping, Sequence
 import numpy as np
 import yaml
 
-from .dfm import DFM
+from .dfm import DFM, EmptyRangeError
 from .experiment import Experiment
 from .experiment_design import ExperimentDesign
 from .hedonic_experiment import HedonicFeedingExperiment
@@ -198,11 +198,35 @@ def _safe_setting(value) -> str:
         return _opto.SETTING_AUTO
 
 
+def _group_label(groups: Sequence[str]) -> str:
+    """``'general'`` or ``'early' + 'dead'`` for the log lines."""
+    return " + ".join(f"'{g}'" for g in groups) or "(none)"
+
+
+def _cache_signature(global_cfg: Mapping[str, Any], excluded: Mapping[int, Sequence[int]],
+                     the_slice) -> str:
+    """What, beyond the config file and the data, shaped a loaded summary.
+    The Selection (``omit:``) and the other Slices' definitions do not, so
+    ticking a box or editing another Slice keeps the entry."""
+    import json
+
+    return json.dumps({
+        "global": {k: v for k, v in global_cfg.items() if k not in ("omit", "slices")},
+        "excluded": {str(k): sorted(int(c) for c in v) for k, v in sorted(excluded.items())},
+        "slice": None if the_slice is None else the_slice.definition(),
+    }, sort_keys=True, default=str)
+
+
 def _load_dfm_for_config(
     dfm_id: int, params: Parameters, data_dir: str | Path, range_minutes: Sequence[float]
-) -> DFM:
-    # Separate top-level helper so process pools can pickle it.
-    return DFM.load(dfm_id, params, data_dir=data_dir, range_minutes=range_minutes)
+) -> DFM | EmptyRangeError:
+    # Separate top-level helper so process pools can pickle it.  A range with
+    # no rows of this DFM comes back as the error rather than raised: a Slice
+    # load reads it as "this recording does not cover the Slice".
+    try:
+        return DFM.load(dfm_id, params, data_dir=data_dir, range_minutes=range_minutes)
+    except EmptyRangeError as err:
+        return err
 
 
 def load_experiment_yaml(
@@ -219,6 +243,7 @@ def load_experiment_yaml(
     design_global: Mapping[str, Any] | None = None,
     in_project: bool = False,
     strict_type: bool = True,
+    slice: str | None = None,
 ) -> Experiment:
     """
     Load an experiment from a experiment directory.
@@ -249,6 +274,14 @@ def load_experiment_yaml(
     strict_type:
         Raise when the config violates its Experiment Type instead of warning.
         The linter passes False so it can report every problem at once.
+    slice:
+        The name of a Slice the design declares (ADR-0020): the recording is
+        clipped to it at load, its own exclusion group and ``also_exclude``
+        groups replace the whole recording's, its ``constants:`` overrides
+        are layered on, and outputs go to ``slices/<name>/``.  Raises
+        :class:`~pyflic.base.slices.SliceNotCovered` when the recording does
+        not reach the Slice's end.  ``None`` (the default) is the whole
+        recording.
 
     Expected YAML structure::
 
@@ -316,6 +349,29 @@ def load_experiment_yaml(
     global_params_present = global_params_node is not None
     ## The type's default cutoffs, with the yaml's values layered on top.
     global_constants = exp_type.resolve_constants(global_cfg)
+
+    ## A Slice (ADR-0020): its clip, its own groups and its auto-removal
+    ## cutoffs replace the whole recording's.  The whole recording keeps the
+    ## caller's exclusion_group and adds the design's also_exclude.
+    from . import slices as _slices
+
+    the_slice = None
+    also_groups = _slices.also_exclude(global_cfg)
+    ## exclusion_group=None loads the design as written (the QC Viewer shows
+    ## every chamber); a Slice still names its own group as the one its
+    ## removals are written to.
+    apply_exclusions = exclusion_group is not None
+    if slice is not None:
+        if not _slices.allows_slices(exp_type):
+            raise _slices.SliceError(f"{path.name}: {_slices.refusal(exp_type)}")
+        if tuple(float(v) for v in range_minutes) != (0.0, 0.0):
+            raise ValueError("pass slice or range_minutes, not both: a Slice states its "
+                             "own range")
+        the_slice = _slices.get_slice(global_cfg, str(slice))
+        range_minutes = the_slice.range_minutes
+        exclusion_group = the_slice.exclusion_group
+        also_groups = the_slice.also_exclude
+        global_constants = {**global_constants, **dict(the_slice.constants)}
     experiment_type: str | None = (
         None if exp_type.is_custom else exp_type.name)
     factors_node = global_cfg.get("experimental_design_factors") or {}
@@ -399,15 +455,23 @@ def load_experiment_yaml(
 
     design = ExperimentDesign(experiment_type=experiment_type)
 
-    # Read file-based exclusions once before the DFM loop.
+    # Read file-based exclusions once before the DFM loop: the own group and
+    # every group it also excludes.  No group at all (exclusion_group=None)
+    # loads the design as written.
     from .exclusions import read_exclusions as _read_exclusions
     file_excl_for_group: dict[int, list[int]] = {}
-    if exclusion_group is not None:
+    applied_groups: list[str] = []
+    if apply_exclusions and exclusion_group is not None:
+        applied_groups = [exclusion_group] + [g for g in also_groups if g != exclusion_group]
         _all_file_excl = _read_exclusions(resolved_experiment_dir)
-        file_excl_for_group = _all_file_excl.get(exclusion_group, {})
+        for group in applied_groups:
+            for dfm_id_, chambers_ in (_all_file_excl.get(group) or {}).items():
+                merged_ = set(file_excl_for_group.get(dfm_id_, [])) | set(chambers_)
+                file_excl_for_group[dfm_id_] = sorted(merged_)
         if file_excl_for_group:
             print(
-                f"\nApplying exclusion group '{exclusion_group}' from remove_chambers.csv:",
+                f"\nApplying exclusion group(s) {_group_label(applied_groups)} from "
+                f"remove_chambers.csv:",
                 flush=True,
             )
 
@@ -511,7 +575,7 @@ def load_experiment_yaml(
             excluded_by_dfm[dfm_id] = sorted(excl_set)
             print(
                 f"  DFM {dfm_id}: excluding chamber(s) {sorted(excl_set)} "
-                f"(group '{exclusion_group}')",
+                f"(group {_group_label(applied_groups)})",
                 flush=True,
             )
 
@@ -585,6 +649,8 @@ def load_experiment_yaml(
     print(f"Loading {n_total} DFM(s) [{dfm_ids_str}] from {data_dir}", flush=True)
 
     loaded: dict[int, DFM] = {}
+    #: DFMs with no row in the range: where each recording ended.
+    empty: dict[int, float] = {}
     if parallel and len(dfm_specs) > 1:
         if executor not in ("threads", "processes"):
             raise ValueError(f"executor must be 'threads' or 'processes', got {executor!r}")
@@ -600,7 +666,11 @@ def load_experiment_yaml(
             for fut in as_completed(futs):
                 dfm_id = futs[fut]
                 try:
-                    loaded[dfm_id] = fut.result()
+                    result = fut.result()
+                    if isinstance(result, EmptyRangeError):
+                        empty[dfm_id] = result.recording_end
+                    else:
+                        loaded[dfm_id] = result
                     n_done += 1
                     print(f"  DFM {dfm_id} done  ({n_done}/{n_total})", flush=True)
                 except Exception as e:  # noqa: BLE001
@@ -617,8 +687,25 @@ def load_experiment_yaml(
     else:
         for n_done, (dfm_id, params, _, _wn, _fl) in enumerate(dfm_specs, 1):
             print(f"  Loading DFM {dfm_id}  ({n_done}/{n_total}) ...", flush=True)
-            loaded[dfm_id] = _load_dfm_for_config(dfm_id, params, data_dir, range_minutes)
+            result = _load_dfm_for_config(dfm_id, params, data_dir, range_minutes)
+            if isinstance(result, EmptyRangeError):
+                empty[dfm_id] = result.recording_end
+            else:
+                loaded[dfm_id] = result
             print(f"  DFM {dfm_id} done", flush=True)
+
+    ## A Slice is pooled only from Members that recorded all of it, every DFM
+    ## reaching its end within the design's tolerance.
+    if the_slice is not None:
+        dfm_ends = {**empty, **{d: float(x.recording_end_minutes) for d, x in loaded.items()
+                               if x.recording_end_minutes is not None}}
+        reason = _slices.coverage(the_slice, dfm_ends, _slices.tolerance(global_cfg))
+        if reason is not None:
+            raise _slices.SliceNotCovered(the_slice, reason, dfm_ends)
+    elif empty:
+        raise ValueError(
+            f"No data in range {tuple(range_minutes)} for DFM(s) {sorted(empty)}: the "
+            f"recording ends at minute {min(empty.values()):.1f}.")
 
     print(f"All {n_total} DFM(s) loaded.", flush=True)
 
@@ -668,11 +755,29 @@ def load_experiment_yaml(
         opto_program=opto_program,
         opto_program_error=opto_program_error,
         program_notes=program_notes,
+        slice=the_slice,
+        also_exclude=tuple(applied_groups[1:]) if apply_exclusions else (),
     )
 
     if excluded_by_dfm:
         exp.excluded_chambers = excluded_by_dfm
     exp.exclusion_group = exclusion_group
+    ## What Experiment.load_slice needs to load a sibling Slice the same way.
+    exp.load_options = {
+        "config_name": config_name, "parallel": parallel, "max_workers": max_workers,
+        "executor": executor, "eager": eager, "use_disk_cache": use_disk_cache,
+        "design_global": dict(design_global) if design_global else None,
+        "in_project": in_project, "strict_type": strict_type,
+    }
+    if the_slice is not None:
+        exp.slice_dfm_ends = {d: float(x.recording_end_minutes) for d, x in loaded.items()
+                              if x.recording_end_minutes is not None}
+
+    ## The disk cache holds the summary of the design as loaded, so its key
+    ## carries everything that shaped it beyond the config file and the data:
+    ## the design's global block (a Member inherits it from project.yaml), the
+    ## chambers excluded and the Slice.
+    cache_extra = _cache_signature(global_cfg, excluded_by_dfm, the_slice)
 
     if not eager:
         print("Skipping feeding-summary pre-compute (eager=False).", flush=True)
@@ -684,6 +789,7 @@ def load_experiment_yaml(
             resolved_experiment_dir,
             range_minutes=(float(range_minutes[0]), float(range_minutes[1])),
             transform_licks=transform_licks_default,
+            extra=cache_extra,
         )
         if cached is not None:
             print("Loaded feeding summary from disk cache.", flush=True)
@@ -699,6 +805,7 @@ def load_experiment_yaml(
                 df, resolved_experiment_dir,
                 range_minutes=(float(range_minutes[0]), float(range_minutes[1])),
                 transform_licks=transform_licks_default,
+                extra=cache_extra,
             )
         except Exception as e:  # pragma: no cover
             print(f"  (disk cache write skipped: {e})", flush=True)

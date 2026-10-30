@@ -94,8 +94,7 @@ Scripts live under a `scripts:` key:
 ```yaml
 scripts:
   - name: "Standard Analysis"
-    start: 0          # minutes; every step reads 0–240 unless it sets its own
-    end: 240
+    slice: first_4h   # every step works on this Slice unless it names its own
     steps:
       - action: remove_chambers
       - action: write_summary
@@ -121,8 +120,8 @@ else is optional. Define as many scripts as you like — each appears in the Scr
 dropdown.
 
 You do not have to write this by hand. The [Script Editor](scripts-editor.md) builds it
-visually. The one thing it has no field for is the script-level `start` and `end`: add
-those in the YAML, and the editor keeps them when it saves.
+visually. The one thing it has no field for is the script-level `slice`: add it in the
+YAML, and the editor keeps it when it saves.
 
 ## The member is already loaded
 
@@ -130,9 +129,9 @@ A script runs on a member that is already loaded: the one you loaded in the Hub,
 `run_in_experiments`, each member as the Project loads it. There is nothing to load first.
 
 Scripts written for earlier versions begin with a `load` step. It still runs, and does
-nothing: its `start`, `end` and `parallel` change nothing. Put the time window on the
-script or on each step instead (see below). Parallel loading is the Project panel's
-**Load DFMs in parallel** option, used when you load a member.
+nothing: its `parallel` changes nothing, and a `start` and `end` on it are retired (see
+[Slices](#slices)). Parallel loading is the Project panel's **Load DFMs in parallel**
+option, used when you load a member.
 
 ## Start with `remove_chambers` and `write_summary`
 
@@ -159,8 +158,8 @@ your results were actually computed from.
 For each step, a parameter is resolved in this order:
 
 1. **The step itself** — `binsize: 30` written on that step
-2. **The script level** — `start:` / `end:` set on the script
-3. **The default** — for `start` and `end`, the whole recording; for `binsize`, the Analyze
+2. **The script level** — `slice:` set on the script
+3. **The default** — for `slice`, the whole recording; for `binsize`, the Analyze
    panel's **Bin size** box when an Experiment Script runs from the Scripts panel, else 30
    minutes (in `run_in_experiments`, and so in a Batch Run). The light figure and the
    Program timeline (10 minutes) and the Progressive Ratio curves (1 minute) keep their own
@@ -168,18 +167,21 @@ For each step, a parameter is resolved in this order:
 
 So a step-level value always wins. A blank `binsize` follows the Hub's Bin size box, which
 lets one script be re-run at another bin by changing it, while the values you *did* pin stay
-pinned. The Hub has no time-window control: a `start` and `end` left blank on both the step
-and the script mean the whole recording.
+pinned. A `slice` left blank on both the step and the script means the whole recording.
 
-## Time windows
+## Slices
 
-`start` and `end` are minutes, and `end: 0` means "through the end of the recording".
-`run_qc`, `run_analysis` and `run_plots` always read the whole recording, as the Hub's
-buttons do: a `start` or `end` does not reach them.
+A step works on the [Slice](concepts-slices.md) its `slice:` names, or the script's: the
+Slice is loaded once, as the member was, and the step's outputs go to `slices/<name>/`. A
+member whose recording does not cover the Slice skips the step and says why.
 
-Outputs always go to `analysis/`, whatever the window, so a second run over a different
-window overwrites the first. To compare phases of one recording, declare
-[Facets](concepts-facets.md) instead: every phase lands in one table, side by side.
+`run_qc`, `run_analysis` and `run_plots` without a `slice` run the whole recording and
+every Slice the Selection keeps, as the Hub's buttons do; with one, that Slice alone.
+
+The `start` and `end` steps once took are retired. A step that still states a window is
+skipped with a log line naming the Slice to declare, and `pyflic lint` lists every such
+script: a window that wrote into `analysis/` overwrote the whole recording's results.
+To compare phases of one analysis side by side, declare [Facets](concepts-facets.md).
 
 ## Running them
 

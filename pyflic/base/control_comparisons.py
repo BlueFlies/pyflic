@@ -189,7 +189,9 @@ def _p_tone(value: Any) -> str | None:
 
 
 def _show_phase(frames: Sequence[tuple[str, pd.DataFrame]]) -> bool:
-    return len(frames) > 1 or (bool(frames) and frames[0][0] != "Whole recording")
+    from .slices import is_whole_label
+
+    return len(frames) > 1 or (bool(frames) and not is_whole_label(frames[0][0]))
 
 
 def role_blocks(frames: Sequence[tuple[str, pd.DataFrame]], roles: Sequence[str], *,

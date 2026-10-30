@@ -25,8 +25,9 @@ scripts. All the *controls* live in the tile's **anchored panel**, which drops d
 you click the tile. One panel is open at a time; click the tile again, click anywhere in
 the background, or press Esc to close it.
 
-**The readout's Loaded line** names the loaded member, and adds a note when its recording
-needs one:
+**The readout's Loaded line** names the loaded member, and the
+[Slice](#the-slice-picker) it is loaded as when it is one, and adds a note when its
+recording needs one:
 
 | Note | Means |
 |---|---|
@@ -158,11 +159,33 @@ used to be invisible here, which is exactly where the fix lives. See
 
 The **Analyzed** column has three values, not two. **re-run needed** means the member's
 `remove_chambers.csv` is newer than its saved analysis: those results describe a chamber
-population you have since said was wrong.
+population you have since said was wrong. With a Slice picked, it also means the Slice's
+definition changed since its run, and a fourth value, **not covered**, means the member's
+recording stops short of the Slice (see [The Slice picker](#the-slice-picker)).
 
 **Load options**, at the foot of the card, govern every load: **Load DFMs in parallel**
 (on by default) and the number of **Workers** (*auto* by default). See
 [Parallel loading](performance.md#parallel-loading).
+
+### The Slice picker
+
+When the design declares [Slices](concepts-slices.md), a **Slice** menu sits above the
+members table: **Whole recording**, then each Slice with its minutes. It chooses which one
+the Hub shows, one at a time:
+
+- the table's **Analyzed** and **Report** columns. **not covered** means the member is left
+  out of the Slice; hover for the reason. See [Coverage](concepts-slices.md#coverage).
+- what a double-click loads. A member that does not cover the Slice is not loaded, and the
+  Hub says why.
+- the loaded member. Picking another Slice reloads it as that Slice, and the status strip
+  names the Slice it is loaded as.
+- so what the QC Viewer opens on, what **View QC plots** and **Open qc folder** show, which
+  figures **Generate plots** opens in tabs (a Slice's tabs end with its name), and which
+  reports **View reports** opens.
+
+It does not choose what runs: **Run QC**, **Run analysis** and **Generate plots** run the
+whole recording and every ticked Slice (see [Slices](#slices)). With no Slices declared, the
+menu is hidden.
 
 ### Adding a member — the same three cases, one level down
 
@@ -199,11 +222,13 @@ Appears when a Project is open, in the order the work happens:
   before, **whatever the QC, Analyze and Plots panels' ticks**: it does not read the
   Selection, and neither does a Batch Run's `run_all_analyses` step. It removes no earlier
   output. To run a member's ticked items, use its own panels, or a script's `run_qc`,
-  `run_analysis` and `run_plots` steps.
+  `run_analysis` and `run_plots` steps. With [Slices](concepts-slices.md) it runs the whole
+  recording and then every Slice the design declares.
 - **Combine** / **Create report** — pool the members' summaries, and write the Project
-  Report.
+  Report: the whole recording's, and each Slice's from the members that cover it.
 - **View reports** — opens the Project Report and each member's own report
-  (`analysis/experiment_report.pdf`). See [Reports](reports.md).
+  (`analysis/experiment_report.pdf`), those of the Slice the picker shows. See
+  [Reports](reports.md).
 - **Apply exclusion sheet…** — see [Excluding chambers in bulk](concepts-exclusions.md).
 - **Plot editor…** / **Render figures** — the Project's publication figures.
   `plot_specs.yaml` and `figures/` live at the project root, so their buttons live here
@@ -253,6 +278,22 @@ left out keeps whatever an earlier run wrote.
 The panels follow the member: they are rebuilt when a member loads, unloads or reloads. The
 Project panel's **Analyze all** and a Batch Run do not read the ticks (see
 [The Analysis card](#the-analysis-card)).
+
+## Slices
+
+When the design declares [Slices](concepts-slices.md), the QC, Analyze and Plots panels each
+end with a **Slices** group: a box per Slice, all ticked to begin with. **Run QC**, **Run
+analysis** and **Generate plots** run the whole recording, then every ticked Slice, each into
+its own `slices/<name>/` folder. The whole recording always runs, so it has no box.
+
+The three groups are one setting: a tick on one panel ticks the other two. Like the other
+ticks it is written at once, to `global.omit.slices`, and a script's `run_qc`, `run_analysis`
+and `run_plots` steps read it too. A member whose recording does not cover a Slice is left
+out of that Slice and the run goes on; the log and its `slice.json` say why.
+
+Each Slice has its own exclusion group; see [Exclusions](concepts-slices.md#exclusions).
+**Analyze all**, **Combine** and **Create report** do not read these boxes: they cover every
+Slice the design declares.
 
 ## QC panel
 
@@ -323,7 +364,9 @@ action and what **Analyze all** runs.
 ## Plots panel
 
 Quick figures for the loaded member, over **Generate plots**, which saves each ticked figure
-into `analysis/` and opens it in a tab, replacing the tab of the same title.
+into `analysis/` and opens it in a tab, replacing the tab of the same title. With
+[Slices](#slices) it saves each ticked Slice's figures too, into `slices/<name>/analysis/`,
+and opens the tabs of the Slice the picker shows.
 
 | Group | Item | Saves into `analysis/` | Offered for |
 |---|---|---|---|

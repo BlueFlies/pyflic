@@ -68,7 +68,7 @@ from . import pubfigures
 from .gui_env import sanitize_input_method_environment
 from .ui import Category, apply_theme, icon
 from .ui import settings as ui_settings
-from .ui.widgets import ActionButton, Card, CardGroup
+from .ui.widgets import ActionButton, Card, CardGroup, NoWheelComboBox
 
 
 def _readable_on(colour: str) -> str:
@@ -105,6 +105,8 @@ class PlotEditorWindow(QMainWindow):
         self.specs.ensure_default_style()
         self._facet_frame = None
         self._binned_frame = None
+        #: ``(facet, binned)`` per Slice (``None``: the whole recording).
+        self._slice_frames: dict = {}
         self._loading = False
 
         central = QWidget()
@@ -253,6 +255,13 @@ class PlotEditorWindow(QMainWindow):
         self.mark_experiments = QCheckBox("Mark members by point shape")
         self.mark_experiments.toggled.connect(self._apply_content)
         form.addRow("", self.mark_experiments)
+
+        ## The Slice the figure draws from (ADR-0020), part of its Spec;
+        ## shown only when the design declares Slices.
+        self.slice_combo = NoWheelComboBox()
+        self.slice_combo.currentIndexChanged.connect(self._on_slice_changed)
+        self.slice_label = QLabel("Slice:")
+        form.addRow(self.slice_label, self.slice_combo)
 
         ## Family-specific rows, built once and shown or hidden, so switching
         ## plots never rebuilds the form (and never steals focus mid-edit).
@@ -487,8 +496,8 @@ class PlotEditorWindow(QMainWindow):
             QMessageBox.critical(self, "Could not open", str(err))
             return
         self.specs = pubfigures.load_project_specs(path)
-        self._facet_frame, self._binned_frame = pubfigures.project_frames(
-            self.project)
+        self._slice_frames = {}
+        self._facet_frame, self._binned_frame = self._frames_for(None)
         self.project_label.setText(
             f"{self.project.name} — {len(self.project.member_names)} "
             f"member(s), {self.project.chamber_layout}")
@@ -506,8 +515,35 @@ class PlotEditorWindow(QMainWindow):
         if path:
             self.open_target(path)
 
+    def _frames_for(self, name: str | None):
+        """``(facet, binned)`` of the whole recording or of Slice *name*,
+        read once per Slice."""
+        if name not in self._slice_frames:
+            try:
+                view = self.project.for_slice(name)
+            except ValueError:
+                view = self.project
+            self._slice_frames[name] = pubfigures.project_frames(view)
+        return self._slice_frames[name]
+
+    def _on_slice_changed(self, *_args) -> None:
+        if self._loading:
+            return
+        spec = self.current_spec()
+        if spec is None:
+            return
+        spec.slice = self.slice_combo.currentData()
+        self._load_spec_into_form()
+        self._render_preview()
+
     def _reload_lists(self) -> None:
         self._loading = True
+        self.slice_combo.clear()
+        self.slice_combo.addItem("Whole recording", None)
+        for item in (self.project.slices if self.project else []):
+            self.slice_combo.addItem(f"{item.name} {item.bounds_label()}", item.name)
+        for widget in (self.slice_combo, self.slice_label):
+            widget.setVisible(self.slice_combo.count() > 1)
         self.plot_combo.clear()
         layout = self.project.chamber_layout if self.project else "two_well"
         modules = self.project.experiment_type if self.project else None
@@ -587,6 +623,10 @@ class PlotEditorWindow(QMainWindow):
             self.ymax.setValue(spec.y_limits[1])
         self.free_y.setChecked(spec.free_y)
         self.mark_experiments.setChecked(spec.mark_experiments)
+        index = self.slice_combo.findData(spec.slice)
+        self.slice_combo.setCurrentIndex(index if index >= 0 else 0)
+        self._facet_frame, self._binned_frame = self._frames_for(
+            self.slice_combo.currentData())
         self.binsize.setValue(spec.binsize)
         self.ribbon.setChecked(spec.ribbon)
 
@@ -668,13 +708,13 @@ class PlotEditorWindow(QMainWindow):
         family = info["family"]
         if family == pubfigures.FAMILY_TIMECOURSE:
             source = pubfigures.frame_for(plot_id, self._facet_frame,
-                                          self._binned_frame, self.project)
+                                          self._binned_frame, self._view())
             if source is None or source.empty:
                 return None
             return pubfigures.timecourse_data(source, info["metric"])
         if family == pubfigures.FAMILY_SCATTER:
             source = pubfigures.frame_for(plot_id, self._facet_frame,
-                                          self._binned_frame, self.project)
+                                          self._binned_frame, self._view())
             if source is None or source.empty:
                 return None
             return pubfigures.breaking_point_data(source)
@@ -682,7 +722,7 @@ class PlotEditorWindow(QMainWindow):
         ## faceted one from the Combined Analysis facet table.
         source = (self._facet_frame if pubfigures.source_of(plot_id) == "facet"
                   else pubfigures.frame_for(plot_id, self._facet_frame,
-                                            self._binned_frame, self.project))
+                                            self._binned_frame, self._view()))
         if source is None or source.empty:
             return None
         return pubfigures.faceted_data(source, info["metric"],
@@ -898,10 +938,18 @@ class PlotEditorWindow(QMainWindow):
             return
         self._save_specs()
         written = pubfigures.render_all(self.project, log=lambda m: None)
+        where = os.path.join(self.project.project_directory, 'figures')
+        if any(spec.slice for spec in self.specs.plots.values()):
+            where += " and slices/<name>/figures"
         QMessageBox.information(
-            self, "Figures rendered",
-            f"Wrote {len(written)} figure(s) into "
-            f"{os.path.join(self.project.project_directory, 'figures')}")
+            self, "Figures rendered", f"Wrote {len(written)} figure(s) into {where}")
+
+    def _view(self):
+        """The Project seen through the current Spec's Slice."""
+        try:
+            return self.project.for_slice(self.slice_combo.currentData())
+        except ValueError:
+            return self.project
 
     def closeEvent(self, event) -> None:  # noqa: N802 (Qt override)
         """Closing flushes the full state — every named style and every

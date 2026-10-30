@@ -31,6 +31,15 @@ global:
     Sex:
     - Male
     - Female
+  # Slices: parts of the recording analysed on their own, each with its own
+  # exclusion group in remove_chambers.csv and its own outputs under
+  # slices/<name>/.  The whole recording is always analysed too (ADR-0020).
+  slices:
+    first_hour:
+      start: 0
+      end: 60
+      constants:
+        min_untransformed_licks_cutoff: 2
 dfms:
 - id: 1
   params:
@@ -132,11 +141,10 @@ scripts:
       - action: basic_analysis
       - action: plot_feeding_summary
 
-  # Time-windowed look at the first hour with a couple of binned metrics.
-  # Script-level start/end apply to every step unless the step overrides them.
+  # The first hour on its own, with a couple of binned metrics.  A script-level
+  # slice applies to every step unless the step names its own.
   - name: first_hour
-    start: 0
-    end: 60
+    slice: first_hour
     steps:
       - action: load
       - action: binned_csv

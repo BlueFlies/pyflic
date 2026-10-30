@@ -140,20 +140,26 @@ def _dispatch(project, action: str, step: dict, log) -> None:
         return
 
     if action == "build_combined_analysis":
-        result = project.build_combined_analysis()
-        for path in result["written"]:
-            log(f"    wrote {os.path.basename(path)}")
-        if result["missing"]:
-            log(f"    omitted (no saved analysis): "
-                f"{', '.join(result['missing'])}")
+        ## The whole recording's, then every Slice's (ADR-0020).
+        results = project.build_all_combined_analyses(log=lambda m: log(f"    {m}"))
+        for name, result in results.items():
+            where = "" if name is None else f"slices/{name}/: "
+            for path in result["written"]:
+                log(f"    {where}wrote {os.path.basename(path)}")
+            if result["missing"]:
+                log(f"    {where}omitted (no saved analysis): "
+                    f"{', '.join(result['missing'])}")
+            if result.get("not_covered"):
+                log(f"    {where}left out (do not cover the Slice): "
+                    f"{', '.join(result['not_covered'])}")
         return
 
     if action == "project_report":
-        from ..project_report import write_project_report
+        from ..project_report import write_all_project_reports
 
-        path = write_project_report(
-            project, ai_summary=bool(step.get("ai_summary", False)), log=log)
-        log(f"    wrote {os.path.basename(path)}")
+        for path in write_all_project_reports(
+                project, ai_summary=bool(step.get("ai_summary", False)), log=log):
+            log(f"    wrote {os.path.relpath(path, project.project_directory)}")
         return
 
     if action == "render_publication_figures":

@@ -50,9 +50,11 @@ lab built, so the recording analyses the same on a machine without your lab's li
 a Project it sits beside `project.yaml` instead. See
 [Experiment types](concepts-experiment-types.md#where-types-live).
 
-Results always go to `analysis/` and `qc/`, whatever time range you analysed. Time windows
-within a recording are [Facets](concepts-facets.md) — a column in the output, not a separate
-folder — so re-running never scatters results across differently named directories.
+The whole recording's results always go to `analysis/` and `qc/`. Time windows within one
+analysis are [Facets](concepts-facets.md) — a column in the output, not a separate folder.
+A part of the recording analysed on its own, with its own excluded chambers, is a
+[Slice](concepts-slices.md), declared once in the design; its results go to
+`slices/<name>/`, so re-running never scatters results across differently named folders.
 
 An Experiment Directory holds exactly **one** configuration. To analyse the same recording
 two ways, make a second Experiment Directory with its own copy of `data/`.

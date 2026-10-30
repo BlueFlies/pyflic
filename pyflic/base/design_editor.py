@@ -8,10 +8,11 @@ and the first one to be edited silently became the standard.
 
 Everything the Design owns (ADR-0005 — experiment type, detection ``params:``,
 ``well_names``, ``transform_licks``, ``constants:``, the design factors, the
-facet cutoffs or ``facet_source``) is authored here, in one place, and every
-Member inherits it.
-The parameter form and the factors table are the config editor's own widgets,
-so the Design is stated in exactly the vocabulary a Member's config uses.
+facet cutoffs or ``facet_source``, the exclusion groups and the Slices of
+ADR-0020) is authored here, in one place, and every Member inherits it.
+The parameter form and the factors and Slices tables are the config editor's
+own widgets, so the Design is stated in exactly the vocabulary a Member's
+config uses.
 
 Modelled on PyTrackingAnalysis's ``ProjectInfoDialog``.
 """
@@ -41,8 +42,16 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from . import experiment_types, project as project_mod
-from .config_editor import _OPTO_CHOICES, FactorsWidget, ParamsForm, _opto_index
+from . import experiment_types, project as project_mod, slices as slices_mod
+from .config_editor import (
+    _OPTO_CHOICES,
+    FactorsWidget,
+    ParamsForm,
+    SlicesWidget,
+    _group_list,
+    _group_text,
+    _opto_index,
+)
 from .experiment_types.progressive_ratio import PR_CONSTANT_FIELDS
 from .opto_qc import DEFAULT_CONSTANTS as OPTO_DEFAULTS
 from .opto_qc import OPTO_CONSTANT_FIELDS
@@ -197,6 +206,7 @@ class ProjectDesignDialog(QDialog):
         body_layout.setSpacing(8)
         body_layout.addWidget(self._build_identity_card(start_dir))
         body_layout.addWidget(self._build_design_card())
+        body_layout.addWidget(self._build_slices_card())
         body_layout.addWidget(self._build_params_card())
         body_layout.addStretch(1)
 
@@ -372,11 +382,23 @@ class ProjectDesignDialog(QDialog):
         self.exclusion_edit = QLineEdit()
         self.exclusion_edit.setPlaceholderText("general")
         self.exclusion_edit.setToolTip(
-            "The group column every member's remove_chambers.csv is read "
-            "under, so one rule filters the whole Project.")
+            "The whole recording's own group: the column every member's "
+            "remove_chambers.csv is read under and written to, so one rule "
+            "filters the whole Project.")
         form.addRow("Exclusion group:", _with_help(
             self.exclusion_edit, "config-structure#globalexclusion-group",
             "The remove_chambers.csv group every member is read under"))
+        ## Beside the group it adds to (ADR-0020): an analysis writes only to
+        ## its own group, and excludes these as well without inheriting them.
+        self.also_exclude_edit = QLineEdit()
+        self.also_exclude_edit.setPlaceholderText("e.g. dead  (comma-separated)")
+        self.also_exclude_edit.setToolTip(
+            "also_exclude — further groups whose chambers the whole recording also "
+            "leaves out; it never writes to them.  A fly dead from the start, listed "
+            "once in such a group, is left out of every analysis that names it.")
+        form.addRow("Also exclude:", _with_help(
+            self.also_exclude_edit, "concepts-slices#exclusions",
+            "Each analysis's own group, and the groups it also excludes"))
 
         ## The Treatment control's level (ADR-0019), for a type that compares
         ## every level of a factor with a control: the type names the factor,
@@ -403,6 +425,19 @@ class ProjectDesignDialog(QDialog):
         card.add_body(hint)
         self.factors_widget = FactorsWidget()
         card.add_body(self.factors_widget)
+        return card
+
+    def _build_slices_card(self) -> Card:
+        ## Declared in the design, so every member runs every Slice its
+        ## recording covers and the Combined Analysis pools each by name.
+        card = Card("Slices", Category.ANALYZE,
+                    subtitle="Optional.  Separate analyses of part of every member's "
+                             "recording, each with its own exclusion groups, QC and "
+                             "results; the whole recording is always analysed as well.")
+        _add_help(card, "concepts-slices#slices-in-the-design",
+                  "Slices: what each column means, and how a Slice is analysed")
+        self.slices_widget = SlicesWidget()
+        card.add_body(self.slices_widget)
         return card
 
     def _build_params_card(self) -> Card:
@@ -529,7 +564,9 @@ class ProjectDesignDialog(QDialog):
         return card
 
     def _on_opto_changed(self) -> None:
-        self.opto_group.setVisible(self.opto_combo.currentData() is not False)
+        shown = self.opto_combo.currentData() is not False
+        self.opto_group.setVisible(shown)
+        self.slices_widget.set_opto_columns_visible(shown)
 
     # ------------------------------------------------------------------
     # Reacting to choices
@@ -660,6 +697,10 @@ class ProjectDesignDialog(QDialog):
         elif not self.labels_edit.text().strip() and item.phase_labels:
             self.labels_edit.setText(", ".join(item.phase_labels))
         self._apply_facet_widgets()
+        ## Like the cutoffs above: a type whose Facets come from the data
+        ## (the Ratio analysis) has no Slices, and says why.
+        self.slices_widget.set_refusal(
+            None if slices_mod.allows_slices(item) else slices_mod.refusal(item))
         factor = (item.definition.treatment_control
                   if item.definition is not None else None)
         self._form.setRowVisible(self._control_level_row, factor is not None)
@@ -889,6 +930,8 @@ class ProjectDesignDialog(QDialog):
         self.labels_edit.setText(
             ", ".join(str(v) for v in (g.get("facet_labels") or [])))
         self.exclusion_edit.setText(str(g.get("exclusion_group") or ""))
+        self.also_exclude_edit.setText(_group_text(g.get("also_exclude")))
+        self.slices_widget.load_values(g)
         self.control_level_edit.setText(str(g.get("control_level") or ""))
         self.factors_widget.load_factors(
             g.get("experimental_design_factors") or {})
@@ -1046,6 +1089,11 @@ class ProjectDesignDialog(QDialog):
         group = self.exclusion_edit.text().strip()
         if group:
             g["exclusion_group"] = group
+        others = _group_list(self.also_exclude_edit.text())
+        if others:
+            g["also_exclude"] = others
+        declared, slice_problems = self.slices_widget.get_values()
+        g.update(declared)
         level = self.control_level_edit.text().strip()
         if level and item.definition is not None and item.definition.treatment_control:
             g["control_level"] = level
@@ -1056,7 +1104,10 @@ class ProjectDesignDialog(QDialog):
         if getattr(self, "_loaded_omit", None):
             g["omit"] = self._loaded_omit
 
-        problems = item.validate(g)
+        ## A Slice that cannot be used is skipped by every run, so the design
+        ## is refused rather than saved with it: the Project's own check.
+        problems = (item.validate(g) + slice_problems
+                    + slices_mod.slice_problems(g, item))
         if problems:
             self._warn("This design is not valid:\n\n  • "
                        + "\n  • ".join(problems))

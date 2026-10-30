@@ -68,6 +68,13 @@ class ScriptContext:
             print(message, flush=True)
 
 
+def _slice_param(value, default: str | None = None) -> str | None:
+    """A ``slice:`` parameter as a Slice name, or *default* when blank."""
+    if value is None or not str(value).strip():
+        return default
+    return str(value).strip()
+
+
 def _save_figure(fig, path: Path, log) -> None:
     """Save a plotnine ggplot or a matplotlib Figure to *path*."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -94,19 +101,54 @@ def run_experiment_script(
     A step gated on a Chamber Layout or Experiment Type the experiment does not
     have is **skipped with a log line**, never an error: a central Experiment
     Script broadcast across members of mixed shape should do what it can.
+
+    A step works on the Slice its ``slice:`` names, or the script's
+    (ADR-0020), loaded once the way *experiment* was; with neither, on
+    *experiment* itself.  ``run_qc``, ``run_analysis`` and ``run_plots``
+    without a Slice run the whole recording and every Slice the Selection
+    keeps, as the Hub's buttons do.  The ``start``/``end`` a step once took
+    are retired: a step that still states a window is skipped with a log line
+    naming the Slice to declare, never run over a window nothing records.
     """
     ctx = context or ScriptContext(log=log)
     if log is not None:
         ctx._log = log
     steps = script.get("steps") or []
     script_name = str(script.get("name") or "general")
-    script_start = float(script.get("start", 0.0) or 0.0)
-    script_end = float(script.get("end", 0.0) or 0.0)
     figures: list[tuple[str, Any]] = []
+    script_slice = _slice_param(script.get("slice"))
 
-    def rm_for(step: dict) -> tuple[float, float]:
-        return (float(step.get("start", script_start)),
-                float(step.get("end", script_end)))
+    def window_for(step: dict) -> tuple[float, float]:
+        ## What a pre-Slice script asked for: a step's start/end, else the
+        ## script's.  (0, 0) is the whole of whatever is loaded.
+        def value(key: str) -> float:
+            raw = step.get(key, script.get(key))
+            try:
+                return float(raw or 0.0)
+            except (TypeError, ValueError):
+                return 0.0
+        return value("start"), value("end")
+
+    slice_cache: dict[str | None, Any] = {}
+
+    def experiment_for(name: str | None):
+        """The experiment a step with Slice *name* works on, or ``None``
+        when the recording does not cover the Slice."""
+        from .. import slices as _slices
+
+        if name is None or name == getattr(experiment, "slice_name", None):
+            return experiment
+        if name not in slice_cache:
+            try:
+                slice_cache[name] = experiment.load_slice(name)
+            except _slices.SliceNotCovered as err:
+                if experiment.experiment_dir is not None:
+                    _slices.write_record(experiment.experiment_dir, err.slice,
+                                         tol=_slices.tolerance(experiment.global_config),
+                                         dfm_ends=err.dfm_ends, reason=err.reason)
+                ctx.log(f"Slice {name}: not covered, left out ({err.reason})")
+                slice_cache[name] = None
+        return slice_cache[name]
 
     from .. import analytics
     from ..metrics import METRIC_DEFAULT_MODE
@@ -114,11 +156,30 @@ def run_experiment_script(
     from ..progressive_ratio_experiment import ProgressiveRatioExperiment
     from ..two_well_experiment import TwoWellExperiment
 
-    exp = experiment
     for index, step in enumerate(steps, start=1):
         action = str(step.get("action", "")).strip().lower()
-        rm = rm_for(step)
+        rm = (0.0, 0.0)
         ctx.log(f"\n[Script step {index}/{len(steps)}] {action}")
+
+        window = window_for(step)
+        if window != (0.0, 0.0):
+            if action == "load":
+                ctx.log(f"[Note] start/end {window} on load are retired and change "
+                        f"nothing (ADR-0020); declare a Slice and name it with slice:.")
+            else:
+                end = f"{window[1]:g}" if window[1] > 0 else "end"
+                ctx.log(f"[Skip] {action}: start/end {window} are retired (ADR-0020). "
+                        f"Declare a Slice with start: {window[0]:g}, end: {end} under "
+                        f"global: slices: and name it with slice: on the step or the script.")
+                continue
+
+        step_slice = _slice_param(step.get("slice"), script_slice)
+        exp = experiment_for(step_slice)
+        if exp is None:
+            ctx.log(f"[Skip] {action}: the recording does not cover Slice {step_slice}.")
+            continue
+        if step_slice is not None:
+            ctx.log(f"(Slice {step_slice})")
 
         if action in _LAYOUT_GATED and not isinstance(exp, TwoWellExperiment):
             ctx.log(f"[Skip] {action} requires a two-well chamber layout.")
@@ -140,8 +201,6 @@ def run_experiment_script(
         if action == "load":
             ## Already loaded by the caller. Kept as a no-op so existing
             ## scripts (which all start with `load`) run unchanged.
-            if ctx.on_range is not None:
-                ctx.on_range(rm[0], rm[1])
             ctx.log("Experiment already loaded.")
 
         elif action == "remove_chambers":
@@ -174,25 +233,30 @@ def run_experiment_script(
 
         elif action == "run_qc":
             ## The QC Set minus the Selection (ADR-0018): with nothing left
-            ## out, the files write_qc_reports writes.
-            from ..run_selection import run_qc
+            ## out, the files write_qc_reports writes.  Without a Slice, the
+            ## whole recording and every Slice the Selection keeps (ADR-0020).
+            from ..run_selection import SELECTED, each_slice, run_qc
 
-            run_qc(exp, log=ctx.log)
-            ctx.log(f"QC reports → {exp.qc_report_dir}")
+            for target in each_slice(exp, only=SELECTED if step_slice is None else step_slice,
+                                     log=ctx.log):
+                run_qc(target, log=ctx.log)
+                ctx.log(f"QC reports → {target.qc_report_dir}")
 
         elif action in ("run_analysis", "run_plots"):
             ## The Hub's Run analysis and Generate plots: the set minus the
-            ## Selection.
-            from ..run_selection import run_analysis, run_plots
+            ## Selection, over the same Slices as run_qc.
+            from ..run_selection import SELECTED, each_slice, run_analysis, run_plots
 
             raw = step.get("binsize")
             bs = ctx.binsize if raw is None or str(raw).strip() == "" else float(raw)
-            if action == "run_analysis":
-                run_analysis(exp, binsize_min=bs, log=ctx.log)
-            else:
-                run = run_plots(exp, metric=str(step.get("metric") or "Licks"),
-                                binsize_min=bs, log=ctx.log)
-                figures.extend(run.figures)
+            for target in each_slice(exp, only=SELECTED if step_slice is None else step_slice,
+                                     log=ctx.log):
+                if action == "run_analysis":
+                    run_analysis(target, binsize_min=bs, log=ctx.log)
+                else:
+                    run = run_plots(target, metric=str(step.get("metric") or "Licks"),
+                                    binsize_min=bs, log=ctx.log)
+                    figures.extend(run.figures)
 
         elif action == "feeding_csv":
             ctx.log(f"Wrote: {exp.write_feeding_summary(range_minutes=rm)}")

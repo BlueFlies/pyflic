@@ -5,10 +5,12 @@ output path was a function of the requested window.  Facets replace that: the
 Project Design fixes ``facet_cutoffs``, every Member is windowed
 identically, and the window travels with the data as a column.
 
-**Windows are half-open — ``[start, end)``.**  That is what makes a faceted
-analysis a true partition of the recording: a lick landing exactly on a cutoff
-belongs to the phase after it and to nothing else.  The final facet always runs
-to ``inf``, so nothing is lost at the tail.
+**Windows are half-open — ``(start, end]``** (:func:`range_mask`).  That is
+what makes a faceted analysis a true partition of the recording: a lick
+landing exactly on a cutoff belongs to the phase before it and to nothing
+else.  The final facet always runs to ``inf``, so nothing is lost at the tail.
+A Slice (ADR-0020) clips the load by the same rule, and Facets are
+intersected with it.
 
 ``(0, 0)`` remains pyflic's sentinel for "the whole recording".
 

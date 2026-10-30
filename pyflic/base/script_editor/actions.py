@@ -149,17 +149,13 @@ class Action:
 # Reusable param building blocks.
 # ---------------------------------------------------------------------------
 
-_START = Param(
-    key="start", label="Start minute", type="float",
-    note="Time window start (minutes). Leave blank to inherit the "
-         "script-level value, or, with none, the whole recording.",
-    default=None, unit="min", inheritable=True,
-)
-_END = Param(
-    key="end", label="End minute", type="float",
-    note="Time window end (minutes). 0 means 'through end of recording'. "
-         "Leave blank to inherit.",
-    default=None, unit="min", inheritable=True,
+_SLICE = Param(
+    key="slice", label="Slice", type="string",
+    note="The Slice of the recording the step works on, by the name the "
+         "design gives it (ADR-0020): its own clip, exclusions and outputs "
+         "under slices/<name>/. Leave blank to inherit the script-level "
+         "value, or, with none, the whole recording.",
+    default=None, inheritable=True,
 )
 _BINSIZE = Param(
     key="binsize", label="Bin size", type="float",
@@ -196,8 +192,10 @@ ACTIONS: list[Action] = [
                        "loading is on by default; turn it off with the Hub's "
                        "Load DFMs in parallel option.",
                   default=None, inheritable=True),
-            _START, _END,
         ],
+        notes="A step's slice: parameter, or the script's, chooses the Slice "
+              "a step works on; the start and end this step once took are "
+              "retired (ADR-0020).",
     ),
     Action(
         action="write_summary",
@@ -231,28 +229,33 @@ ACTIONS: list[Action] = [
         label="Basic analysis",
         blurb="Run the built-in feeding-summary analysis pipeline.",
         icon="basic", category=Category.ANALYZE, produces="none",
-        params=[_START, _END],
+        params=[_SLICE],
     ),
     Action(
         action="run_qc",
         label="Run QC",
         blurb="The QC Set minus the Selection: QC reports and signal plots into qc/.",
         icon="qc", category=Category.QC, produces="none",
+        params=[_SLICE],
         notes="What the Hub's Run QC runs: every item of the QC Set the "
               "experiment's global.omit.qc does not leave out — integrity "
               "report, data breaks, simultaneous feeding and bleeding matrices "
               "(two-well), the per-DFM Raw Signal, Baselined and Cumulative "
               "Licks plots the QC Viewer shows, the optogenetic light QC and "
               "Program timeline, and Progressive Ratio's light QC.  With "
-              "nothing left out it writes what write_qc_reports writes.",
+              "nothing left out it writes what write_qc_reports writes.  "
+              "Without a slice it runs the whole recording and every Slice "
+              "global.omit.slices does not leave out, as the Hub does.",
     ),
     Action(
         action="run_analysis",
         label="Run analysis",
         blurb="The core, then the Analysis Set minus the Selection; the report last.",
         icon="basic", category=Category.ANALYZE, produces="csv",
-        params=[_BINSIZE],
-        notes="What the Hub's Run analysis runs.  The core always runs first: "
+        params=[_BINSIZE, _SLICE],
+        notes="What the Hub's Run analysis runs, for the whole recording and "
+              "every Slice global.omit.slices does not leave out (only the "
+              "step's slice, when it names one).  The core always runs first: "
               "the auto-removal and removed_chambers.csv, summary.txt, "
               "feeding_summary.csv and, with Facets, feeding_summary_facet.csv.  "
               "Then every item of the Analysis Set the experiment's "
@@ -267,7 +270,7 @@ ACTIONS: list[Action] = [
         label="Write feeding CSV",
         blurb="Dump the per-chamber feeding summary to a CSV file.",
         icon="csv", category=Category.ANALYZE, produces="csv",
-        params=[_START, _END],
+        params=[_SLICE],
     ),
     Action(
         action="facet_csv",
@@ -283,7 +286,7 @@ ACTIONS: list[Action] = [
         label="Write binned feeding CSV",
         blurb="Per-chamber feeding metrics binned over time.",
         icon="binned", category=Category.ANALYZE, produces="csv",
-        params=[_BINSIZE, _START, _END],
+        params=[_BINSIZE, _SLICE],
     ),
     Action(
         action="weighted_duration",
@@ -291,7 +294,7 @@ ACTIONS: list[Action] = [
         blurb="Weighted-duration summary (hedonic paradigm).",
         icon="weighted", category=Category.ANALYZE, produces="csv",
         requires="hedonic",
-        params=[_START, _END],
+        params=[_SLICE],
         notes="Writes analysis/treatment_means.csv: per treatment and well, the "
               "chambers' median bout duration, plain and weighted by events.",
     ),
@@ -310,7 +313,7 @@ ACTIONS: list[Action] = [
                   choices=["feeding", "tasting"],
                   note="Which event class to export.",
                   default="feeding"),
-            _START, _END,
+            _SLICE,
         ],
     ),
     Action(
@@ -340,7 +343,7 @@ ACTIONS: list[Action] = [
             Param(key="seed", label="Random seed", type="int",
                   note="Optional — set for reproducibility.",
                   default=0),
-            _START, _END,
+            _SLICE,
         ],
     ),
     Action(
@@ -364,7 +367,7 @@ ACTIONS: list[Action] = [
                   note="Optional comma-separated list of design factors to "
                        "include in the model.",
                   default=None),
-            _START, _END,
+            _SLICE,
         ],
     ),
     Action(
@@ -391,7 +394,7 @@ ACTIONS: list[Action] = [
             Param(key="values", label="Values", type="list_float",
                   note="Comma-separated numeric values to sweep through.",
                   default=None, required=True),
-            _START, _END,
+            _SLICE,
         ],
     ),
     Action(
@@ -400,7 +403,7 @@ ACTIONS: list[Action] = [
         blurb="Transition probabilities between bout types.",
         icon="transition", category=Category.ANALYZE, produces="csv",
         requires="two_well",
-        params=[_START, _END],
+        params=[_SLICE],
     ),
     Action(
         action="pdf_report",
@@ -412,7 +415,7 @@ ACTIONS: list[Action] = [
                   note="Comma-separated metric names, e.g. "
                        "Licks, Events, MedDuration.",
                   default="Licks, Events, MedDuration"),
-            _BINSIZE, _START, _END,
+            _BINSIZE, _SLICE,
         ],
     ),
 
@@ -427,19 +430,21 @@ ACTIONS: list[Action] = [
                   note="The Chosen metric: the binned time course's and the "
                        "dot plot's.",
                   default="Licks", required=True),
-            _BINSIZE,
+            _BINSIZE, _SLICE,
         ],
         notes="What the Hub's Generate plots runs: every item of the Plot Set "
               "the experiment's global.omit.plots does not leave out — the "
               "feeding summary, Well A vs B (two-well), the binned time course "
-              "and dot plot of the metric, and the type's own figures.",
+              "and dot plot of the metric, and the type's own figures — for the "
+              "whole recording and every Slice global.omit.slices does not leave "
+              "out (only the step's slice, when it names one).",
     ),
     Action(
         action="plot_feeding_summary",
         label="Feeding summary plot",
         blurb="Bar / jitter plot of per-chamber feeding metrics.",
         icon="feeding", category=Category.PLOTS, produces="figure",
-        params=[_START, _END],
+        params=[_SLICE],
     ),
     Action(
         action="plot_binned",
@@ -454,7 +459,7 @@ ACTIONS: list[Action] = [
                   choices=["total", "A", "B", "mean_ab"],
                   note="Which well/aggregation.",
                   default=None, derived_from="metric"),
-            _BINSIZE, _START, _END,
+            _BINSIZE, _SLICE,
         ],
     ),
     Action(
@@ -470,7 +475,7 @@ ACTIONS: list[Action] = [
                   choices=["total", "A", "B", "mean_ab"],
                   note="Which well/aggregation.",
                   default=None, derived_from="metric"),
-            _START, _END,
+            _SLICE,
         ],
         notes="One point per chamber, mean ± SEM over each treatment. On a "
               "Progressive Ratio member it is instead one point per Chamber "
@@ -491,7 +496,7 @@ ACTIONS: list[Action] = [
                   choices=["total", "A", "B", "mean_ab"],
                   note="Which well/aggregation.",
                   default=None, derived_from="metric"),
-            _MM_WINDOW, _MM_STEP, _START, _END,
+            _MM_WINDOW, _MM_STEP, _SLICE,
         ],
         notes="The moving-window counterpart to the binned plot: the same "
               "metric set, but values are computed over overlapping windows "
@@ -510,7 +515,7 @@ ACTIONS: list[Action] = [
                   note="Two-well only: average wells A/B or pick one. "
                        "Ignored for single-well designs.",
                   default="mean_ab"),
-            _START, _END,
+            _SLICE,
         ],
         notes="Median feeding-bout duration computed over a sliding window "
               "(see 'window'/'step'), drawn as one trajectory per chamber and "
@@ -528,7 +533,7 @@ ACTIONS: list[Action] = [
                   note="Two-well only: average wells A/B or pick one. "
                        "Ignored for single-well designs.",
                   default="mean_ab"),
-            _START, _END,
+            _SLICE,
         ],
         notes="Per-treatment mean (± SEM across chambers) of the sliding-window "
               "median feeding-bout duration at each time point. Not part of any "
@@ -544,7 +549,7 @@ ACTIONS: list[Action] = [
             Param(key="metric", label="Metric", type="well_metric",
                   note="Which metric to compare.",
                   default="MedDuration", required=True),
-            _START, _END,
+            _SLICE,
         ],
     ),
     Action(
@@ -553,7 +558,7 @@ ACTIONS: list[Action] = [
         blurb="Hedonic-specific feeding plot.",
         icon="feeding", category=Category.PLOTS, produces="figure",
         requires="hedonic",
-        params=[_START, _END],
+        params=[_SLICE],
     ),
     Action(
         action="paired_yoked_diff",

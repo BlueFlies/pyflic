@@ -17,6 +17,7 @@ from PyQt6.QtCore import QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QIcon, QPalette, QPixmap, QTextCursor
 from PyQt6.QtWidgets import (
     QButtonGroup,
+    QComboBox,
     QFrame,
     QGroupBox,
     QHBoxLayout,
@@ -513,6 +514,19 @@ def _restore_visibility(widget: QWidget, state: tuple[bool, bool]) -> None:
 # ---------------------------------------------------------------------------
 # Action button
 # ---------------------------------------------------------------------------
+
+class NoWheelComboBox(QComboBox):
+    """A combo box the mouse wheel never changes.
+
+    The wheel is passed on to the panel around it, so scrolling a window
+    whose pointer happens to cross the box scrolls the window instead of
+    quietly picking another entry — for a Slice picker, another Slice, and a
+    reload of what it shows.  Click it, or use the keyboard, to choose.
+    """
+
+    def wheelEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        event.ignore()
+
 
 class ActionButton(QPushButton):
     """QPushButton with a category-coloured left accent and themed icon.

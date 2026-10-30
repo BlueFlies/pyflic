@@ -27,14 +27,45 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, Iterator
 
 from . import selections as sel
 from .selections import ANALYSES, PLOTS, QC, Item
 
-#: The time window every item reads: the whole recording, as the Hub's
-#: buttons ran the single actions.
+#: The time window every item reads: all of the loaded experiment, the whole
+#: recording or the Slice it was loaded as (ADR-0020).
 WHOLE_RECORDING: tuple[float, float] = (0.0, 0.0)
+#: :func:`each_slice`'s default: the whole recording and every Slice the
+#: Selection does not leave out.
+SELECTED = object()
+
+
+def each_slice(exp, *, only: Any = SELECTED, log=print) -> Iterator[Any]:
+    """The experiments a Hub run covers (ADR-0020): the whole recording,
+    then every Slice ``global.omit.slices`` does not leave out, each loaded
+    the way *exp* was (*exp* itself is reused for the one it is).  *only*
+    names one Slice instead (``None``: the whole recording alone).
+
+    A Member that does not cover a Slice has that recorded in
+    ``slices/<name>/slice.json`` and is logged, not raised: it is left out of
+    that Slice, not failed."""
+    from . import slices as _slices
+
+    names = [None] + sel.selected_slices(exp) if only is SELECTED else [only]
+    for name in names:
+        if name == getattr(exp, "slice_name", None):
+            yield exp
+            continue
+        if name is not None:
+            log(f"--- Slice {name} ---")
+        try:
+            yield exp.load_slice(name)
+        except _slices.SliceNotCovered as err:
+            if exp.experiment_dir is not None:
+                _slices.write_record(exp.experiment_dir, err.slice,
+                                     tol=_slices.tolerance(exp.global_config),
+                                     dfm_ends=err.dfm_ends, reason=err.reason)
+            log(f"Slice {name}: not covered, left out ({err.reason})")
 #: The resolution of the Progressive Ratio's cumulative curves, the table's
 #: and the figures' — their script actions' default (and Basic analysis's),
 #: not the Bin size, which is the binned summary's, the report's and the

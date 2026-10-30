@@ -154,7 +154,8 @@ def test_the_range_filter_applies_to_the_paradigm_state(tmp_path):
     dfm = e.dfms[1]
     assert len(dfm.paradigm) == len(dfm.raw_df) > 0
     assert np.array_equal(dfm.paradigm.index, dfm.raw_df["Index"])
-    assert dfm.raw_df["Minutes"].min() > 10 and dfm.raw_df["Minutes"].max() < 20
+    ## (10, 20]: the end minute is kept, as in every Facet window (ADR-0020).
+    assert dfm.raw_df["Minutes"].min() > 10 and dfm.raw_df["Minutes"].max() <= 20
     full = results[1].rows.set_index("Index")
     assert np.array_equal(dfm.paradigm.on_ms[:, 0],
                           full.loc[dfm.raw_df["Index"], "OnMs1"].to_numpy(dtype=np.int64))
@@ -377,7 +378,7 @@ def test_the_cache_key_follows_program_and_messages(tmp_path):
     spec, results = choice()
     root = recording_dir(tmp_path, spec, results=results, program=False, messages=False)
     key = lambda: cache.feeding_summary_key(root, range_minutes=(0, 0), transform_licks=False)  # noqa: E731
-    assert cache._CACHE_VERSION == "3" and key().startswith("v3_")
+    assert cache._CACHE_VERSION == "4" and key().startswith("v4_")
     bare = key()
     program = root / "data" / "Program.txt"
     program.write_text(program_text(spec), encoding="utf-8")

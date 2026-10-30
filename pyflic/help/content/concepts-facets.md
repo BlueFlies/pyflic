@@ -19,10 +19,13 @@ global:
 gives three facets: `0-10 min`, `10-70 min`, `70+ min`.
 
 Older versions wrote windowed results into `analysis_0_360/` directories, so an output path
-was a function of the window you happened to ask for. That is retired. Two things made it
-untenable: outputs are now always in `analysis/`, and pooling could not work — a Combined
-Analysis stacking members would have to *guess* which of a member's window
-directories was the one to pool.
+was a function of the window you happened to ask for, and pooling could not work — a
+Combined Analysis stacking members would have to *guess* which of a member's window
+directories was the one to pool. Facets cover the windows of *one* analysis. When a part of
+the recording needs to be analysed on its own, with its own excluded chambers, declare a
+[Slice](concepts-slices.md): a named, separate analysis that every member runs and the
+Project pools by name. Facets then split each Slice, each window cut to the Slice and one
+left empty dropped.
 
 ## Half-open windows
 
