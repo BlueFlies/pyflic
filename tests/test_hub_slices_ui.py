@@ -366,36 +366,63 @@ def _figure():
     return fig
 
 
-def test_generate_plots_runs_every_ticked_slice_and_opens_the_shown_ones(
-        hubs, tmp_path, monkeypatch):
+def test_generate_plots_runs_the_step_and_opens_the_shown_slices_figures(
+        hubs, tmp_path, monkeypatch, told):
+    """The button runs the run_plots step, as Run QC and Run analysis run
+    theirs (ADR-0018): every ticked Slice's files are the step's.  The step
+    hands back each Slice's figures titled with its name, and the Hub opens
+    the shown Slice's."""
+    from pyflic.base.script_editor import runner
+
     hub = hubs(_project(tmp_path))
     _loaded(hub, "long", "early")
     hub._slice_boxes[sel.PLOTS]["mid"].setChecked(False)
-    calls: list[tuple] = []
+    calls: list[str | None] = []
+    steps: list = []
 
-    def run_plots(target, *, metric, binsize_min, log, keep_figures):
-        calls.append((target.slice_name, keep_figures))
-        run = run_selection.SelectionRun(kind=sel.PLOTS)
-        if keep_figures:
-            run.figures = [("Feeding Summary", _figure())]
-        return run
+    def run_items(exp, run, todo, ctx):
+        calls.append(exp.slice_name)
+        ctx.figure("Feeding Summary", _figure())
 
-    monkeypatch.setattr(run_selection, "run_plots", run_plots)
+    real = runner.run_experiment_script
+
+    def run_script(exp, script, *, context=None):
+        steps.append(script["steps"])
+        return real(exp, script, context=context)
+
+    monkeypatch.setattr(run_selection, "_run_items", run_items)
+    monkeypatch.setattr(runner, "run_experiment_script", run_script)
     hub.generate_plots_btn.click()
     _finish(hub)
+    assert told == []
+    assert steps == [[{"action": "run_plots", "metric": hub.plot_metric.currentData(),
+                       "binsize": hub.spin_binsize.value()}]]
     ## The whole recording, then each ticked Slice; only the shown one's
-    ## figures come back, under its name.
-    assert calls == [(None, False), ("early", True), ("late", False)]
+    ## figures are opened, under its name.
+    assert calls == [None, "early", "late"]
     titles = [hub.dock.tabText(i) for i in range(hub.dock.count())]
-    assert "Feeding Summary · early" in titles and "Feeding Summary" not in titles
+    assert "Feeding Summary · Slice early" in titles
+    assert "Feeding Summary" not in titles and "Feeding Summary · Slice late" not in titles
 
     ## Shown but unticked: nothing drawn for it, and the log says so.
     calls.clear()
     hub._slice_boxes[sel.PLOTS]["early"].setChecked(False)
     hub.generate_plots_btn.click()
     _finish(hub)
-    assert calls == [(None, False), ("late", False)]
+    assert calls == [None, "late"]
     assert "Slice early was not in this run, so no figure is shown" in hub.log.toPlainText()
+
+
+def test_a_slices_figures_are_titled_with_its_name(tmp_path):
+    """run_plots names the Slice in each figure's title, so a script run
+    across Slices returns figures a reader can tell apart."""
+    root = _standalone(tmp_path / "alone")
+    early = _quiet(load_experiment_yaml, root, parallel=False, slice="early")
+    omit = [item.id for item in sel.items(sel.PLOTS) if item.id != "feeding_summary_plot"]
+    run = _quiet(run_selection.run_plots, early, omit=omit, log=lambda _m: None)
+    assert [title for title, _fig in run.figures] == ["Feeding Summary · Slice early"]
+    assert run_selection.title_slice(run.figures[0][0]) == "early"
+    assert run_selection.title_slice("Feeding Summary") is None
 
 
 def test_run_qc_writes_the_whole_recording_and_each_ticked_slice(hubs, tmp_path):
@@ -564,6 +591,43 @@ def test_a_loaded_slice_saves_exclusions_to_its_own_group(app, tmp_path):
         win.close()
 
 
+def test_a_standalone_configs_exclusion_group_is_read_by_every_load(app, tmp_path, told):
+    """global.exclusion_group: main is the whole recording's group wherever
+    it is loaded: the Hub, the QC Viewer's Load tab, and each_slice reloading
+    the whole recording from a Slice — never general's rows (U1)."""
+    from pyflic.base.exclusions import write_exclusions
+
+    root = _standalone(tmp_path / "alone", exclusion_group="main")
+    write_exclusions(root, "main", {1: [2]})
+    write_exclusions(root, "general", {1: [5]})
+
+    hub = AnalysisHubWindow()
+    try:
+        assert hub._load_standalone(str(root))
+        _finish(hub)
+        assert told == []
+        assert hub.experiment.exclusion_group == "main"
+        assert hub.experiment.excluded_chambers == {1: [2]}
+    finally:
+        hub.close()
+
+    ## The Load tab's load excludes nothing, and saves to the design's group.
+    exp = _quiet(load_experiment_yaml, root, parallel=False, exclusion_group=None)
+    assert exp.excluded_chambers == {} and exp.exclusion_group == "main"
+    viewer = qc_viewer.MainWindow(root, experiment=exp)
+    try:
+        assert viewer._active_group() == "main"
+        ## Ticked from main's rows: chamber 2 is wells 3 and 4.
+        assert viewer._dfm_tab_widgets[1].get_excluded_wells() == [3, 4]
+    finally:
+        viewer.close()
+
+    early = _quiet(load_experiment_yaml, root, parallel=False, slice="early")
+    whole = next(run_selection.each_slice(early, only=None, log=lambda _m: None))
+    assert whole.slice_name is None and whole.exclusion_group == "main"
+    assert whole.excluded_chambers == {1: [2]}
+
+
 def test_the_hub_opens_the_viewer_on_the_slice_it_shows(hubs, ran_project):
     hub = hubs(ran_project)
     exp = _loaded(hub, "long", "late")
@@ -576,12 +640,27 @@ def test_the_hub_opens_the_viewer_on_the_slice_it_shows(hubs, ran_project):
         hub._qc.close()
 
 
-def test_the_wheel_scrolls_past_every_slice_dropdown(hubs, tmp_path):
-    """A wheel over a Slice picker leaves the Slice alone and passes the scroll
-    on to the window: picking a Slice reloads what the window shows."""
+def _wheel(widget, step: int):
+    """Send *widget* a wheel event, as a pointer passing over it does."""
     from PyQt6.QtCore import QPoint, QPointF, Qt
     from PyQt6.QtGui import QWheelEvent
 
+    event = QWheelEvent(QPointF(5, 5), QPointF(5, 5), QPoint(0, 0), QPoint(0, step),
+                        Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier,
+                        Qt.ScrollPhase.NoScrollPhase, False)
+    QApplication.sendEvent(widget, event)
+    return event
+
+
+def _value(widget):
+    from PyQt6.QtWidgets import QComboBox
+
+    return widget.currentIndex() if isinstance(widget, QComboBox) else widget.value()
+
+
+def test_the_wheel_scrolls_past_every_slice_dropdown(hubs, tmp_path):
+    """A wheel over a Slice picker leaves the Slice alone and passes the scroll
+    on to the window: picking a Slice reloads what the window shows."""
     from pyflic.base.ui.widgets import NoWheelComboBox
 
     root = _project(tmp_path)
@@ -591,9 +670,39 @@ def test_the_wheel_scrolls_past_every_slice_dropdown(hubs, tmp_path):
     for combo in combos:
         assert isinstance(combo, NoWheelComboBox)
         before = combo.currentIndex()
-        event = QWheelEvent(QPointF(5, 5), QPointF(5, 5), QPoint(0, 0), QPoint(0, -120),
-                            Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier,
-                            Qt.ScrollPhase.NoScrollPhase, False)
-        combo.wheelEvent(event)
+        event = _wheel(combo, -120)
         assert combo.currentIndex() == before and not event.isAccepted()
     viewer.close()
+
+
+def test_the_wheel_changes_nothing_on_any_hub_panel(app, tmp_path, told):
+    """Every panel scrolls, so every combo and spin box on one ignores the
+    wheel: the worker count, the Project and Batch scripts and the rest.  The
+    Batch script above all, whose change is written to batch.yaml at once."""
+    from PyQt6.QtWidgets import QAbstractSpinBox, QComboBox
+
+    from pyflic.base.ui.widgets import NoWheelComboBox, NoWheelDoubleSpinBox, NoWheelSpinBox
+
+    batch = tmp_path / "batch"
+    batch.mkdir()
+    _project(batch)
+    hub = AnalysisHubWindow(target=str(batch))
+    try:
+        assert hub.batch_script.count() > 1
+        hosted = [w for panel in hub.panels.values()
+                  for w in panel.findChildren((QComboBox, QAbstractSpinBox))]
+        for widget in (hub.spin_workers, hub.project_script, hub.batch_script,
+                       hub.spin_binsize, hub.ai_provider):
+            assert widget in hosted
+        ## Placed on the Plots panel once a member is loaded.
+        hosted.append(hub.plot_metric)
+        for widget in hosted:
+            assert isinstance(widget, (NoWheelComboBox, NoWheelSpinBox,
+                                       NoWheelDoubleSpinBox)), widget
+            before = _value(widget)
+            for step in (-120, 120):
+                _wheel(widget, step)
+            assert _value(widget) == before, widget
+        assert not (batch / "batch.yaml").exists()
+    finally:
+        hub.close()

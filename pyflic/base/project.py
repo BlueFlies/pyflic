@@ -434,7 +434,9 @@ class Project:
             for k, vals in (source.get("experimental_design_factors")
                             or {}).items()
         }
-        self.exclusion_group = source.get("exclusion_group", "general")
+        ## A blank exclusion_group: is general, as the loader reads it; None
+        ## here would reach load_member as "exclude nothing".
+        self.exclusion_group = slices.whole_recording_group(source)
         ## Slices (ADR-0020): the usable ones; the rest are warnings.
         self.also_exclude = slices.also_exclude(source)
         self.slice_tolerance = slices.tolerance(source)
@@ -652,10 +654,15 @@ class Project:
         return [whole] + [whole.for_slice(s.name) for s in whole.slices]
 
     @property
+    def transform_licks(self) -> bool:
+        """Whether the Members' Licks are on the fourth-root scale: the
+        Design's ``transform_licks``, true when unset, as the loader reads it."""
+        return bool(self.design_global.get("transform_licks", True))
+
+    @property
     def exclusion_groups(self) -> tuple[str, ...]:
         """The groups this view excludes: its own first, then also_exclude."""
-        return (self.exclusion_group,) + tuple(
-            g for g in self.also_exclude if g != self.exclusion_group)
+        return slices.exclusion_groups(self.exclusion_group, self.also_exclude)
 
     def view_label(self) -> str:
         """``"whole recording"`` or ``"Slice early (0, 360] min"``."""
@@ -676,6 +683,15 @@ class Project:
             return None
         return slices.read_record(self.member_dir(name), self.slice.name)
 
+    def _current_record(self, name: str) -> dict | None:
+        """:meth:`slice_record`, or ``None`` when it was left by a run of
+        another definition of the Slice: whether the Member covers the Slice
+        as the Design now states it is then unknown until it runs again."""
+        record = self.slice_record(name)
+        if record is None or slices.definition_changed(record, self.slice):
+            return None
+        return record
+
     def not_covered(self) -> dict[str, str]:
         """``{member: reason}`` for the Members whose recording does not
         cover this Slice, as their last run of it recorded."""
@@ -683,7 +699,7 @@ class Project:
         if self.slice is None:
             return out
         for name in self.member_names:
-            record = self.slice_record(name)
+            record = self._current_record(name)
             if record is not None and not record.get("covered", True):
                 out[name] = str(record.get("reason") or "does not cover the Slice")
         return out
@@ -695,10 +711,13 @@ class Project:
             return None
         rows = []
         for name in self.member_names:
-            record = self.slice_record(name)
+            record = self._current_record(name)
             if record is None:
+                why = ("this Slice has not been run for the Member"
+                       if self.slice_record(name) is None else
+                       "the Slice has changed since the Member last ran it")
                 rows.append({"Experiment": name, "Covered": "not run", "ActualEndMin": None,
-                             "Reason": "this Slice has not been run for the Member"})
+                             "Reason": why})
                 continue
             rows.append({"Experiment": name,
                          "Covered": "yes" if record.get("covered", True) else "no",
@@ -762,12 +781,17 @@ class Project:
         if self.slice is not None:
             kwargs.setdefault("slice", self.slice.name)
         kwargs.setdefault("exclusion_group", self.whole.exclusion_group)
-        return load_experiment_yaml(
+        exp = load_experiment_yaml(
             self.member_dir(name),
             design_global=self.design_global or None,
             in_project=True,
             **kwargs,
         )
+        ## project.yaml is the authority: a Slice the Member loads next reads
+        ## the design as it is then, a Selection tick since included.
+        directory = self.project_directory
+        exp.design_source = lambda: dict(read_design(directory).get("global") or {})
+        return exp
 
     #: Pre-ADR-0009 spellings.  ``Project.experiment_names`` and friends are
     #: the names the sibling app still uses, and notebooks written against
@@ -958,12 +982,16 @@ class Project:
             "reason": None,
         }
         if self.slice is not None:
+            ## A record of another definition says nothing of this one, not
+            ## even whether the recording covers it: what that run wrote is
+            ## stale, and coverage is unknown until the Slice runs again.
             record = self.slice_record(name)
-            status["covered"] = None if record is None else bool(record.get("covered", True))
-            status["reason"] = None if record is None else record.get("reason")
+            current = self._current_record(name)
+            status["covered"] = None if current is None else bool(current.get("covered", True))
+            status["reason"] = None if current is None else current.get("reason")
             if status["covered"] is False:
                 status["analyzed"] = False
-            elif record is not None and slices.definition_changed(record, self.slice):
+            elif record is not None and current is None:
                 status["stale"] = True
         if status["analyzed"]:
             try:
@@ -1003,9 +1031,7 @@ class Project:
                 try:
                     exp = view.load_experiment(name)
                 except slices.SliceNotCovered as err:
-                    slices.write_record(view.member_dir(name), err.slice,
-                                        tol=view.slice_tolerance, dfm_ends=err.dfm_ends,
-                                        reason=err.reason)
+                    slices.record_not_covered(view.member_dir(name), err)
                     log(f"[{tag}] not covered — left out of this Slice: {err.reason}")
                     continue
                 except Exception as err:  # noqa: BLE001
@@ -1058,6 +1084,18 @@ class Project:
         summary = pd.concat(summaries, ignore_index=True) if summaries else None
         facet = pd.concat(facets, ignore_index=True) if facets else None
         return summary, facet, missing
+
+    @staticmethod
+    def unfaceted_members(summary: pd.DataFrame | None,
+                          facet: pd.DataFrame | None) -> list[str]:
+        """The pooled Members with no ``feeding_summary_facet.csv`` beside
+        their summary while others have one: they are in the whole-recording
+        statistics and missing from every Facet's."""
+        if summary is None or facet is None or "Experiment" not in facet.columns:
+            return []
+        faceted = set(facet["Experiment"].astype(str))
+        return [name for name in dict.fromkeys(summary["Experiment"].astype(str))
+                if name not in faceted]
 
     def combined_diff_frame(self):
         """The stacked Members' ``paired_yoked_diff.csv`` (Progressive Ratio
@@ -1336,6 +1374,13 @@ class Project:
             if w not in windows:
                 windows.append(w)
         shared, labels = self.shared_windows()
+        if shared is not None and self.slice is not None:
+            ## A Slice's Members cut each Facet to the Slice and keep its name
+            ## (ADR-0020), so the design's windows are cut the same way here.
+            kept = [(slices.intersect_window(w, self.slice.bounds), label)
+                    for w, label in zip(shared, labels)]
+            shared = [w for w, _label in kept if w is not None]
+            labels = [label for w, label in kept if w is not None]
         if shared is not None and [tuple(w) for w in shared] == windows:
             return windows, dict(zip(windows, labels))
         return windows, {w: windowing.minute_label(w) for w in windows}
@@ -1355,7 +1400,7 @@ class Project:
         """One row per metric x facet x treatment pair: the pooled per-chamber
         p-value beside the nested mixed-model p-value."""
         frames = self._facet_frames(summary, facet)
-        return self._compare_frames(frames, self.metrics())
+        return self._compare_frames(frames, self.metrics(), transformed=self.transform_licks)
 
     def _facet_frames(self, summary: pd.DataFrame,
                       facet: pd.DataFrame | None) -> list[tuple[str, pd.DataFrame]]:
@@ -1425,10 +1470,11 @@ class Project:
         return breaking_point_comparisons(breaking, mixed_p=self._mixed_p)
 
     def _compare_frames(self, frames: list[tuple[str, pd.DataFrame]],
-                        metrics: list[str]) -> list[dict]:
+                        metrics: list[str], *, transformed: bool = False) -> list[dict]:
         from .analytics import treatment_comparisons
 
-        return treatment_comparisons(frames, metrics, mixed_p=self._mixed_p)
+        return treatment_comparisons(frames, metrics, mixed_p=self._mixed_p,
+                                     transformed=transformed)
 
     @staticmethod
     def _mixed_p(data: pd.DataFrame, a: str, b: str) -> float | None:
@@ -1615,6 +1661,10 @@ class Project:
                    f"({', '.join(self._pooled_members())})")
         for name, reason in self.not_covered().items():
             out.append(f"Not covered       : {name}, left out of this Slice ({reason})")
+        for name in self.unfaceted_members(summary, facet):
+            out.append(f"Not faceted       : {name} has no feeding_summary_facet.csv, so it "
+                       f"is missing from every Facet's statistics (re-run its analysis if it "
+                       f"should have one)")
         if note := self.open_end_spread_note():
             out.append(f"WARNING           : {note}")
         out.append(f"Chambers pooled   : {len(summary)}")

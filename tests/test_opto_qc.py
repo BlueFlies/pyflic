@@ -324,6 +324,88 @@ def test_light_left_over_from_the_interval_before_is_not_judged():
     assert _group(result, 1)["Flags"] == oq.LIGHT_WHILE_OFF
 
 
+def _clipped(inputs: oq.DFMInputs, start_row: int, *, keep_start: bool = True) -> oq.DFMInputs:
+    """*inputs* as a range starting at *start_row* loads them (a Slice):
+    the rows from there, at their recording minutes, and — as the loader
+    keeps aside — the recording's first rows' raw signal."""
+    from dataclasses import replace
+
+    from pyflic.base.dfm import START_KEPT_MIN
+
+    head = inputs.minutes <= inputs.minutes[0] + START_KEPT_MIN
+    rows = slice(start_row, None)
+    return replace(inputs, minutes=inputs.minutes[rows], lights=inputs.lights[rows],
+                   activity=inputs.activity[rows], feeding=inputs.feeding[rows],
+                   raw=inputs.raw[rows],
+                   start_minutes=inputs.minutes[head] if keep_start else None,
+                   start_raw=inputs.raw[head] if keep_start else None)
+
+
+def test_a_slice_reads_the_firmware_baseline_from_the_recording_start():
+    """Review C3: the firmware captured its baseline in the run's first ten
+    seconds, so a Slice that starts later emulates against that, not against
+    its own first ten seconds."""
+    start = 2 * 60 * SPS                                    # the Slice starts at minute 2
+    raw = np.full(N, 5.0)
+    raw[start:] = 30.0                                      # the sensor drifted up
+    lit = (raw - 5.0) > 20                                  # and the firmware lit for it
+    whole = _group(_analyze(_inputs(N, lights={1: lit}, raw={1: raw}),
+                            _program(THRESHOLDS)), 1)
+    inputs = _inputs(N, lights={1: lit}, raw={1: raw})
+    part = _analyze(_clipped(inputs, start), _program(THRESHOLDS))
+    g = _group(part, 1)
+    assert g["ContactSec"] == pytest.approx(whole["ContactSec"]) and g["ContactSec"] > 0
+    assert g["LikelyCause"] == whole["LikelyCause"] == oq.CAUSE_DRIFT
+    assert g["EmulationApproximate"] is False
+    ## Without the recording's start the emulation is approximate, and says so.
+    blind = _analyze(_clipped(inputs, start, keep_start=False), _program(THRESHOLDS))
+    assert _group(blind, 1)["EmulationApproximate"] is True
+    assert any("begin at minute 2.0" in note for note in blind.notes)
+
+
+def test_a_loaded_slice_hands_the_recording_start_to_the_light_qc(tmp_path):
+    """C3 end to end: the loader keeps the run's first rows aside and the
+    light QC reads its baseline from them, so a Slice's emulation is exact."""
+    root = make_opto_dir(tmp_path / "exp")
+    cfg = yaml.safe_load((root / "flic_config.yaml").read_text())
+    cfg["global"]["slices"] = {"late": {"start": 10, "end": "end"}}
+    (root / "flic_config.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False))
+    late = load_experiment_yaml(root, parallel=False, use_disk_cache=False, slice="late")
+    assert late.dfms[1].before_range is not None
+    result = late.opto.result(1)
+    assert not any("begin at minute" in note for note in result.notes)
+    emulated = late.opto.qc_table()["EmulationApproximate"].dropna()
+    assert not emulated.astype(bool).any()
+
+
+def test_light_already_on_at_a_slice_start_is_not_judged_for_its_hold():
+    """Review C4: a light on at the first row came on before it, so its Hold
+    is not judged; a light on for longer still is (a stuck LED shows)."""
+    start = 2 * 60 * SPS
+    lit = np.zeros(N, dtype=bool)
+    lit[start - 3:start + 4] = True                         # a Hold running over the start
+    spans = [(start - 8, start - 3)]                        # the bout that lit it
+    inputs = _inputs(N, lights={1: lit}, feeding={1: spans})
+    part = _group(_analyze(_clipped(inputs, start), _program(THRESHOLDS),
+                           opto_unexplained_min_sec=0), 1)
+    assert part["UnexplainedSec"] == 0.0 and part["Verdict"] == "ok"
+    stuck = np.zeros(N, dtype=bool)
+    stuck[start - 3:start + 1000] = True
+    long_on = _group(_analyze(_clipped(_inputs(N, lights={1: stuck}), start),
+                              _program(THRESHOLDS)), 1)
+    hold = oq.decay_samples_for(1000, SPS) + 2              # the Hold plus the tolerance
+    assert long_on["UnexplainedSec"] == pytest.approx((1000 - hold) / SPS)
+    assert oq.carried_over(stuck[start:], hold) == hold
+    assert oq.carried_over(lit[start:], hold) == 4 and oq.carried_over(lit, hold) == 0
+
+
+def test_the_timeline_of_a_slice_starts_at_its_first_minute():
+    start = 2 * 60 * SPS
+    part = _analyze(_clipped(_inputs(N), start), _program(THRESHOLDS))
+    timeline = part.timelines[1]
+    assert timeline["Minute"].iloc[0] == 2.0 and timeline["Minute"].iloc[-1] == 9.0
+
+
 def test_non_feeding_activation_is_not_judged():
     lit = np.ones(N, dtype=bool)
     result = _analyze(_inputs(N, lights={1: lit}),

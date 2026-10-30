@@ -147,6 +147,9 @@ def dfm_inputs(dfm) -> oq.DFMInputs:
                        for ch in (dfm.chambers or []) for w in ch.wells}
     generation = int(getattr(dfm, "generation", GENERATION_FLAG) or GENERATION_FLAG)
     state = getattr(dfm, "paradigm", None)
+    ## A Slice that starts later still has the firmware's baseline, captured
+    ## at the start of the run, from the rows its clip kept aside (ADR-0020).
+    before = getattr(dfm, "before_range", None)
     return oq.DFMInputs(
         dfm_id=int(dfm.id), minutes=minutes,
         samples_per_second=float(dfm.params.samples_per_second),
@@ -155,7 +158,9 @@ def dfm_inputs(dfm) -> oq.DFMInputs:
         chamber_of_well=chamber_of_well, origin=recording_origin(raw),
         data_frequency=column("OptoFreq"), data_pulse_width=column("OptoPW"),
         data_dark=column("Dark"), generation=generation,
-        state=state if generation == GENERATION_PARADIGM else None)
+        state=state if generation == GENERATION_PARADIGM else None,
+        start_minutes=None if before is None else before.start_minutes,
+        start_raw=None if before is None else before.start_raw)
 
 
 def _split_flags(text: Any) -> list[str]:

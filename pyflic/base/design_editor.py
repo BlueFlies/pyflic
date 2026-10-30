@@ -26,7 +26,6 @@ import yaml
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QCheckBox,
-    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
@@ -57,7 +56,7 @@ from .opto_qc import DEFAULT_CONSTANTS as OPTO_DEFAULTS
 from .opto_qc import OPTO_CONSTANT_FIELDS
 from .program_facets import FACET_SOURCES, SOURCE_LABELS, is_program_source
 from .ui import Category, icon
-from .ui.widgets import Card, CardGroup
+from .ui.widgets import Card, CardGroup, NoWheelComboBox
 
 #: The three optional auto-removal cutoffs, in the order the config editor
 #: shows them.  Unchecked → YAML ``null`` (filter off); checked + blank →
@@ -222,7 +221,10 @@ class ProjectDesignDialog(QDialog):
         buttons.rejected.connect(self.reject)
         outer.addWidget(buttons)
 
-        self.dir_edit.textChanged.connect(self._prefill_from_dir)
+        ## A finished path, not every keystroke: typing towards one folder
+        ## passes through others, and an intermediate one that is a Project
+        ## would reload the whole form over what has been edited.
+        self.dir_edit.editingFinished.connect(self._on_dir_edited)
         self._prefill_from_dir()
         self._on_type_changed()
 
@@ -279,7 +281,8 @@ class ProjectDesignDialog(QDialog):
 
         ## The shipped types, the lab library's and the copy beside this
         ## Project (ADR-0019); New type… opens the Experiment Type Editor.
-        self.type_combo = QComboBox()
+        ## The dialog scrolls: the wheel scrolls it and never changes a choice.
+        self.type_combo = NoWheelComboBox()
         self._fill_type_combo()
         self.type_combo.currentIndexChanged.connect(self._on_type_changed)
         self.new_type_btn = QPushButton("New type…")
@@ -320,7 +323,7 @@ class ProjectDesignDialog(QDialog):
         self.type_drift_holder.setVisible(False)
         form.addRow("", self.type_drift_holder)
 
-        self.layout_combo = QComboBox()
+        self.layout_combo = NoWheelComboBox()
         self.layout_combo.addItem("two_well  (6 chambers)", "two_well")
         self.layout_combo.addItem("single_well  (12 chambers)", "single_well")
         self.layout_combo.currentIndexChanged.connect(self._on_layout_changed)
@@ -344,7 +347,7 @@ class ProjectDesignDialog(QDialog):
         self.transform_check.setChecked(True)
         form.addRow("Transform licks:", self.transform_check)
 
-        self.opto_combo = QComboBox()
+        self.opto_combo = NoWheelComboBox()
         for label, value in _OPTO_CHOICES:
             self.opto_combo.addItem(label, value)
         self.opto_combo.setToolTip(
@@ -358,7 +361,7 @@ class ProjectDesignDialog(QDialog):
         ## Where the Facets come from (decision 7): minute cutoffs, or each
         ## DFM's Program Intervals from its Program.txt.  Beside the cutoffs it
         ## replaces; a type that owns its Facets owns this too.
-        self.facet_source_combo = QComboBox()
+        self.facet_source_combo = NoWheelComboBox()
         for value in FACET_SOURCES:
             self.facet_source_combo.addItem(SOURCE_LABELS[value], value)
         self.facet_source_combo.setToolTip(
@@ -788,6 +791,7 @@ class ProjectDesignDialog(QDialog):
             self.dir_edit.text() or os.getcwd())
         if chosen:
             self.dir_edit.setText(chosen)
+            self._on_dir_edited()
 
     def _resolve_existing_directory(self, directory: str) -> str | None:
         """The folder to initialize, or None after explaining why not.
@@ -832,6 +836,7 @@ class ProjectDesignDialog(QDialog):
             self.dir_edit.blockSignals(True)
             self.dir_edit.setText(parent)
             self.dir_edit.blockSignals(False)
+            self._prefilled_dir = parent
             self.name_edit.setText(os.path.basename(parent))
             path = parent
         return path
@@ -840,9 +845,20 @@ class ProjectDesignDialog(QDialog):
     # Loading an existing project.yaml
     # ------------------------------------------------------------------
 
+    def _on_dir_edited(self) -> None:
+        """A directory typed to the end or browsed to: fill the form from it,
+        unless it is the one the form was filled from — leaving the field
+        after only looking at it must not throw away the edits."""
+        if self.dir_edit.text().strip() != self._prefilled_dir:
+            self._prefill_from_dir()
+
     def _prefill_from_dir(self) -> None:
         directory = self.dir_edit.text().strip()
-        self._loaded_omit = None                # the Selection of the folder read below
+        self._prefilled_dir = directory
+        ## What the folder read below states and the form has no field for:
+        ## none of the last folder's may reach this one's project.yaml.
+        self._loaded_omit = None                # the Selection
+        self._loaded_constants = {}             # hand-written constants
         ## A Project's lab type may live only in its copy: list it.
         before = self.type_combo.currentData()
         self._fill_type_combo()
@@ -1100,9 +1116,11 @@ class ProjectDesignDialog(QDialog):
         opto = self.opto_combo.currentData()
         if isinstance(opto, bool):
             g["optogenetics"] = opto
-        ## Kept as project.yaml says, or a save would undo every untick.
-        if getattr(self, "_loaded_omit", None):
-            g["omit"] = self._loaded_omit
+        ## Kept as project.yaml says, or a save would undo every untick —
+        ## with a renamed Slice's entry renamed, so its box stays unticked.
+        omit = self.slices_widget.follow_renames(getattr(self, "_loaded_omit", None))
+        if omit:
+            g["omit"] = omit
 
         ## A Slice that cannot be used is skipped by every run, so the design
         ## is refused rather than saved with it: the Project's own check.

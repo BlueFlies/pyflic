@@ -319,6 +319,7 @@ def judge_group(
     check_trend: bool = True,
     light_source: str = "OptoCol1 light bits",
     series_mismatches: int | None = None,
+    trend_counts: np.ndarray | None = None,
 ) -> GroupVerdict:
     """Flags and notes for one Chamber Group from its measured quantities.
 
@@ -338,14 +339,19 @@ def judge_group(
     Light Event lacks, for its note.  *series_mismatches* is the count of
     Test light events whose Requirement is not the Test Paradigm's series
     (:func:`requirement_series_mismatches`); any one fails the group with
-    :data:`SERIES_WRONG`, and ``None`` means the check did not run."""
+    :data:`SERIES_WRONG`, and ``None`` means the check did not run.
+    *trend_counts* are the credited licks of the events the trend is read
+    over — the Test window's, as the Breaking Point's, not a later ratio run
+    or the Acclimation after a restart — and default to *test_counts*;
+    *firmware_events*, when given, are aligned with them."""
     flags: list[str] = []
     notes: list[str] = []
     counts = np.asarray(test_counts, dtype=int)
+    trend = counts if trend_counts is None else np.asarray(trend_counts, dtype=int)
     lick_free = (counts == 0) if lick_free is None else np.asarray(lick_free, dtype=bool)
     run, run_first = longest_run(lick_free)
     failing_start = first_run_start(lick_free, settings.lick_free_run)
-    rho, slope = lick_trend(counts)
+    rho, slope = lick_trend(trend)
     rho_firmware = float("nan")
     if firmware_events is not None:
         credited = np.asarray(firmware_events, dtype=float)
@@ -375,14 +381,14 @@ def judge_group(
             if not check_trend:
                 notes.append("the Test Paradigm is a fixed ratio, whose requirement "
                              "does not rise, so no licks-per-event trend is judged")
-            elif counts.size >= settings.trend_min_events:
+            elif trend.size >= settings.trend_min_events:
                 licks_rise = bool(np.isfinite(rho) and rho >= settings.trend_min_rho)
                 if not licks_rise:
                     flags.append(NO_TREND)
                     if np.isfinite(rho_firmware) and rho_firmware >= settings.trend_min_rho:
                         notes.append(FIRMWARE_TREND_NOTE)
             else:
-                notes.append(f"{counts.size} Test light event(s); "
+                notes.append(f"{trend.size} Test light event(s) in the Test window; "
                              f"{settings.trend_min_events} are needed for a "
                              f"trend verdict")
         if series_mismatches:

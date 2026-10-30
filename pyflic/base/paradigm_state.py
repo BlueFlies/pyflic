@@ -197,12 +197,15 @@ class ParadigmState:
     """
 
     __slots__ = ("minutes", "index", "program_interval", "cycle", "paradigm", "phase_a",
-                 "activations", "requirement", "progress", "on_ms", "_cache")
+                 "activations", "requirement", "progress", "on_ms", "activations_before",
+                 "on_ms_before", "_cache")
 
     def __init__(self, *, minutes: np.ndarray, index: np.ndarray,
                  program_interval: pd.arrays.IntegerArray, cycle: pd.arrays.IntegerArray,
                  paradigm: pd.arrays.StringArray, phase_a: np.ndarray, activations: np.ndarray,
-                 requirement: np.ndarray, progress: np.ndarray, on_ms: np.ndarray) -> None:
+                 requirement: np.ndarray, progress: np.ndarray, on_ms: np.ndarray,
+                 activations_before: np.ndarray | None = None,
+                 on_ms_before: np.ndarray | None = None) -> None:
         self.minutes = minutes                      # (n,) float
         self.index = index                          # (n,) int64, the DFM's record Index
         self.program_interval = program_interval    # Int64, NA = unknown instruction
@@ -213,6 +216,13 @@ class ParadigmState:
         self.requirement = requirement              # (n, 12) float, NaN where NA
         self.progress = progress                    # (n, 12) float, NaN where NA
         self.on_ms = on_ms                          # (n, 12) int64
+        #: The ``Activations`` and ``OnMs`` of the row before row 0, (12,),
+        #: when a range clipped the recording there (ADR-0020): an Activation
+        #: counted on a Slice's first row is then its own, and a light on at
+        #: that row is seen to have come on before it.  ``None`` for a state
+        #: that starts with the recording, whose row 0 has no row before.
+        self.activations_before = activations_before
+        self.on_ms_before = on_ms_before
         #: Per-well arrays built on first use (the running total of Firmware
         #: Events, which rows credit a Requirement): a Light Event Ledger asks
         #: one question per Activation, and each answer is a full pass.
@@ -270,14 +280,23 @@ class ParadigmState:
 
     def subset(self, rows) -> ParadigmState:
         """The state of the rows a boolean mask or an index array selects, as
-        the loader's range filter selects ``raw_df`` rows."""
+        the loader's range filter selects ``raw_df`` rows.  The row before
+        the first one selected is kept as :attr:`activations_before` /
+        :attr:`on_ms_before`, so a range that starts mid-recording still
+        knows what its first row changed."""
         rows = np.asarray(rows)
+        picked = np.flatnonzero(rows) if rows.dtype == bool else rows.astype(np.int64)
+        before_acts, before_on = self.activations_before, self.on_ms_before
+        if picked.size and int(picked[0]) > 0:
+            before_acts = self.activations[int(picked[0]) - 1].copy()
+            before_on = self.on_ms[int(picked[0]) - 1].copy()
         return ParadigmState(
             minutes=self.minutes[rows], index=self.index[rows],
             program_interval=self.program_interval[rows], cycle=self.cycle[rows],
             paradigm=self.paradigm[rows], phase_a=self.phase_a[rows],
             activations=self.activations[rows], requirement=self.requirement[rows],
-            progress=self.progress[rows], on_ms=self.on_ms[rows])
+            progress=self.progress[rows], on_ms=self.on_ms[rows],
+            activations_before=before_acts, on_ms_before=before_on)
 
     def __len__(self) -> int:
         return int(self.minutes.size)
@@ -305,12 +324,14 @@ class ParadigmState:
         return self.program_interval.to_numpy(dtype=np.int64, na_value=-1)
 
     def _activation_steps(self, w: int) -> np.ndarray:
-        """Activations counted in each row: 0 on row 0, whose previous total
-        is not in the data."""
+        """Activations counted in each row: on row 0 against
+        :attr:`activations_before` when a range clipped the recording there,
+        else 0, its previous total not being in the data."""
         a = self.activations[:, w]
         if not a.size:
             return np.zeros(0, dtype=np.int64)
-        return np.clip(np.diff(a, prepend=a[:1]), 0, None)
+        first = a[:1] if self.activations_before is None else self.activations_before[w:w + 1]
+        return np.clip(np.diff(a, prepend=first), 0, None)
 
     def _paradigm_starts(self) -> np.ndarray:
         """(n,) bool: rows where the Paradigm name differs from the row
@@ -419,7 +440,9 @@ class ParadigmState:
     def activation_onsets(self, well: int) -> np.ndarray:
         """Row indices where *well*'s Activations rose, one entry per
         Activation (an index repeats when the count rose by 2 in one row).
-        Row 0 is never an onset: the total before it is not in the data."""
+        Row 0 is an onset only when a range clipped the recording there
+        (:attr:`activations_before`); otherwise the total before it is not in
+        the data."""
         steps = self._activation_steps(self._column(well))
         return np.repeat(np.arange(steps.size), steps)
 

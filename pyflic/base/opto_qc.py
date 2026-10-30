@@ -609,6 +609,20 @@ def decay_samples_for(decay_ms: float, samples_per_second: float) -> int:
                          - 1e-9))
 
 
+def carried_over(lit: np.ndarray, limit: int) -> int:
+    """How many rows of light were already on at row 0, up to *limit* (a
+    Hold plus the tolerance): light that came on before the rows analysed —
+    the start of a Slice, or of the recording — whose onset and cause they
+    do not hold.  A light on for longer than that is judged from there on, so
+    a stuck light is still seen."""
+    lit = np.asarray(lit, dtype=bool)
+    if not lit.size or not lit[0]:
+        return 0
+    head = lit[:max(0, int(limit))]
+    dark = np.flatnonzero(~head)
+    return int(dark[0]) if dark.size else int(head.size)
+
+
 def event_spans(column: np.ndarray) -> list[tuple[int, int]]:
     """``[(start, end)]`` sample spans of pyflic's events in one ``event_df``
     column, which holds each event's length at its first sample."""
@@ -679,6 +693,13 @@ class DFMInputs:
     #: decisions instead of ``lights`` and the clock-time schedule.
     generation: int = GENERATION_FLAG
     state: ParadigmState | None = None
+    #: The recording's first rows when a range clipped them off (a Slice
+    #: that starts later; :class:`pyflic.base.dfm.BeforeRange`): their
+    #: minutes, and their raw signal ``(k, 12)`` with the training flag
+    #: removed.  The firmware's baseline is read from them, as it was
+    #: captured at the start of the run, not of the Slice.
+    start_minutes: np.ndarray | None = None
+    start_raw: np.ndarray | None = None
 
 
 @dataclass
@@ -969,7 +990,10 @@ def analyze_dfm(inp: DFMInputs, *, program: op.OptoProgram | None, setting: str,
     base = np.zeros(op.N_WELLS)
     if emulate:
         n_base = max(1, int(round(BASELINE_SECONDS * sps)))
-        start_idx = 0
+        ## When the firmware captured its baseline, in recording minutes: at
+        ## the program's start, or at the recording's first row when the
+        ## program started before it or the data carry no clock.
+        base_min = 0.0
         if program.start is not None and inp.origin is not None:
             lag = (inp.origin - program.start).total_seconds()
             if lag > BASELINE_ALIGN_SEC:
@@ -979,12 +1003,30 @@ def analyze_dfm(inp: DFMInputs, *, program: op.OptoProgram | None, setting: str,
                                  f"the emulated trigger uses the first "
                                  f"{BASELINE_SECONDS:g} s of data instead (approximate)")
             else:
-                start_idx = int(np.searchsorted(minutes, _to_minutes(program.start, origin),
-                                                side="left"))
+                base_min = _to_minutes(program.start, origin)
         elif inp.origin is None:
             approximate = True
+        source_minutes, source_raw = minutes, raw
+        ## A range that starts after that moment (a Slice) clipped the
+        ## baseline off the rows analysed: read it from the recording's first
+        ## rows, kept aside at load, or say the emulation is approximate.
+        if n and minutes[0] > base_min + BASELINE_ALIGN_SEC / 60.0:
+            kept = inp.start_minutes
+            at = (int(np.searchsorted(kept, base_min, side="left"))
+                  if kept is not None and inp.start_raw is not None and len(kept) else None)
+            if at is not None and kept[0] <= base_min + BASELINE_ALIGN_SEC / 60.0 \
+                    and at + n_base <= len(kept):
+                source_minutes = np.asarray(kept, dtype=float)
+                source_raw = np.asarray(inp.start_raw, dtype=float).reshape(-1, op.N_WELLS)
+            else:
+                approximate = True
+                dfm_notes.append(f"the rows analysed begin at minute {minutes[0]:.1f}, after "
+                                 f"the firmware captured its baseline, so the emulated "
+                                 f"trigger uses their first {BASELINE_SECONDS:g} s instead "
+                                 f"(approximate)")
+        start_idx = int(np.searchsorted(source_minutes, base_min, side="left"))
         if program.baseline:
-            base = np.array([firmware_baseline(raw[:, w], start_idx, n_base)
+            base = np.array([firmware_baseline(source_raw[:, w], start_idx, n_base)
                              for w in range(op.N_WELLS)])
 
     ## ---- program versus data ----
@@ -1068,8 +1110,10 @@ def analyze_dfm(inp: DFMInputs, *, program: op.OptoProgram | None, setting: str,
                 continue
             decay = decay_samples_for(decay_ms, sps)
             ## Light left over from the interval before is not this one's to
-            ## explain: skip its decay at every boundary.
-            grace = decay + tol if k > 0 else 0
+            ## explain: skip its decay at every boundary.  At the first row
+            ## the light already on came on before the rows (a Slice's start).
+            grace = (decay + tol if k > 0
+                     else carried_over(lit, decay + tol) if w.i0 == 0 else 0)
             s0 = min(w.i0 + grace, w.i1)
             seg = slice(s0, w.i1)
             full = slice(w.i0, w.i1)
@@ -1231,14 +1275,17 @@ def analyze_dfm(inp: DFMInputs, *, program: op.OptoProgram | None, setting: str,
             })
 
         if n:
-            minute_bin = np.clip(np.floor(minutes), 0, None).astype(int)
+            ## From the first minute of the rows, so a Slice's timeline does
+            ## not open with empty minutes before its start.
+            first_minute = int(max(0.0, np.floor(minutes[0])))
+            minute_bin = np.clip(np.floor(minutes), first_minute, None).astype(int) - first_minute
             size = int(minute_bin.max()) + 1
 
             def per_minute(mask: np.ndarray) -> np.ndarray:
                 return np.bincount(minute_bin[mask], minlength=size) / sps
 
             timelines[label] = pd.DataFrame({
-                "Minute": np.arange(size, dtype=float),
+                "Minute": np.arange(size, dtype=float) + first_minute,
                 "LitSec": per_minute(lit),
                 "ExplainedSec": per_minute(judged & ~unexplained),
                 "UnexplainedSec": per_minute(unexplained),
@@ -1876,9 +1923,11 @@ def _analyze_paradigm_state(inp: DFMInputs, *, program: op.OptoProgram | None,
                 continue
             d = decays[k]
             ## Light carried over from the window before is not this one's to
-            ## explain: skip its Hold at a boundary.
-            grace = (decays[k - 1] + tol
-                     if k > 0 and windows[k - 1].i1 == w.i0 else 0)
+            ## explain: skip its Hold at a boundary.  At the first row the
+            ## light already on came on before the rows (a Slice's start): its
+            ## Activation's onset, and the activity behind it, are not in them.
+            grace = (decays[k - 1] + tol if k > 0 and windows[k - 1].i1 == w.i0
+                     else carried_over(lit, d + tol) if w.i0 == 0 else 0)
             s0 = min(w.i0 + grace, w.i1)
             full = slice(w.i0, w.i1)
             free = np.flatnonzero(lit[s0:w.i1] & ~owned[s0:w.i1]) + s0
@@ -2197,14 +2246,17 @@ def _analyze_paradigm_state(inp: DFMInputs, *, program: op.OptoProgram | None,
             })
 
         if n:
-            minute_bin = np.clip(np.floor(minutes), 0, None).astype(int)
+            ## From the first minute of the rows, so a Slice's timeline does
+            ## not open with empty minutes before its start.
+            first_minute = int(max(0.0, np.floor(minutes[0])))
+            minute_bin = np.clip(np.floor(minutes), first_minute, None).astype(int) - first_minute
             size = int(minute_bin.max()) + 1
 
             def per_minute(ms: np.ndarray) -> np.ndarray:
                 return np.bincount(minute_bin, weights=ms, minlength=size) / 1000.0
 
             timelines[label] = pd.DataFrame({
-                "Minute": np.arange(size, dtype=float),
+                "Minute": np.arange(size, dtype=float) + first_minute,
                 "LitSec": per_minute(g_ms),
                 "ExplainedSec": per_minute(judged_ms - unexplained_ms),
                 "UnexplainedSec": per_minute(unexplained_ms),

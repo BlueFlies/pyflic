@@ -508,3 +508,212 @@ def test_an_unquoted_numeric_slice_name_is_named_not_renamed():
     problems = slices.slice_problems(g)
     assert len(problems) == 1 and "read as the number 240" in problems[0]
     assert [s.name for s in slices.usable_slices(g)] == ["360_1440"]
+
+
+def test_unusable_coverage_settings_and_slice_constants_are_named():
+    """A load reads them as no groups and the default tolerance, so the
+    linter and the editors say so instead."""
+    problems = slices.slice_problems({"slice_tolerance_min": "five", "also_exclude": {"a": 1}})
+    assert any("slice_tolerance_min" in p for p in problems)
+    assert any("also_exclude" in p for p in problems)
+    assert slices.tolerance({"slice_tolerance_min": -2}) == slices.DEFAULT_TOLERANCE_MIN
+    bad = {"slices": {"a": {"end": 5, "constants": {"min_untransformed_licks_cutoff": "x"}}}}
+    assert "must be a number" in slices.slice_problems(bad)[0]
+    ## A Slice's failure fraction is checked against the design's warning one.
+    low = {"constants": {"opto_unexplained_warn_fraction": 0.2},
+           "slices": {"a": {"end": 5, "constants": {"opto_unexplained_fail_fraction": 0.1}}}}
+    assert "must not exceed" in slices.slice_problems(low)[0]
+
+
+def test_a_slice_may_set_its_own_unexplained_light_verdict(tmp_path):
+    root = _standalone(tmp_path / "exp", slices={
+        "early": {"end": 10, "constants": {"opto_unexplained_fail_fraction": 0.5}}})
+    assert _load(root, slice="early").opto.settings().fail_fraction == 0.5
+    assert _load(root).opto.settings().fail_fraction == 0.30
+
+
+def test_a_load_naming_no_group_excludes_the_configs_own(tmp_path):
+    """The Hub, the QC Viewer and a Slice's sibling load of the whole
+    recording all read a standalone config's exclusion_group."""
+    root = _standalone(tmp_path / "exp", exclusion_group="main")
+    _exclusions(root, [("main", 1, 1), ("general", 1, 2)])
+    whole = _load(root)
+    assert whole.exclusion_group == "main" and whole.excluded_chambers == {1: [1]}
+    shown = _load(root, exclusion_group=None)
+    assert shown.excluded_chambers == {} and shown.exclusion_group == "main"
+    again = _quiet(_load(root, slice="early").load_slice, None)
+    assert again.exclusion_group == "main" and again.excluded_chambers == {1: [1]}
+
+
+def _set_early_end(root: Path, end: float) -> None:
+    cfg = yaml.safe_load((root / "flic_config.yaml").read_text())
+    cfg["global"]["slices"]["early"]["end"] = end
+    (root / "flic_config.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False))
+
+
+def test_a_qc_run_records_the_slice_but_never_hides_a_stale_analysis(tmp_path):
+    from pyflic.base.run_selection import run_analysis, run_qc
+
+    quiet = {"log": lambda _m: None}
+    no_qc = [i.id for i in sel.items(sel.QC)]
+    no_analyses = [i.id for i in sel.items(sel.ANALYSES)]
+    root = _standalone(tmp_path / "exp")
+    _quiet(run_qc, _load(root, slice="early"), omit=no_qc, **quiet)
+    assert slices.read_record(root, "early")["definition"]["end"] == 10.0
+    _quiet(run_analysis, _load(root, slice="early"), omit=no_analyses, **quiet)
+    _set_early_end(root, 12)
+    _quiet(run_qc, _load(root, slice="early"), omit=no_qc, **quiet)
+    ## The analysis still describes (0, 10]: its record stays, so it reads stale.
+    assert slices.read_record(root, "early")["definition"]["end"] == 10.0
+    _quiet(run_analysis, _load(root, slice="early"), omit=no_analyses, **quiet)
+    assert slices.read_record(root, "early")["definition"]["end"] == 12.0
+
+
+def test_a_not_covered_record_is_no_verdict_on_a_changed_slice(tmp_path):
+    root = _project(tmp_path)
+    mid = slices.get_slice(_global(), "mid")
+    slices.write_record(root / "short", mid, tol=5.0, dfm_ends={1: 20.0},
+                        reason="DFM 1 ends at minute 20.0")
+    view = Project(root).for_slice("mid")
+    assert view.not_covered() == {"short": "DFM 1 ends at minute 20.0"}
+    assert view.member_status("short")["covered"] is False
+    meta = yaml.safe_load((root / "project.yaml").read_text())
+    meta["design"]["global"]["slices"]["mid"]["end"] = 18
+    (root / "project.yaml").write_text(yaml.safe_dump(meta, sort_keys=False))
+    view = Project(root).for_slice("mid")
+    assert view.not_covered() == {}
+    status = view.member_status("short")
+    assert status["covered"] is None and status["stale"] is True
+    coverage = view.slice_coverage_frame().set_index("Experiment")
+    assert coverage.loc["short", "Covered"] == "not run"
+    assert "changed" in coverage.loc["short", "Reason"]
+
+
+def test_a_slice_views_facets_keep_the_designs_names(tmp_path):
+    """Its Members cut each Facet to the Slice and keep the name; so does the
+    Project's statistics."""
+    root = _project(tmp_path)
+    meta = yaml.safe_load((root / "project.yaml").read_text())
+    meta["design"]["global"].update(facet_cutoffs=[5, 15],
+                                    facet_labels=["Settle", "Middle", "Late"])
+    (root / "project.yaml").write_text(yaml.safe_dump(meta, sort_keys=False))
+    view = Project(root).for_slice("early")
+    windows, label_of = view.window_labels(pd.DataFrame({"FacetRange": ["(0, 5)", "(5, 10)"]}))
+    assert [label_of[w] for w in windows] == ["Settle", "Middle"]
+
+
+def test_a_member_without_a_facet_table_is_named_not_silently_dropped():
+    summary = pd.DataFrame({"Experiment": ["a", "b"]})
+    assert Project.unfaceted_members(summary, pd.DataFrame({"Experiment": ["a"]})) == ["b"]
+    assert Project.unfaceted_members(summary, None) == []
+
+
+# ---------------------------------------------------------------------------
+# The core pipeline on a Slice's rows (review C6-C8, C12-C14)
+# ---------------------------------------------------------------------------
+
+def test_a_slices_bins_start_at_its_start(tmp_path):
+    """Review C7: no empty bins before the Slice, at either level."""
+    late = _load(_standalone(tmp_path / "s"), slice="late")
+    binned = late.binned_feeding_summary(binsize_min=5, save=False)
+    assert binned["Interval"].iloc[0] == "(10,15]"
+    assert pd.to_numeric(binned["Minutes"]).min() == 12.5
+    dfm = late.dfms[1]
+    assert dfm.binned_feeding_summary(binsize_min=5)["Interval"].iloc[0] == "(10.0,15.0]"
+    assert dfm.before_range is not None and dfm.before_range.start_min == 10.0
+    ## The whole recording still starts at minute 0.
+    whole = _load(tmp_path / "s")
+    assert whole.binned_feeding_summary(binsize_min=5, save=False)["Interval"].iloc[0] == "(0,5]"
+    assert whole.dfms[1].before_range is None
+
+
+def test_moving_windows_end_by_the_recording_end(tmp_path):
+    """Review C12: a 30-minute recording's last 10-minute window is (20, 30],
+    not (25, 35] labelled 35 with half its width."""
+    dfm = _load(_standalone(tmp_path / "s")).dfms[1]
+    moving = dfm.moving_window_feeding_summary(window_min=10, step_min=5)
+    assert moving["Minutes"].max() == 30.0 and moving["Interval"].iloc[-1] == "(20,30]"
+    median = dfm.moving_median_duration(window_min=10, step_min=5)
+    assert median["Minutes"].max() == 30.0
+    ## A window wider than the data is the one window there is.
+    wide = dfm.moving_median_duration(window_min=60, step_min=5)
+    assert sorted(set(wide["Minutes"])) == [60.0]
+
+
+def test_a_range_with_no_bin_gives_an_empty_table(tmp_path):
+    """Review C13: a range that starts on the last row's minute has no bin."""
+    dfm = _load(_standalone(tmp_path / "s")).dfms[1]
+    last = float(dfm.raw_df["Minutes"].max())
+    assert dfm.binned_feeding_summary(binsize_min=5, range_minutes=(last, last)).empty
+
+
+def test_time_between_is_nan_where_no_interval_starts(tmp_path):
+    """Review C6 (owner decision): MeanTimeBtw / MedTimeBtw are NaN, not 0,
+    in a window where no interval starts; a well that never licks and one
+    that licked only outside the window read alike.  R's rule that the
+    lead-in and tail gaps are intervals is kept."""
+    from pyflic.base.dfm import DFM
+
+    root = _standalone(tmp_path / "s")
+    data = pd.read_csv(root / "data" / "DFM1_0.csv")
+    n = len(data)
+    data["W1"] = np.round(np.random.default_rng(9).normal(0.0, 0.3, size=n), 3)   # never licks
+    data.loc[data["Seconds"] > 600, "W2"] = 0.0                                     # licks to minute 10
+    data.to_csv(root / "data" / "DFM1_0.csv", index=False)
+    dfm = _load(root).dfms[1]
+    late = dfm.feeding_summary(range_minutes=(15, 25), transform_licks=False).iloc[0]
+    for column in ("MeanTimeBtwA", "MedTimeBtwA", "MeanTimeBtwB", "MedTimeBtwB"):
+        assert np.isnan(late[column]), column
+    assert late["EventsA"] == 0 and late["EventsB"] == 0
+    ## Over the whole recording the never-licking well's one interval is the
+    ## recording: the edge gaps stay intervals.
+    whole = dfm.feeding_summary(transform_licks=False).iloc[0]
+    assert whole["MeanTimeBtwA"] == pytest.approx(n / 5.0)
+    ## The binned summary follows the same rule.
+    binned = dfm.binned_feeding_summary(binsize_min=5, transform_licks=False)
+    first = binned[binned["Chamber"] == 1].set_index("Interval")
+    assert np.isnan(first.loc["(15.0,20.0]", "MeanTimeBtwB"])
+    ## A well with no interval at all (it fed throughout) is NaN too.
+    assert np.isnan(DFM._interval_summary(0, (0, 0))).all()
+
+
+def test_tidy_exports_label_wells_by_the_chamber_sets(tmp_path):
+    """Review C8: with chamber_sets [[1, 3], [2, 4], ...] well 3 is chamber
+    1's well B, not chamber 2's well A."""
+    from pyflic.base.dfm import DFM
+    from pyflic.base.parameters import Parameters
+
+    _write_csv(tmp_path / "data")
+    sets = np.array([[1, 3], [2, 4], [5, 7], [6, 8], [9, 11], [10, 12]])
+    params = Parameters.two_well().with_updates(chamber_sets=sets, samples_per_second=5,
+                                                feeding_threshold=5, feeding_minimum=5,
+                                                tasting_minimum=1, tasting_maximum=4)
+    dfm = DFM.load(1, params, data_dir=tmp_path / "data")
+    expected = {}
+    for ch in dfm.chambers:
+        expected[int(ch.well_a)] = (int(ch.index), "WellA")
+        expected[int(ch.well_b)] = (int(ch.index), "WellB")
+    for table in (dfm.duration_data(), dfm.interval_data()):
+        got = {int(w): (int(c), t) for w, c, t
+               in zip(table["Well"], table["Chamber"], table["TCWell"])}
+        assert got == {w: expected[w] for w in got}
+    assert expected[3] == (1, "WellB")
+
+
+def test_a_slices_whole_summary_carries_its_bounds(tmp_path):
+    """Review C14: StartMin / EndMin of a Slice's whole summary are its
+    bounds, not (0, 0); an open end reads inf, as in FacetRange."""
+    from pyflic.base import windowing
+    from pyflic.base.utils import range_is_specified
+
+    root = _standalone(tmp_path / "s")
+    late = _load(root, slice="late").feeding_summary()
+    assert set(late["StartMin"]) == {10.0} and set(late["EndMin"]) == {float("inf")}
+    mid = _load(root, slice="mid").feeding_summary()
+    assert set(mid["StartMin"]) == {5.0} and set(mid["EndMin"]) == {28.0}
+    whole = _load(root).feeding_summary()
+    assert set(whole["StartMin"]) == {0.0} and set(whole["EndMin"]) == {0.0}
+    assert windowing.range_span((70, 0)) == (70.0, float("inf"))
+    assert windowing.range_span((0, 0)) == (0.0, 0.0)
+    ## (-5, 5) is a window, as windowing.is_full_range already said.
+    assert range_is_specified((-5, 5)) and not range_is_specified((0, 0))

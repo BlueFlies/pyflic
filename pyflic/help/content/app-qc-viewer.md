@@ -273,9 +273,11 @@ place to configure.
 
 On the **Feeding Summary** tab, tick the chambers to exclude — or the wells, on a DFM tab's
 Exclude Wells panel. **Save Exclusions…** asks for a group name, offering the experiment's
-own exclusion group (`general` unless its Project's design names another; a Slice's own
-group when a Slice is loaded), and writes your current selection to that group in
-`remove_chambers.csv`. That is the intended path from
+own exclusion group (its design's `exclusion_group:`, `general` when it names none; a
+Slice's own group when a Slice is loaded), and writes your current selection to that group
+in `remove_chambers.csv`, replacing the group's rows. Naming the own group of another
+analysis — the whole recording's, or another Slice's — asks first, saying how many of its
+rows would be replaced. That is the intended path from
 "this chamber looks wrong" to a recorded, reusable exclusion set — see
 [exclusions](config-dfms-chambers.md#excluding-chambers).
 

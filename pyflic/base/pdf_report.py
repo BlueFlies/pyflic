@@ -561,10 +561,11 @@ def _summary_frames(experiment: Experiment, options: ReportOptions
     return summary, [(whole_label(experiment.slice), summary)], None
 
 
-def _value(frame: pd.DataFrame, metric: str) -> pd.Series:
+def _value(frame: pd.DataFrame, metric: str, *, transformed: bool = False) -> pd.Series:
     from .analytics import _resolve_metric_col
 
-    return pd.to_numeric(_resolve_metric_col(frame, metric), errors="coerce")
+    return pd.to_numeric(_resolve_metric_col(frame, metric, transformed=transformed),
+                         errors="coerce")
 
 
 #: Metrics measured on feeding events (bout durations and the gaps between
@@ -596,10 +597,10 @@ def _empty_reason(frame: pd.DataFrame, metric: str) -> str | None:
 
 
 def _dot(experiment: Experiment, frame: pd.DataFrame, metric: str, label: str,
-         facet_col: str | None, *, hline: float | None = None):
+         facet_col: str | None, *, hline: float | None = None, transformed: bool = False):
     def build():
         df = frame.copy()
-        df["_Value"] = _value(df, metric)
+        df["_Value"] = _value(df, metric, transformed=transformed)
         return rc.dot_plot(df, "_Value", y_label=label, facet_col=facet_col,
                            hline_at=hline, factors=experiment.design_factors,
                            empty_reason=_empty_reason(frame, metric))
@@ -613,7 +614,7 @@ def _timecourse(experiment: Experiment, metric: str, mode: str, options: ReportO
         summary = experiment.feeding_summary(range_minutes=options.range_minutes,
                                              transform_licks=options.transform_licks)
         try:
-            values = _value(summary, metric)
+            values = _value(summary, metric, transformed=options.transform_licks)
         except Exception:  # noqa: BLE001 - an unknown metric fails in the plot below
             values = None
         if values is not None and not pd.to_numeric(values, errors="coerce").notna().any():
@@ -683,7 +684,8 @@ def _generic_results(experiment: Experiment, options: ReportOptions) -> list[Any
                      f"duration in seconds.  The diamond and bars are the treatment "
                      f"mean ± SEM."),
         rl.PlotRow([
-            rl.Plot(_dot(experiment, frame, "Licks", label("Licks") + tx, facet_col),
+            rl.Plot(_dot(experiment, frame, "Licks", label("Licks") + tx, facet_col,
+                         transformed=options.transform_licks),
                     title=label("Licks") + tx),
             rl.Plot(_dot(experiment, frame, "Events", label("Events"), facet_col),
                     title=label("Events")),
@@ -706,7 +708,8 @@ def _generic_results(experiment: Experiment, options: ReportOptions) -> list[Any
         ], height=3.0))
         stat_metrics = ["Licks", "Events", "MedDuration", "MeanDuration"]
     if compare:
-        blocks += rc.stats_table(treatment_comparisons(frames, stat_metrics),
+        blocks += rc.stats_table(treatment_comparisons(frames, stat_metrics,
+                                                       transformed=options.transform_licks),
                                  caption="Treatment comparisons: consumption",
                                  well_names=names, show_phase=bool(facet_col),
                                  two_well=two_well)
@@ -924,7 +927,8 @@ def _yoked_blocks(experiment: Experiment, options: ReportOptions) -> list[Any]:
                            tone="failed")]
     tables = yr.yoked_table_blocks(frame, well_names=experiment.well_names or {},
                                    two_well=_is_two_well(experiment),
-                                   include_comparison=options.include_comparison)
+                                   include_comparison=options.include_comparison,
+                                   transformed=options.transform_licks)
     if not tables:
         return []
     return [rl.Heading("Paired and yoked", level=2),
@@ -935,7 +939,8 @@ def _yoked_blocks(experiment: Experiment, options: ReportOptions) -> list[Any]:
                          "(against zero), and do treatments differ?"),
             *tables,
             *yr.yoked_figure_blocks(frame, well_names=experiment.well_names or {},
-                                    factors=experiment.design_factors)]
+                                    factors=experiment.design_factors,
+                                    transformed=options.transform_licks)]
 
 
 def _light_headline_blocks(experiment: Experiment, frame: pd.DataFrame, kept: pd.DataFrame,

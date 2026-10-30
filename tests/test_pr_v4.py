@@ -329,6 +329,36 @@ def test_the_breaking_point_reports_the_requirement_it_reached(gen3):
     assert any(isinstance(b, rl.Heading) and b.text == "Breaking point" for b in blocks)
 
 
+def test_the_report_says_a_transformed_lick_difference_is_on_the_root_scale(tmp_path):
+    """Review C2 (owner decision): dLicksA stays paired^0.25 - yoked^0.25
+    under transform_licks, and the report's labels and text say so; without
+    the transform they say nothing of it."""
+    spec, results = choice()
+    e = load(pr_dir(tmp_path / "exp", spec, results))
+
+    def lick_measures(transformed: bool) -> tuple[set[str], str]:
+        e.transform_licks = transformed
+        blocks = e.report_results_blocks([], SimpleNamespace(include_comparison=True))
+        measures = {m for b in blocks if isinstance(b, rl.Table) and "Measure" in b.frame
+                    for m in b.frame["Measure"] if "licks" in str(m) and "Δ" in str(m)}
+        text = " ".join(b.text for b in blocks if isinstance(b, rl.Paragraph))
+        return measures, text
+
+    measures, text = lick_measures(True)
+    assert measures and all("¼-root scale" in m for m in measures)
+    assert "Lick differences are on the ¼-root scale" in text
+    diff = e.paired_yoked_diff()
+    facet = e.feeding_summary_facet()
+    row = diff.dropna(subset=["dLicksA"]).iloc[0]
+    rows = facet[(facet["DFM"] == row["DFM"]) & (facet["Facet"] == row["Facet"])
+                 ].set_index("Chamber")
+    assert row["dLicksA"] == pytest.approx(rows.loc[row["PairedChamber"], "LicksA"]
+                                           - rows.loc[row["YokedChamber"], "LicksA"])
+    measures, text = lick_measures(False)
+    assert measures and not any("¼-root" in m for m in measures)
+    assert "¼-root" not in text
+
+
 def test_the_project_report_shows_the_break_requirement_beside_the_breaking_point(gen3):
     e, _results = gen3
     view = break_requirement_view(e.breaking_point_summary())
@@ -824,19 +854,30 @@ def test_single_disagreeing_with_program_pairs_is_noted(tmp_path):
     assert note in warnings
 
 
-def test_a_solo_group_drops_alone_and_a_pair_needs_both_chambers(solo, tmp_path):
+def test_a_solo_group_drops_alone_and_a_pair_keeps_its_breaking_point(solo, tmp_path):
     spec, results = choice()
     e = load(unpaired_dir(tmp_path / "solo", spec, results))
     before = set(e.breaking_point_summary().set_index(["DFM", "Group"]).index)
     e._remove_chambers_from_design({(1, 2)})
     after = set(e.breaking_point_summary().set_index(["DFM", "Group"]).index)
     assert before - after == {(1, 2)}
-    ## A pair: removing its yoked chamber takes the group out.
+    ## A pair: the Breaking Point is the Paired fly's alone, so removing the
+    ## Yoked chamber keeps the group's row, unchanged (review C1); only the
+    ## Paired-Yoked Difference, which needs both flies, loses it.
     paired = load(pr_dir(tmp_path / "paired", spec, results))
-    assert (1, 1) in set(paired.breaking_point_summary().set_index(["DFM", "Group"]).index)
-    paired._remove_chambers_from_design({(1, 2)})
-    left = set(paired.breaking_point_summary().set_index(["DFM", "Group"]).index)
-    assert (1, 1) not in left and paired.paired_yoked_diff().query("Group == 1 and DFM == 1").empty
+    whole = paired.breaking_point_summary().set_index(["DFM", "Group"])
+    assert (1, 1) in set(whole.index)
+    paired_chamber = int(whole.loc[(1, 1), "PairedChamber"])
+    yoked = paired.group_training(1, 1).yoked_chamber
+    paired._remove_chambers_from_design({(1, int(yoked))})
+    left = paired.breaking_point_summary().set_index(["DFM", "Group"])
+    assert (1, 1) in set(left.index)
+    assert int(left.loc[(1, 1), "BreakingPoint"]) == int(whole.loc[(1, 1), "BreakingPoint"])
+    assert paired.paired_yoked_diff().query("Group == 1 and DFM == 1").empty
+    ## Removing the Paired chamber does take the group out.
+    paired._remove_chambers_from_design({(1, paired_chamber)})
+    gone = set(paired.breaking_point_summary().set_index(["DFM", "Group"]).index)
+    assert (1, 1) not in gone
 
 
 def test_the_project_report_says_there_are_no_yoked_controls(solo):

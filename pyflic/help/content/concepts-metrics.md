@@ -30,6 +30,12 @@ Three consequences follow, and all three surprise people:
 - **The preference index is unaffected.** PI and event PI are computed from raw counts
   before the transform is applied, so turning the transform on or off never changes a PI.
 
+Two more follow from it. A two-well **total** of licks, wherever a table, a plot or a
+statistic adds the two wells (a two-well `Licks` figure, the binned plots' `total` mode),
+is the root of the summed counts, (A + B)^¼, not A^¼ + B^¼. A **difference** of licks, such
+as a paired − yoked `dLicksA`, is the difference of the transformed values, a contrast on
+the fourth-root scale; its labels say "¼-root scale".
+
 Only lick counts are transformed. Events, durations, intervals and intensities are always
 raw.
 
@@ -43,10 +49,10 @@ when the experiment has any. Only chambers assigned to a treatment have a row.
 | `Licks` | Number of lick samples (transformed by default — see above) |
 | `Events` | Number of feeding events (bouts) |
 | `MeanDuration`, `MedDuration` | Mean and median event duration, in **seconds** |
-| `MeanTimeBtw`, `MedTimeBtw` | Mean and median length, in seconds, of the stretches without feeding: the gaps between events, and also the stretch before the first event and after the last |
+| `MeanTimeBtw`, `MedTimeBtw` | Mean and median length, in seconds, of the stretches without feeding: the gaps between events, and also the stretch before the first event and after the last; each counted in the window where it begins, and `NaN` in a window where none begins |
 | `MeanInt`, `MedianInt`, `MinInt`, `MaxInt` | Intensity of the baselined signal within events |
 | `OptoOn_sec` | Seconds the light was on for that well |
-| `StartMin`, `EndMin` | The time range this row was computed over |
+| `StartMin`, `EndMin` | The time range this row was computed over; `inf` for an open end (the last Facet), and a Slice's own minutes for its unfaceted rows |
 
 **Duration** is event length in samples divided by `samples_per_second`, so it is real
 seconds regardless of your sampling rate. **Intensity** summarises the baselined signal
@@ -125,9 +131,9 @@ A chamber that recorded no events has no duration or intensity to report, and th
 columns are `NaN` rather than `0`. A chamber with no licks at all has an undefined PI, also
 `NaN`. This distinction is deliberate: a fly that never fed is not a fly that fed with zero
 duration, and treating the two as equal will bias any average you compute. Its
-`MeanTimeBtw` and `MedTimeBtw` are not `NaN`, and mean nothing: the whole recording is one
-stretch without feeding, counted in the window where it begins, so they read as its length
-there and `0` in the windows after. Exclude inactive
+`MeanTimeBtw` and `MedTimeBtw` mean nothing: the whole recording is one stretch without
+feeding, counted in the window where it begins, so they read as its length there, and
+`NaN` in every window where no stretch begins. Exclude inactive
 chambers rather than letting them through — see
 [exclusions](config-dfms-chambers.md#excluding-chambers).
 

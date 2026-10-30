@@ -390,3 +390,43 @@ def test_the_progressive_ratio_groups_have_help(app, tmp_path):
             for g in (dialog.pr_qc_group, dialog.pr_break_group)}
     assert refs[dialog.pr_qc_group] == ["concepts-progressive-ratio#light-qc"]
     assert refs[dialog.pr_break_group] == ["concepts-progressive-ratio#breaking-point"]
+
+
+def test_a_typed_path_fills_the_form_only_once_it_is_finished(app, tmp_path):
+    """Typing towards one folder passes through others: an intermediate path
+    that is a Project must not reload the form over what was edited, and
+    leaving the field after only looking at it changes nothing."""
+    other = tmp_path / "Other"
+    _write(other / "project.yaml", {"name": "Other", "design": {"global": {
+        "experiment_type": "hedonic", "well_names": {"A": "X", "B": "Y"},
+        "constants": {"hand_written": 7}}}})
+    dialog = ProjectDesignDialog(start_dir=str(tmp_path / "fresh"))
+    dialog.notes_edit.setPlainText("my notes")
+
+    dialog.dir_edit.setText(str(other))          # typed, not yet finished
+    assert dialog.notes_edit.toPlainText() == "my notes"
+    assert dialog.well_a_edit.text() == ""
+
+    dialog.dir_edit.editingFinished.emit()
+    assert dialog.name_edit.text() == "Other" and dialog.well_a_edit.text() == "X"
+
+    dialog.well_a_edit.setText("edited")
+    dialog.dir_edit.editingFinished.emit()       # focus left, nothing typed
+    assert dialog.well_a_edit.text() == "edited"
+
+
+def test_a_folder_filled_from_keeps_none_of_the_last_folders_constants(app, tmp_path):
+    """A constant the form has no field for belongs to the project.yaml it
+    was read from, not to the next folder the dialog is pointed at."""
+    other = tmp_path / "Other"
+    _write(other / "project.yaml", {"name": "Other", "design": {"global": {
+        "experiment_type": "hedonic", "well_names": {"A": "X", "B": "Y"},
+        "constants": {"hand_written": 7}}}})
+    dialog = ProjectDesignDialog(start_dir=str(other))
+    assert dialog._build_design()["global"]["constants"]["hand_written"] == 7
+
+    fresh = tmp_path / "fresh"
+    fresh.mkdir()
+    dialog.dir_edit.setText(str(fresh))
+    dialog.dir_edit.editingFinished.emit()
+    assert "hand_written" not in (dialog._build_design()["global"].get("constants") or {})

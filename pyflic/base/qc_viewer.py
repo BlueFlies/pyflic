@@ -83,6 +83,7 @@ from .ui import (
     ActionButton, Card, Category, OutputLog, TopBar,
     apply_theme, category_color, icon, resolved_mode,
 )
+from . import slices as slices_mod
 from .gui_env import sanitize_input_method_environment
 from .ui import settings as ui_settings
 from .ui.widgets import NoWheelComboBox
@@ -346,8 +347,9 @@ class _LoadWorker(QtCore.QObject):
         from .yaml_config import load_experiment_yaml
 
         ## Exclusions are what the viewer exists to decide, so none is
-        ## applied (exclusion_group=None).  A Slice still names its own group
-        ## as the one its removals are written to.
+        ## applied (exclusion_group=None).  The experiment still names the
+        ## group its removals are written to: a Slice's own, else the
+        ## design's (global.exclusion_group).
         if self._slice_name is not None:
             window: dict = {"slice": self._slice_name}
         else:
@@ -423,10 +425,6 @@ class _QCWorker(QtCore.QObject):
 # Slices (ADR-0020)
 # ───────────────────────────────────────────────────────────────────────────
 
-#: The Slice menu's first entry: the implicit Slice every experiment has.
-WHOLE_RECORDING_LABEL = "Whole recording"
-
-
 def _declared_slices(experiment_dir: Path) -> list:
     """The Slices *experiment_dir* can be loaded as: its Project design's for
     a member, its own ``flic_config.yaml``'s otherwise — none when neither
@@ -434,7 +432,6 @@ def _declared_slices(experiment_dir: Path) -> list:
     menu offers what the Load button can do."""
     from . import experiment_types
     from . import project as project_mod
-    from . import slices as slices_mod
 
     exp_dir = Path(experiment_dir)
     try:
@@ -451,22 +448,15 @@ def _declared_slices(experiment_dir: Path) -> list:
 
 def _slices_of(exp) -> list:
     """The Slices a loaded experiment's design declares that it can run."""
-    from . import slices as slices_mod
-
     g = getattr(exp, "global_config", None)
     if not isinstance(g, dict):
         return []
-    try:
-        return slices_mod.usable_slices(g, getattr(exp, "experiment_type", None))
-    except Exception:  # noqa: BLE001 - a menu must not fail the load
-        return []
+    return slices_mod.usable_slices(g, getattr(exp, "experiment_type", None))
 
 
 def _slice_of(exp):
     """The :class:`~pyflic.base.slices.Slice` *exp* was loaded as, or ``None``
     for the whole recording."""
-    from . import slices as slices_mod
-
     found = getattr(exp, "slice", None)
     return found if isinstance(found, slices_mod.Slice) else None
 
@@ -530,7 +520,7 @@ class LoadTab(QtWidgets.QWidget):
         self._form = form
         ## The wheel scrolls the form, never the Slice.
         self._slice_combo = NoWheelComboBox()
-        self._slice_combo.addItem(WHOLE_RECORDING_LABEL, None)
+        self._slice_combo.addItem(slices_mod.WHOLE_RECORDING_LABEL, None)
         self._slice_combo.setToolTip(
             "Load the whole recording, or a Slice the design declares: its "
             "own minutes, and its own exclusion group, which Save "
@@ -626,9 +616,9 @@ class LoadTab(QtWidgets.QWidget):
         combo.blockSignals(True)
         try:
             combo.clear()
-            combo.addItem(WHOLE_RECORDING_LABEL, None)
+            combo.addItem(slices_mod.WHOLE_RECORDING_LABEL, None)
             for item in declared:
-                combo.addItem(f"{item.name}  {item.bounds_label()}", item.name)
+                combo.addItem(item.label(), item.name)
             index = combo.findData(keep) if keep is not None else 0
             combo.setCurrentIndex(max(index, 0))
         finally:
@@ -2296,9 +2286,14 @@ class MainWindow(QtWidgets.QMainWindow):
     # ------------------------------------------------------------------
 
     def _active_group(self) -> str:
-        """The exclusion group this experiment analyzes with — inside a
-        Project the Design names it (ADR-0010); ``general`` otherwise."""
-        return str(getattr(self._exp, "exclusion_group", None) or "general")
+        """The exclusion group this experiment's removals are written to: a
+        Slice's own, or the whole recording's as the design names it
+        (``global.exclusion_group``, ``general`` when unset; inside a Project
+        the Design's, ADR-0010)."""
+        group = getattr(self._exp, "exclusion_group", None)
+        if group:
+            return str(group)
+        return slices_mod.whole_recording_group(getattr(self._exp, "global_config", None))
 
     def _read_excluded_from_file(self) -> dict[int, list[int]]:
         """Read the experiment's exclusion group from ``remove_chambers.csv``."""
@@ -2317,11 +2312,51 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         if not ok or not group.strip():
             return
-        self._save_exclusions_to_file(group=group.strip())
+        group = group.strip()
+        if not self._confirm_other_analysis_group(group):
+            return
+        self._save_exclusions_to_file(group=group)
 
-    def _save_exclusions_to_file(self, *, group: str = "general") -> None:
-        """Write the current exclusion state to ``remove_chambers.csv`` under *group*."""
-        from .exclusions import write_exclusions
+    def _owner_of_group(self, group: str) -> str | None:
+        """The analysis other than the loaded one whose own group *group*
+        is — ``"the whole recording"`` or ``"Slice early"`` — or ``None``."""
+        if group == self._active_group():
+            return None
+        g = getattr(self._exp, "global_config", None)
+        g = g if isinstance(g, dict) else {}
+        if group == slices_mod.whole_recording_group(g):
+            return "the whole recording"
+        for item in slices_mod.usable_slices(g):
+            if item.exclusion_group == group:
+                return f"Slice {item.name}"
+        return None
+
+    def _confirm_other_analysis_group(self, group: str) -> bool:
+        """Ask before writing over another analysis's own group: a save
+        replaces every row of the group it names, and these ticks were read
+        from the loaded analysis's group, not that one's."""
+        owner = self._owner_of_group(group)
+        if owner is None:
+            return True
+        from .exclusions import read_exclusions
+
+        rows = sum(len(chambers) for chambers in
+                   (read_exclusions(self._experiment_dir).get(group) or {}).values())
+        chambers = sum(len(v) for v in self._excluded_chambers_by_dfm().values())
+        answer = QtWidgets.QMessageBox.question(
+            self, "Save removed chambers",
+            f"'{group}' is the own group of {owner}, not of what is loaded "
+            f"(its group is '{self._active_group()}').\n\n"
+            f"Saving replaces the {rows} row(s) of '{group}' in remove_chambers.csv "
+            f"with the {chambers} chamber(s) excluded here, and {owner} is then "
+            f"analysed with exactly those removed.\n\nSave to '{group}' anyway?",
+            QtWidgets.QMessageBox.StandardButton.Save
+            | QtWidgets.QMessageBox.StandardButton.Cancel,
+            QtWidgets.QMessageBox.StandardButton.Cancel)
+        return answer == QtWidgets.QMessageBox.StandardButton.Save
+
+    def _excluded_chambers_by_dfm(self) -> dict[int, list[int]]:
+        """The chambers the tabs exclude now, by DFM."""
         excl_by_dfm: dict[int, list[int]] = {}
         for dfm_id, tab in self._dfm_tab_widgets.items():
             excl_wells = tab.get_excluded_wells()
@@ -2329,6 +2364,14 @@ class MainWindow(QtWidgets.QMainWindow):
             excl_chambers = sorted({(w - 1) // cs + 1 for w in excl_wells})
             if excl_chambers:
                 excl_by_dfm[dfm_id] = excl_chambers
+        return excl_by_dfm
+
+    def _save_exclusions_to_file(self, *, group: str | None = None) -> None:
+        """Write the current exclusion state to ``remove_chambers.csv`` under
+        *group* (default: :meth:`_active_group`)."""
+        from .exclusions import write_exclusions
+        group = group or self._active_group()
+        excl_by_dfm = self._excluded_chambers_by_dfm()
         try:
             out = write_exclusions(self._experiment_dir, group, excl_by_dfm)
             total = sum(len(v) for v in excl_by_dfm.values())

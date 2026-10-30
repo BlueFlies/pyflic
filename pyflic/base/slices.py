@@ -57,12 +57,15 @@ RECORD_FILENAME = "slice.json"
 DEFAULT_TOLERANCE_MIN = 5.0
 #: The ``end:`` spellings that mean "to the end of the recording".
 OPEN_END_WORDS = frozenset({"end", "open", "inf", "infinity", ""})
-#: The only ``constants:`` a Slice may override: the ones that decide which
-#: chambers auto-removal takes out.  Detection settings stay project-wide, so
-#: a Slice is the same analysis of fewer minutes.
+#: The only ``constants:`` a Slice may override: the lick cutoff, and the
+#: unexplained-light verdict and the switch that removes the chambers it
+#: fails, whose share of unlit time a shorter Slice changes.  Detection
+#: settings and the firmware's rule checks stay project-wide, so a Slice is
+#: the same analysis of fewer minutes.
 AUTO_REMOVAL_CONSTANTS = frozenset({
     "min_untransformed_licks_cutoff",
     "exclude_failed_opto_chambers",
+    "opto_unexplained_fail_fraction",
     "opto_unexplained_min_sec",
 })
 #: Names a Slice cannot take: the Hub and the scripts use them for the whole
@@ -83,11 +86,13 @@ class SliceNotCovered(ValueError):
     DFM's last minute.
     """
 
-    def __init__(self, slice_: "Slice", reason: str, dfm_ends: Mapping[int, float]):
+    def __init__(self, slice_: "Slice", reason: str, dfm_ends: Mapping[int, float],
+                 tolerance: float = DEFAULT_TOLERANCE_MIN):
         super().__init__(f"Slice '{slice_.name}' {slice_.bounds_label()}: {reason}")
         self.slice = slice_
         self.reason = reason
         self.dfm_ends = {int(k): float(v) for k, v in dfm_ends.items()}
+        self.tolerance = float(tolerance)
 
 
 @dataclass(frozen=True)
@@ -119,13 +124,16 @@ class Slice:
     @property
     def exclusion_groups(self) -> tuple[str, ...]:
         """Every group this Slice excludes: its own first."""
-        return (self.exclusion_group,) + tuple(
-            g for g in self.also_exclude if g != self.exclusion_group)
+        return exclusion_groups(self.exclusion_group, self.also_exclude)
 
     def bounds_label(self) -> str:
         """``"(0, 360] min"`` / ``"(360, end] min"``."""
-        end = "end" if self.end is None else _tidy(self.end)
-        return f"({_tidy(self.start)}, {end}] min"
+        end = "end" if self.end is None else tidy_minute(self.end)
+        return f"({tidy_minute(self.start)}, {end}] min"
+
+    def label(self) -> str:
+        """``"early  (0, 360] min"``: the Slice as a picker or a box names it."""
+        return f"{self.name}  {self.bounds_label()}"
 
     def definition(self) -> dict:
         """What a run of this Slice depended on: compared with the record a
@@ -139,9 +147,22 @@ class Slice:
         }
 
 
-def _tidy(value: float):
+def tidy_minute(value: float):
+    """A minute as a person writes it: ``360``, not ``360.0``; ``0.5`` and
+    ``inf`` as they are."""
     value = float(value)
     return int(value) if value.is_integer() else value
+
+
+def exclusion_groups(own: str, also: Sequence[str] = ()) -> tuple[str, ...]:
+    """Every group an analysis excludes: its own first, then the ones it also
+    excludes, each once."""
+    return (own,) + tuple(dict.fromkeys(g for g in also if g != own))
+
+
+def groups_label(groups: Sequence[str]) -> str:
+    """``'general'`` or ``'early' + 'dead'``, for log lines and summaries."""
+    return " + ".join(f"'{g}'" for g in groups) or "(none)"
 
 
 def _groups(value, where: str) -> tuple[str, ...]:
@@ -177,21 +198,31 @@ def whole_recording_group(global_cfg: Mapping[str, Any] | None) -> str:
 
 
 def also_exclude(global_cfg: Mapping[str, Any] | None) -> tuple[str, ...]:
-    """The groups the whole recording also excludes (``global.also_exclude``)."""
+    """The groups the whole recording also excludes (``global.also_exclude``);
+    none for one that is not a list of names, which :func:`slice_problems`
+    reports."""
     try:
         return _groups((global_cfg or {}).get("also_exclude"), "also_exclude")
     except SliceError:
         return ()
 
 
-def tolerance(global_cfg: Mapping[str, Any] | None) -> float:
-    """``slice_tolerance_min``, or :data:`DEFAULT_TOLERANCE_MIN`."""
-    raw = (global_cfg or {}).get("slice_tolerance_min")
+def _tolerance_value(raw) -> float | None:
+    if isinstance(raw, bool):
+        return None
     try:
         value = float(raw)
     except (TypeError, ValueError):
-        return DEFAULT_TOLERANCE_MIN
-    return value if math.isfinite(value) and value >= 0 else DEFAULT_TOLERANCE_MIN
+        return None
+    return value if math.isfinite(value) and value >= 0 else None
+
+
+def tolerance(global_cfg: Mapping[str, Any] | None) -> float:
+    """``slice_tolerance_min``, or :data:`DEFAULT_TOLERANCE_MIN` when it is
+    unset or is not a minute of 0 or more (which :func:`slice_problems`
+    reports)."""
+    value = _tolerance_value((global_cfg or {}).get("slice_tolerance_min"))
+    return DEFAULT_TOLERANCE_MIN if value is None else value
 
 
 def parse_slices(global_cfg: Mapping[str, Any] | None) -> list[Slice]:
@@ -208,9 +239,47 @@ def slice_problems(global_cfg: Mapping[str, Any] | None, experiment_type=None) -
     """Every reason the Design's ``slices:`` cannot be used, for the linter
     and the editors; empty when they can (or there are none)."""
     problems, slices = _parse(global_cfg)
+    problems = _setting_problems(global_cfg) + problems
     if slices and experiment_type is not None and not allows_slices(experiment_type):
         problems.append(refusal(experiment_type))
     return problems
+
+
+def _setting_problems(global_cfg: Mapping[str, Any] | None) -> list[str]:
+    """What is wrong with ``also_exclude`` and ``slice_tolerance_min``, which
+    a load would otherwise read as no groups and as the default."""
+    cfg = global_cfg or {}
+    problems: list[str] = []
+    try:
+        _groups(cfg.get("also_exclude"), "also_exclude")
+    except SliceError as err:
+        problems.append(str(err))
+    raw = cfg.get("slice_tolerance_min")
+    if raw is not None and _tolerance_value(raw) is None:
+        problems.append(f"slice_tolerance_min must be a number of minutes, 0 or more, "
+                        f"not {raw!r}")
+    return problems
+
+
+def _constant_problems(constants: Mapping[str, Any],
+                       global_cfg: Mapping[str, Any]) -> list[str]:
+    """What is wrong with the values of a Slice's ``constants:``, judged as
+    the design's would be; a Slice's failure fraction is also checked against
+    the design's warning fraction, which it cannot override."""
+    from .opto_qc import opto_constant_problems
+
+    problems: list[str] = []
+    key = "min_untransformed_licks_cutoff"
+    cutoff = constants.get(key)
+    if cutoff is not None and (isinstance(cutoff, bool) or not isinstance(cutoff, (int, float))
+                               or not math.isfinite(float(cutoff)) or cutoff < 0):
+        problems.append(f"'constants.{key}' must be a number of 0 or more, got {cutoff!r}")
+    opto = {k: v for k, v in constants.items() if k != key}
+    design = dict(global_cfg.get("constants") or {})
+    warn = "opto_unexplained_warn_fraction"
+    if "opto_unexplained_fail_fraction" in opto and warn in design:
+        opto = {warn: design[warn], **opto}
+    return problems + opto_constant_problems(opto)
 
 
 def _parse(global_cfg: Mapping[str, Any] | None) -> tuple[list[str], list[Slice]]:
@@ -285,7 +354,8 @@ def _parse(global_cfg: Mapping[str, Any] | None) -> tuple[list[str], list[Slice]
             problems.append(f"{where}: start must be a minute of 0 or more")
             continue
         if end is not None and end <= start:
-            problems.append(f"{where}: end ({_tidy(end)}) must be after start ({_tidy(start)})")
+            problems.append(f"{where}: end ({tidy_minute(end)}) must be after start "
+                            f"({tidy_minute(start)})")
             continue
         own = str(body.get("exclusion_group") or name).strip() or name
         ## An analysis's own group is where its removals are written, so two
@@ -304,6 +374,10 @@ def _parse(global_cfg: Mapping[str, Any] | None) -> tuple[list[str], list[Slice]
         if illegal:
             problems.append(f"{where}: constants {illegal} cannot vary by Slice; a Slice may "
                             f"override only {sorted(AUTO_REMOVAL_CONSTANTS)}")
+            continue
+        bad = _constant_problems({str(k): v for k, v in constants.items()}, cfg)
+        if bad:
+            problems += [f"{where}: {problem}" for problem in bad]
             continue
         slices.append(Slice(name=name, start=start, end=end, exclusion_group=own,
                             also_exclude=others,
@@ -360,7 +434,7 @@ def coverage(slice_: Slice, dfm_ends: Mapping[int, float], tol: float) -> str | 
             short.append(f"DFM {dfm_id} ends at minute {last:.1f}, before the Slice starts")
         elif slice_.end is not None and last < slice_.end - tol:
             short.append(f"DFM {dfm_id} ends at minute {last:.1f}, short of the Slice's end "
-                         f"at {_tidy(slice_.end)} (tolerance {_tidy(tol)} min)")
+                         f"at {tidy_minute(slice_.end)} (tolerance {tidy_minute(tol)} min)")
     return "; ".join(short) or None
 
 
@@ -403,7 +477,7 @@ def intersect_window(window: Sequence[float], bounds: tuple[float, float]):
     when nothing is left."""
     a = max(float(window[0]), float(bounds[0]))
     b = min(float(window[1]), float(bounds[1]))
-    return (_tidy_bound(a), _tidy_bound(b)) if b > a else None
+    return (tidy_minute(a), tidy_minute(b)) if b > a else None
 
 
 def intersect_windows(windows, bounds: tuple[float, float]) -> list[tuple]:
@@ -414,12 +488,6 @@ def intersect_windows(windows, bounds: tuple[float, float]) -> list[tuple]:
         if kept is not None:
             out.append(kept)
     return out
-
-
-def _tidy_bound(value: float):
-    if math.isinf(value) or not float(value).is_integer():
-        return value
-    return int(value)
 
 
 # ---------------------------------------------------------------------------
@@ -451,6 +519,13 @@ def write_record(root: str | Path, slice_: Slice, *, tol: float,
     }
     path.write_text(json.dumps(record, indent=2), encoding="utf-8")
     return path
+
+
+def record_not_covered(root: str | Path, err: SliceNotCovered) -> Path:
+    """Write the ``slice.json`` of a recording that does not cover the Slice
+    it was asked to load: it is left out of that Slice, not failed."""
+    return write_record(root, err.slice, tol=err.tolerance, dfm_ends=err.dfm_ends,
+                        reason=err.reason)
 
 
 def read_record(root: str | Path, name: str) -> dict | None:

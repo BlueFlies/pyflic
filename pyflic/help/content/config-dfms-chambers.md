@@ -152,10 +152,11 @@ Which group applies depends on how you load:
 | How you load | Group applied |
 |---|---|
 | `load_experiment_yaml(..., exclusion_group="general")` | the one you name |
+| `load_experiment_yaml(...)` naming no group | the config's `exclusion_group:` (default `general`) |
 | The Hub, loading a Project's member | the design's `exclusion_group:` (default `general`) |
-| The Hub, loading a standalone experiment | `general` |
+| The Hub, loading a standalone experiment | its `exclusion_group:` (default `general`) |
 | The `remove_chambers` script step | the step's `group:`, defaulting to the **script's name** |
-| QC Viewer, **Save Exclusions…** | saves the current selection to any group you name |
+| QC Viewer, **Save Exclusions…** | saves the current selection to any group you name, asking first when it is another analysis's own group |
 
 That script-step default is worth internalising: a script named `Standard Analysis` with a
 bare `remove_chambers` step applies the group `Standard Analysis`. It is what lets one CSV

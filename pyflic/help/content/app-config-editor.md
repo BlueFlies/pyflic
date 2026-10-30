@@ -139,11 +139,14 @@ Optional. Which `remove_chambers.csv` groups each analysis reads, and the
   - **End (min)**. `end`, or blank, runs to the end of the recording.
   - **Own group**: the group this Slice's exclusions are read from and written to. It is
     the Slice's name unless you change it; a blank cell becomes the name, and the group is
-    always written to the file.
+    always written to the file. Renaming a Slice renames its own group too while that was
+    still the old name, and a Slice left out of the Hub's Selection stays left out under
+    its new name.
   - **Also exclude**.
   - The cutoffs a Slice may override. **Min licks** takes a number, or `off`. While the
-    optogenetic settings are shown, **Opto failed** takes `yes` or `no`, and
-    **Unexplained (s)** takes a number of seconds.
+    optogenetic settings are shown, **Opto failed** takes `yes` or `no`, **Fail fraction**
+    takes the unexplained-light failure fraction (0 to 1, not below the design's warning
+    fraction), and **Unexplained (s)** takes a number of seconds.
 
   A blank cutoff keeps the experiment's own. **Add Slice** adds a row, and **Remove**
   removes the selected one.

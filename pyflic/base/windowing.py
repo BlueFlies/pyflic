@@ -207,10 +207,15 @@ def range_key(range_minutes) -> tuple:
 
 def range_span(range_minutes) -> tuple[float, float]:
     """``(start, end)`` for the ``StartMin`` / ``EndMin`` columns: the pair
-    itself, or for a window list the first start and the last end."""
+    itself, or for a window list the first start and the last end.  An open
+    end — the tail Facet's ``(start, 0)`` — reads ``inf``, as its
+    ``FacetRange`` does; ``(0, 0)`` stays the whole-recording sentinel."""
     if not is_window_list(range_minutes):
-        return float(range_minutes[0]), float(range_minutes[1])
-    windows = sorted((float(w[0]), float(w[1])) for w in range_minutes)
+        start, end = float(range_minutes[0]), float(range_minutes[1])
+        if is_full_range(range_minutes):
+            return start, end
+        return start, (float("inf") if end <= 0.0 else end)
+    windows = sorted(window_bounds(range_minutes))
     if not windows:
         return float("nan"), float("nan")
     return windows[0][0], windows[-1][1]

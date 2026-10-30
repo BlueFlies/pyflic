@@ -116,6 +116,66 @@ def test_the_hub_handoff_skips_the_duplicate_load(app, member):
         win.close()
 
 
+def test_a_load_naming_no_group_saves_to_the_designs(app, member):
+    """No group on the experiment: the design's ``exclusion_group``, not a
+    hardcoded ``general`` that no run reads (P3)."""
+    exp = _FakeExp(member)
+    exp.exclusion_group = None
+    exp.global_config = {"exclusion_group": "main"}
+    win = qc_viewer.MainWindow(member, experiment=exp)
+    try:
+        assert win._active_group() == "main"
+    finally:
+        win.close()
+
+
+def test_saving_to_another_analysis_own_group_asks_first(app, member, monkeypatch):
+    """A save replaces every row of the group it names.  Typed over the
+    loaded Slice's group, another analysis's own group would lose its
+    declarations to ticks read from somewhere else: asked, with the count."""
+    from PyQt6.QtWidgets import QInputDialog, QMessageBox
+
+    from pyflic.base.exclusions import read_exclusions, write_exclusions
+
+    exp = _FakeExp(member)
+    exp.exclusion_group = "early"
+    exp.global_config = {"exclusion_group": "main", "slices": {
+        "early": {"start": 0, "end": 10}, "late": {"start": 10, "end": "end"}}}
+    write_exclusions(member, "main", {1: [1, 2, 3]})
+    asked: list[str] = []
+    answer = [QMessageBox.StandardButton.Cancel]
+    monkeypatch.setattr(QMessageBox, "question",
+                        staticmethod(lambda *a, **_k: asked.append(a[2]) or answer[0]))
+    win = qc_viewer.MainWindow(member, experiment=exp)
+
+    def save_as(group: str) -> None:
+        monkeypatch.setattr(QInputDialog, "getText",
+                            staticmethod(lambda *_a, **_k: (group, True)))
+        win._on_save_exclusions()
+
+    try:
+        save_as("main")
+        save_as("late")
+        assert len(asked) == 2
+        assert "own group of the whole recording" in asked[0]
+        assert "replaces the 3 row(s) of 'main'" in asked[0]
+        assert "own group of Slice late" in asked[1]
+        ## Cancelled: nothing written.
+        assert read_exclusions(member) == {"main": {1: [1, 2, 3]}}
+
+        ## The loaded analysis's own group, and a group no analysis owns,
+        ## save without asking.
+        save_as("early")
+        save_as("spare")
+        assert len(asked) == 2
+
+        answer[0] = QMessageBox.StandardButton.Save
+        save_as("main")
+        assert len(asked) == 3 and "main" not in read_exclusions(member)
+    finally:
+        win.close()
+
+
 def test_run_qc_waits_for_an_experiment(app, member):
     win = qc_viewer.MainWindow(member)
     try:

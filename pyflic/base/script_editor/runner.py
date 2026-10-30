@@ -52,13 +52,11 @@ class ScriptContext:
     def __init__(self, *, binsize: float = 30.0, parallel: bool = True,
                  exclusion_group: str | None = None,
                  loader: Callable[..., Any] | None = None,
-                 on_range: Callable[[float, float], None] | None = None,
                  log: Callable[[str], None] | None = None):
         self.binsize = float(binsize)
         self.parallel = bool(parallel)
         self.exclusion_group = exclusion_group
         self.loader = loader
-        self.on_range = on_range
         self._log = log
 
     def log(self, message: str) -> None:
@@ -143,9 +141,7 @@ def run_experiment_script(
                 slice_cache[name] = experiment.load_slice(name)
             except _slices.SliceNotCovered as err:
                 if experiment.experiment_dir is not None:
-                    _slices.write_record(experiment.experiment_dir, err.slice,
-                                         tol=_slices.tolerance(experiment.global_config),
-                                         dfm_ends=err.dfm_ends, reason=err.reason)
+                    _slices.record_not_covered(experiment.experiment_dir, err)
                 ctx.log(f"Slice {name}: not covered, left out ({err.reason})")
                 slice_cache[name] = None
         return slice_cache[name]
@@ -254,6 +250,8 @@ def run_experiment_script(
                 if action == "run_analysis":
                     run_analysis(target, binsize_min=bs, log=ctx.log)
                 else:
+                    ## A Slice's figures come back titled with its name, so
+                    ## the Hub shows the Slice it shows from the same step.
                     run = run_plots(target, metric=str(step.get("metric") or "Licks"),
                                     binsize_min=bs, log=ctx.log)
                     figures.extend(run.figures)

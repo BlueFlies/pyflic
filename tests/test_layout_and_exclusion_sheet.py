@@ -185,6 +185,19 @@ def test_a_standing_declaration_wins_and_the_difference_is_reported(tmp_path: Pa
     assert "noisy" in notes and "something else" not in notes
 
 
+def test_a_blank_group_lands_in_the_designs_own_and_an_unread_one_is_named(tmp_path: Path):
+    """A row naming no group goes where a load naming none reads; a group no
+    analysis excludes is still written, and said so."""
+    root = _batch_with_sheet(tmp_path, "ProjA,rep1,1,2,,noisy\nProjA,rep1,2,1,mian,typo\n")
+    _write(root / "ProjA" / "project.yaml",
+           {"name": "ProjA", "design": {"global": {"exclusion_group": "main"}}})
+    result = batch_mod.apply_exclusion_sheet(root, log=lambda _m: None)
+    assert result["counts"] == {"applied": 1, sheet_mod.UNREAD_GROUP: 1}
+    unread = next(r for r in result["results"] if r.status == sheet_mod.UNREAD_GROUP)
+    assert unread.wrote and "'mian'" in unread.detail and "'main'" in unread.detail
+    assert read_exclusions(root / "ProjA" / "rep1") == {"main": {1: [2]}, "mian": {2: [1]}}
+
+
 def test_rows_are_scoped_to_the_projects_actually_running(tmp_path: Path):
     """Unchecking a Project means "do not touch this Project", and recursion
     surfaces Projects the user may never have known were there."""

@@ -40,9 +40,14 @@ SHEET_SUFFIXES = (".csv", ".xlsx", ".xls")
 #: the point is that every exclusion carries *something* into the audit.
 DEFAULT_REASON = "Undefined"
 
-#: The exclusion group a row lands in when it names none.  Matches
+#: The exclusion group a row lands in when it names none and the Member's
+#: design names no ``exclusion_group`` either.  Matches
 #: ``Project.exclusion_group``'s own default.
 DEFAULT_GROUP = "general"
+
+#: A row written to a group no analysis of the Member's design excludes: the
+#: declaration is kept, and changes no result until an analysis names it.
+UNREAD_GROUP = "applied to an unread group"
 
 #: Header spellings accepted for each field (compared case- and
 #: space-insensitively), so a sheet written by hand does not have to guess.
@@ -83,14 +88,14 @@ class RowResult:
     """What applying one :class:`SheetRow` did."""
 
     row: SheetRow
-    #: applied | already declared | conflict | unknown project |
-    #: unknown member | unknown chamber | incomplete
+    #: applied | applied to an unread group | already declared | conflict |
+    #: unknown project | unknown member | unknown chamber | incomplete
     status: str
     detail: str = ""
 
     @property
     def wrote(self) -> bool:
-        return self.status == "applied"
+        return self.status in ("applied", UNREAD_GROUP)
 
     def describe(self) -> str:
         line = f"row {self.row.index} {self.row.where or '(blank)'}: {self.status}"
@@ -155,8 +160,8 @@ def read_sheet(path) -> list[SheetRow]:
 
     Headers are matched case-insensitively and ignoring spaces/underscores;
     ``project``, ``group`` and ``reason`` are optional (a Project-root sheet
-    needs no project column, a missing group is :data:`DEFAULT_GROUP`, and a
-    missing reason becomes :data:`DEFAULT_REASON`).  Raises ``ValueError`` when
+    needs no project column, a missing group is left blank for the Member's
+    design to name, and a missing reason becomes :data:`DEFAULT_REASON`).  Raises ``ValueError`` when
     the required columns are absent — an unparseable sheet is a mistake worth
     stopping for, unlike an unmatched row.
     """
@@ -193,7 +198,7 @@ def read_sheet(path) -> list[SheetRow]:
                        member=cell(raw, "member"),
                        dfm=cell(raw, "dfm"),
                        chamber=cell(raw, "chamber"),
-                       group=cell(raw, "group") or DEFAULT_GROUP,
+                       group=cell(raw, "group"),
                        reason=cell(raw, "reason") or DEFAULT_REASON)
         if not (row.project or row.member or row.dfm or row.chamber):
             continue                      # a blank spacer row
@@ -256,6 +261,7 @@ def _evaluate_sheet(root, rows) -> tuple:
     #: end so a sheet touching one Member twenty times writes one file.
     pending: dict[str, dict] = {}
     known_dfms: dict[str, set] = {}
+    groups_read: dict[str, tuple[str, set]] = {}
 
     for row in rows:
         dfm = _int(row.dfm)
@@ -322,11 +328,23 @@ def _evaluate_sheet(root, rows) -> tuple:
                         "groups": _read_groups(
                             read_exclusion_notes(member_dir))}
             pending[key] = declared
-        group_map = declared["groups"].setdefault(row.group, {})
+        if key not in groups_read:
+            groups_read[key] = _groups_read(member_dir)
+        own, read = groups_read[key]
+        ## A blank group is the whole recording's own, as the Member's design
+        ## names it: the group a load that names none excludes.
+        group = row.group or own
+        group_map = declared["groups"].setdefault(group, {})
         existing = group_map.get((dfm, chamber))
         if existing is None:
             group_map[(dfm, chamber)] = row.reason
-            results.append(RowResult(row, "applied"))
+            if group in read:
+                results.append(RowResult(row, "applied"))
+            else:
+                results.append(RowResult(
+                    row, UNREAD_GROUP,
+                    f"no analysis of {row.member} excludes group {group!r} "
+                    f"(they read {', '.join(repr(g) for g in sorted(read))})"))
         elif existing == row.reason:
             results.append(RowResult(row, "already declared"))
         else:
@@ -353,6 +371,42 @@ def _read_groups(groups) -> dict:
         for (dfm_id, chamber), note in (entries or {}).items():
             target[(int(dfm_id), int(chamber))] = note or DEFAULT_REASON
     return out
+
+
+def _groups_read(member_dir) -> tuple[str, set]:
+    """``(own, read)``: the whole recording's own group in the Member's
+    design, and every group something excludes — the whole recording and each
+    Slice, own and ``also_exclude`` alike, and a script's ``remove_chambers``
+    step (its ``group:``, or the script's name)."""
+    import yaml
+
+    from . import project as prj
+    from . import slices
+
+    def read_yaml(path) -> dict:
+        try:
+            with open(path, encoding="utf-8") as handle:
+                loaded = yaml.safe_load(handle) or {}
+        except Exception:  # noqa: BLE001
+            return {}
+        return loaded if isinstance(loaded, dict) else {}
+
+    config = read_yaml(os.path.join(str(member_dir), prj.CONFIG_FILENAME))
+    meta = read_yaml(os.path.join(os.path.dirname(os.path.abspath(str(member_dir))),
+                                  prj.PROJECT_FILENAME))
+    design, _path = prj.design_for_member(member_dir)
+    if design is None:
+        design = config.get("global") or {}
+    own = slices.whole_recording_group(design)
+    read = set(slices.exclusion_groups(own, slices.also_exclude(design)))
+    for item in slices.usable_slices(design):
+        read.update(item.exclusion_groups)
+    scripts = [*(config.get("scripts") or []), *(meta.get("experiment_scripts") or [])]
+    for script in (s for s in scripts if isinstance(s, dict)):
+        for step in (s for s in (script.get("steps") or []) if isinstance(s, dict)):
+            if str(step.get("action", "")).strip().lower() == "remove_chambers":
+                read.add(str(step.get("group", script.get("name") or "general")))
+    return own, read
 
 
 def _config_dfms(member_dir) -> set:

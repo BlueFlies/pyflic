@@ -108,6 +108,43 @@ def test_a_falling_trend_warns_and_too_few_events_is_only_a_note():
     assert v.flags == () and "breaking point" in v.notes[0]
 
 
+def test_the_trend_is_read_over_the_test_window_events():
+    """Review C9: the licks-per-event trend asks whether the requirement kept
+    rising within the Test window; events past it (a later ratio run, the
+    Acclimation after a restart) do not decide it."""
+    rising = np.arange(1, 9) * 5
+    after = np.array([1, 1, 2, 1, 1, 2, 1, 1])              # a fresh start after a restart
+    both = np.concatenate([rising, after])
+    assert lqc.NO_TREND in _judge(test_counts=both).flags
+    v = _judge(test_counts=both, trend_counts=rising)
+    assert lqc.NO_TREND not in v.flags and v.trend_rho == pytest.approx(1.0)
+    ## The lick-free run is still read over every Test event.
+    assert v.longest_lick_free_run == 0
+    few = _judge(test_counts=both, trend_counts=rising[:3])
+    assert "3 Test light event(s) in the Test window" in few.notes[0]
+
+
+def test_the_experiment_trends_over_its_test_window(tmp_path):
+    """The light QC's TrendRho and the requirement estimate read the events
+    inside pr_test_window_min, as the Breaking Point does."""
+    window = 10.0
+    root = make_pr_experiment_dir(tmp_path / "exp", constants={"pr_test_window_min": window})
+    e = load_experiment_yaml(root, parallel=False, use_disk_cache=False)
+    table = e.light_qc_table().set_index(["DFM", "Group"])
+    settings = e.light_qc_settings()
+    checked = 0
+    for (dfm_id, group), row in table.iterrows():
+        test = e._test_events(dfm_id, group)
+        inside = test[test["Minutes"] <= window]
+        ## Enough Test events for a trend verdict, too few inside the window.
+        if not (len(inside) < settings.trend_min_events <= len(test)):
+            continue
+        assert lqc.NO_TREND not in str(row["Flags"])
+        assert f"{len(inside)} Test light event(s) in the Test window" in row["Notes"]
+        checked += 1
+    assert checked
+
+
 def test_resting_level_warnings_need_a_margin_as_well_as_a_ratio():
     v = _judge(resting={"start": 10.0, "max": 40.0, "end": 38.0, "level": 20.0})
     assert lqc.RESTING_RISE in v.flags and not v.failed

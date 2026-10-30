@@ -175,6 +175,27 @@ def test_subset_keeps_the_rows_selected() -> None:
     assert part.paradigm.equals(state.paradigm[keep])
 
 
+def test_a_subset_from_mid_recording_knows_what_its_first_row_changed() -> None:
+    """Review C11: a range that starts mid-recording keeps the row before
+    its first, so an Activation counted on its first row is its own, and two
+    adjacent ranges' Activations add up to the whole's."""
+    _dfm, _r, state = runs("choice_pr")[0]
+    well = next(w for w in WELLS if state.activation_onsets(w).size > 2)
+    onsets = state.activation_onsets(well)
+    row = int(onsets[len(onsets) // 2])
+    keep = state.minutes > state.minutes[row - 1]       # the range starts on the onset
+    part, head = state.subset(keep), state.subset(~keep)
+    assert np.array_equal(part.activations_before, state.activations[row - 1])
+    assert np.array_equal(part.on_ms_before, state.on_ms[row - 1])
+    assert 0 in part.activation_onsets(well).tolist()
+    for w in WELLS:
+        assert (head.activation_onsets(w).size + part.activation_onsets(w).size
+                == state.activation_onsets(w).size), w
+    ## A state that starts with the recording has no row before.
+    assert state.activations_before is None and head.activations_before is None
+    assert 0 not in head.activation_onsets(well).tolist()
+
+
 # ---------------------------------------------------------------------------
 # Program Intervals
 # ---------------------------------------------------------------------------

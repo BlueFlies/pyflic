@@ -308,6 +308,41 @@ def test_a_facet_of_several_windows_pools_them(tmp_path, monkeypatch):
     assert (early["LitSec"] - expected.loc[early.index]).abs().max() < 1e-9
 
 
+def _clipped_load(root: Path, start: float):
+    return load_experiment_yaml(root, parallel=False, use_disk_cache=False,
+                                range_minutes=(start, 0))
+
+
+def test_a_light_on_at_a_slices_first_row_is_no_onset_of_it(tmp_path):
+    """Review C11, generations 1 and 2: a range's first row compares with
+    the row the clip cut off, so a light already on is no onset; the counts
+    are those of the same window of the whole recording."""
+    root = make_opto_dir(tmp_path / "exp")
+    whole = ls.light_wells(_load(root), range_minutes=(10, 0)).set_index("Well")
+    part = ls.light_wells(_clipped_load(root, 10)).set_index("Well")
+    ## Well 5 is lit throughout and well 6 the first half: on at minute 10.
+    assert part.loc[5, "LightOnsets"] == whole.loc[5, "LightOnsets"] == 0
+    assert part.loc[6, "LightOnsets"] == whole.loc[6, "LightOnsets"] == 0
+    pd.testing.assert_series_equal(part["LightOnsets"], whole["LightOnsets"])
+
+
+def test_an_activation_on_a_slices_first_row_is_counted(tmp_path):
+    """Review C11, generation 3: an Activation counted on a range's first row
+    is the range's, as in the same window of the whole recording."""
+    spec, results = _choice()
+    root = _recording(tmp_path / "exp", spec, results)
+    e = _load(root)
+    state = e.dfms[1].paradigm
+    onsets = state.activation_onsets(1)
+    row = int(onsets[len(onsets) // 2])
+    start = float(state.minutes[row - 1])               # the range starts on the onset
+    columns = ["Activations", "LightOnsets", "LitSec"]
+    whole = ls.light_wells(e, range_minutes=(start, 0)).set_index(["DFM", "Well"])[columns]
+    part = ls.light_wells(_clipped_load(root, start)).set_index(["DFM", "Well"])[columns]
+    pd.testing.assert_frame_equal(part, whole, check_exact=False, atol=1e-9)
+    assert part.loc[(1, 1), "Activations"] >= 1
+
+
 # ---------------------------------------------------------------------------
 # Progressive Ratio keeps its own Role and windows
 # ---------------------------------------------------------------------------

@@ -133,12 +133,14 @@ def _pooled_figure(project, plot_id: str, facet, binned, specs, *, source=None):
     ## A figure from another table (the light table) orders its own Facets.
     label_order = pubfigures.facet_order(
         facet if pubfigures.source_of(plot_id) == "facet" else source)
+    transformed = pubfigures.licks_transformed(project, plot_id)
     if family == pubfigures.FAMILY_TIMECOURSE:
-        df = pubfigures.timecourse_data(source, info["metric"])
+        df = pubfigures.timecourse_data(source, info["metric"], transformed=transformed)
     elif family == pubfigures.FAMILY_SCATTER:
         df = pubfigures.breaking_point_data(source)
     else:
-        df = pubfigures.faceted_data(source, info["metric"], label_order)
+        df = pubfigures.faceted_data(source, info["metric"], label_order,
+                                     transformed=transformed)
     if df.empty:
         return None
     spec = specs.plots.get(plot_id)
@@ -187,7 +189,7 @@ def write_project_report(project, path: str | Path | None = None, *,
 def report_path(project) -> str:
     """``<project>/<name>_report.pdf``; a Slice's is
     ``<project>/slices/<slice>/<name>_<slice>_report.pdf`` (ADR-0020)."""
-    if getattr(project, "slice", None) is None:
+    if project.slice is None:
         return os.path.join(project.project_directory, f"{project.name}_report.pdf")
     from . import slices
 
@@ -215,7 +217,7 @@ def build_project_report(project, *, ai_summary: bool = False) -> rl.ReportDocum
         raise ValueError(
             f"No member in '{project.name}' has a saved analysis to pool.")
     doc = rl.ReportDocument("Project report", _title(project))
-    doc.add(_cover(project, summary, missing))
+    doc.add(_cover(project, summary, missing, project.unfaceted_members(summary, facet)))
     doc.add(rl.PageBreak(), rl.Heading("Members"),
             rl.Paragraph("Each member is one experiment directory; the pooled figures and "
                          "statistics below stack their saved, filtered summaries."),
@@ -248,12 +250,13 @@ def _analysed_tone(value: Any) -> str | None:
 # ---------------------------------------------------------------------------
 
 def _title(project) -> str:
-    if getattr(project, "slice", None) is None:
+    if project.slice is None:
         return project.name
     return f"{project.name} · Slice {project.slice.name}"
 
 
-def _cover(project, summary: pd.DataFrame, missing: list[str]) -> list[Any]:
+def _cover(project, summary: pd.DataFrame, missing: list[str],
+           unfaceted: list[str] = ()) -> list[Any]:
     etype = project.experiment_type
     n_members = len(project.member_names)
     lines = [f"{etype.display_name} · {project.chamber_layout.replace('_', '-')} · "
@@ -263,8 +266,8 @@ def _cover(project, summary: pd.DataFrame, missing: list[str]) -> list[Any]:
         ("Members", ", ".join(project.member_names) or "none"),
         ("Chambers pooled", str(len(summary))),
     ]
-    left_out = project.not_covered() if hasattr(project, "not_covered") else {}
-    if getattr(project, "slice", None) is not None:
+    left_out = project.not_covered()
+    if project.slice is not None:
         rows.insert(1, ("Slice", f"{project.slice.name}, minutes "
                                  f"{project.slice.bounds_label()}: each Member analysed as if "
                                  f"its recording were only these minutes, with the Slice's "
@@ -302,8 +305,13 @@ def _cover(project, summary: pd.DataFrame, missing: list[str]) -> list[Any]:
         blocks.append(rl.Callout(
             f"{len(left_out)} member(s) do not cover this Slice and are left out of it: "
             f"{detail}.", tone="info", title="Not covered"))
-    spread = project.open_end_spread_note() if hasattr(project, "open_end_spread_note") \
-        else None
+    if unfaceted:
+        blocks.append(rl.Callout(
+            f"{len(unfaceted)} member(s) have no Facet table and are missing from every "
+            f"Facet's numbers: {', '.join(unfaceted)}.  Re-run the analysis of any that "
+            f"should have one.",
+            tone="warning", title="Not faceted"))
+    spread = project.open_end_spread_note()
     if spread:
         blocks.append(rl.Callout(spread + ".", tone="warning", title="Unequal spans"))
     exclusions = project.aggregated_exclusions()
@@ -457,11 +465,13 @@ def _results_blocks(project, summary: pd.DataFrame, facet) -> list[Any]:
             blocks += rc.stats_table(diff_rows, caption="Primary: paired − yoked "
                                                         "difference (one observation "
                                                         "per chamber group)",
-                                     well_names=names, show_phase=True)
+                                     well_names=names, show_phase=True,
+                                     transformed=project.transform_licks)
         blocks += rc.zero_test_table(project.diff_zero_rows(diff),
                                      caption="Paired − yoked difference against zero, "
                                              "per treatment",
-                                     well_names=names, show_phase=True)
+                                     well_names=names, show_phase=True,
+                                     transformed=project.transform_licks)
     if not single:
         rows = project.comparison_rows(summary, facet)
         caption = ("Per-chamber metrics (secondary)" if diff is not None
@@ -523,11 +533,13 @@ def _control_blocks(project, summary: pd.DataFrame, facet) -> tuple[list[Any], s
                     blocks += rc.stats_table(project.diff_comparison_rows(diff),
                                              caption="Primary: paired − yoked difference "
                                                      "(one observation per chamber group)",
-                                             well_names=names, show_phase=True)
+                                             well_names=names, show_phase=True,
+                                             transformed=project.transform_licks)
                 blocks += rc.zero_test_table(project.diff_zero_rows(diff),
                                              caption="Paired − yoked difference against "
                                                      "zero, per treatment",
-                                             well_names=names, show_phase=True)
+                                             well_names=names, show_phase=True,
+                                             transformed=project.transform_licks)
     elif roles is not None:
         blocks += cc.role_blocks(frames, roles, plot_frame=plot_frame, facet_col=facet_col,
                                  well_names=names, two_well=two_well, pooled=True)
@@ -724,7 +736,8 @@ def _yoked_blocks(project) -> list[Any]:
     names = project.design_global.get("well_names") or {}
     tables = yr.yoked_table_blocks(frame, well_names=names,
                                    two_well=project.chamber_layout == "two_well",
-                                   mixed_p=project._mixed_p, mixed_p0=project._mixed_p0)
+                                   mixed_p=project._mixed_p, mixed_p0=project._mixed_p0,
+                                   transformed=project.transform_licks)
     if not tables:
         return []
     factors = list((project.design_global.get("experimental_design_factors") or {}))
@@ -736,7 +749,8 @@ def _yoked_blocks(project) -> list[Any]:
                          "— is the paired fly different (against zero), and do treatments "
                          "differ?"),
             *tables,
-            *yr.yoked_figure_blocks(frame, well_names=names, factors=factors)]
+            *yr.yoked_figure_blocks(frame, well_names=names, factors=factors,
+                                    transformed=project.transform_licks)]
 
 
 def _ai_blocks(project) -> list[Any]:

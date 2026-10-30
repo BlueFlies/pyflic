@@ -285,6 +285,37 @@ def test_the_blocks_compare_treatments_and_draw_the_identity_line(loaded):
     assert image.size
 
 
+def test_the_whole_recording_rows_read_as_the_slices_module_names_them(loaded):
+    """Review C14: one label for the unfaceted rows (the Slices module's),
+    and their FacetRange an open window, not the (0, 0) sentinel."""
+    from pyflic.base import slices
+
+    assert an.WHOLE_RECORDING == slices.WHOLE_RECORDING_LABEL
+    table = an.yoked_comparison(loaded("two_dfms"))
+    whole = table[table["Facet"] == slices.WHOLE_RECORDING_LABEL]
+    assert len(whole) and set(whole["FacetRange"]) == {"(0, inf)"}
+
+
+def test_transformed_lick_differences_say_they_are_on_the_root_scale(loaded):
+    """Review C2 (owner decision): the yoked comparison keeps paired − yoked
+    of transformed licks on the ¼-root scale, and its labels say so — only
+    when the licks were transformed."""
+    e = loaded("two_dfms")
+    table = an.yoked_comparison(e, transform_licks=True)
+    names = e.well_names
+    measures = set(_tables(yr.yoked_table_blocks(table, well_names=names,
+                                                 transformed=True))[0].frame["Measure"])
+    licks = {m for m in measures if "licks" in m}
+    assert licks and all("¼-root scale" in m for m in licks)
+    assert not any("¼-root" in m for m in measures - licks)
+    plain = set(_tables(yr.yoked_table_blocks(table, well_names=names))[0].frame["Measure"])
+    assert not any("¼-root" in m for m in plain)
+    figure = yr.yoked_figure(table, well_names=names, transformed=True)
+    panels = set(figure.data["Metric"].astype(str))
+    assert any("licks" in p and "¼-root scale" in p for p in panels)
+    assert not any("¼-root" in p for p in panels if "licks" not in p)
+
+
 def test_a_single_treatment_gets_the_note_not_a_comparison(loaded):
     e = loaded("yoked", chambers={c: "Ctrl" for c in range(1, 7)})
     table = an.yoked_comparison(e)

@@ -17,8 +17,10 @@ report blocks (:mod:`pyflic.base.report_layout`) for the reports to place:
   group, with the identity line.
 
 Both give no block for a table with no row: a design without yoking has no
-such subsection.  Terms are ``CONTEXT.md``'s: Paired Chamber, Yoked Chamber,
-Linkage Group.
+such subsection.  With ``transformed`` (the licks were fourth-root
+transformed, ``transform_licks``) the lick values and their differences are
+on that scale, and their labels say so.  Terms are ``CONTEXT.md``'s: Paired
+Chamber, Yoked Chamber, Linkage Group.
 """
 
 from __future__ import annotations
@@ -58,19 +60,25 @@ def yoked_windows(frame: pd.DataFrame | None) -> list[tuple[str, pd.DataFrame]]:
     return [(label, frame[frame["Facet"].astype(str) == label]) for label in facets]
 
 
-def _label(column: str) -> str:
+def _label(column: str, transformed: bool = False) -> str:
     """A ``d<m>`` column as a label template for :func:`report_content.metric_label`
-    (``{A}``/``{B}``: the well names): report_content's own where it has one."""
+    (``{A}``/``{B}``: the well names): report_content's own where it has one,
+    a lick difference marked as on the ¼-root scale when *transformed*."""
     if column in rc.METRIC_LABELS:
-        return column
-    base = column[1:]
-    well = ""
-    if base[-1:] in ("A", "B") and base[:-1] in _NOUNS:
-        base, well = base[:-1], "{" + base[-1] + "}"
-    noun, unit = _NOUNS.get(base, (base, ""))
-    if unit:
-        return f"Δ {noun}{', ' + well if well else ''}{unit}"
-    return f"Δ {well + ' ' if well else ''}{noun} (paired − yoked)"
+        template = rc.METRIC_LABELS[column]
+    else:
+        base = column[1:]
+        well = ""
+        if base[-1:] in ("A", "B") and base[:-1] in _NOUNS:
+            base, well = base[:-1], "{" + base[-1] + "}"
+        noun, unit = _NOUNS.get(base, (base, ""))
+        if unit:
+            template = f"Δ {noun}{', ' + well if well else ''}{unit}"
+        else:
+            template = f"Δ {well + ' ' if well else ''}{noun} (paired − yoked)"
+    if transformed and rc.is_lick_difference(column):
+        return rc.on_root_scale(template)
+    return column if column in rc.METRIC_LABELS else template
 
 
 def difference_rows(frames: Sequence[tuple[str, pd.DataFrame]], metrics: Sequence[str], *,
@@ -108,8 +116,8 @@ def difference_rows(frames: Sequence[tuple[str, pd.DataFrame]], metrics: Sequenc
 def yoked_table_blocks(frame: pd.DataFrame | None, *, well_names: dict | None = None,
                        two_well: bool = True, include_comparison: bool = True,
                        mixed_p: Callable[..., float | None] | None = None,
-                       mixed_p0: Callable[[pd.DataFrame], float | None] | None = None
-                       ) -> list[Any]:
+                       mixed_p0: Callable[[pd.DataFrame], float | None] | None = None,
+                       transformed: bool = False) -> list[Any]:
     """The differences by treatment: per metric, window and treatment the
     groups' paired − yoked mean ± SEM tested against zero; then, with two
     treatments or more and *include_comparison*, the treatments compared
@@ -124,7 +132,7 @@ def yoked_table_blocks(frame: pd.DataFrame | None, *, well_names: dict | None = 
     if not frames or not metrics:
         return []
     show_phase = len(frames) > 1 or not is_whole_label(frames[0][0])
-    labels = {m: _label(m) for m in metrics}
+    labels = {m: _label(m, transformed) for m in metrics}
     rows = [{**r, "metric": labels[r["metric"]]}
             for r in difference_rows(frames, metrics, mixed_p0=mixed_p0)]
     blocks: list[Any] = rc.zero_test_table(
@@ -142,20 +150,23 @@ def yoked_table_blocks(frame: pd.DataFrame | None, *, well_names: dict | None = 
     return blocks
 
 
-def _metric_title(column: str, well_names: dict | None) -> str:
-    """A metric column (``LicksA``) as a panel title (``Sucrose licks``)."""
+def _metric_title(column: str, well_names: dict | None, transformed: bool = False) -> str:
+    """A metric column (``LicksA``) as a panel title (``Sucrose licks``), with
+    ``(¼-root scale)`` on a lick metric when *transformed*."""
     names = well_names or {}
     base, well = column, ""
     if column[-1:] in ("A", "B") and column[:-1] in _NOUNS:
         base, well = column[:-1], names.get(column[-1]) or column[-1]
     noun, unit = _NOUNS.get(base, (base, ""))
     if well:
-        return f"{well} {noun}{unit}" if not unit else f"{noun.capitalize()}, {well}{unit}"
-    return f"{noun.capitalize()}{unit}"
+        title = f"{well} {noun}{unit}" if not unit else f"{noun.capitalize()}, {well}{unit}"
+    else:
+        title = f"{noun.capitalize()}{unit}"
+    return f"{title} ({rc.ROOT_SCALE})" if transformed and base == "Licks" else title
 
 
 def yoked_figure(frame: pd.DataFrame, *, well_names: dict | None = None,
-                 factors: Sequence[str] | None = None):
+                 factors: Sequence[str] | None = None, transformed: bool = False):
     """One point per yoked group: its Paired chamber's value (y) against
     the mean of its Yoked chambers' (x), a panel per metric, coloured by
     treatment (the first design factor present, else the Treatment), over
@@ -172,7 +183,7 @@ def yoked_figure(frame: pd.DataFrame, *, well_names: dict | None = None,
     long = []
     for column in columns:
         part = pd.DataFrame({
-            "Metric": _metric_title(column, well_names),
+            "Metric": _metric_title(column, well_names, transformed),
             "Paired": pd.to_numeric(frame[f"Paired{column}"], errors="coerce"),
             "Yoked": pd.to_numeric(frame[f"Yoked{column}"], errors="coerce"),
             "Colour": frame[colour].astype(str) if colour in frame.columns else "",
@@ -209,8 +220,8 @@ def yoked_figure(frame: pd.DataFrame, *, well_names: dict | None = None,
 
 
 def yoked_figure_blocks(frame: pd.DataFrame | None, *, well_names: dict | None = None,
-                        factors: Sequence[str] | None = None, height: float = 3.4
-                        ) -> list[Any]:
+                        factors: Sequence[str] | None = None, height: float = 3.4,
+                        transformed: bool = False) -> list[Any]:
     """:func:`yoked_figure` once per window the table holds (each Facet,
     else the whole recording), as report plots.  No block for an empty
     table."""
@@ -225,6 +236,7 @@ def yoked_figure_blocks(frame: pd.DataFrame | None, *, well_names: dict | None =
         title = ("Paired against yoked" if is_whole_label(label)
                  else f"Paired against yoked: {label}")
         blocks.append(rl.Plot(lambda rows=rows: yoked_figure(rows, well_names=well_names,
-                                                             factors=factors),
+                                                             factors=factors,
+                                                             transformed=transformed),
                               height=height, title=title, caption=caption))
     return blocks

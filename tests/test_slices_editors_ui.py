@@ -371,3 +371,81 @@ def test_a_members_slices_are_the_projects_and_read_only(app, tmp_path, monkeypa
         assert "global" not in yaml.safe_load(member.read_text(encoding="utf-8"))
     finally:
         editor.close()
+
+
+# ---------------------------------------------------------------------------
+# Renaming a Slice, and the constants a Slice may override
+# ---------------------------------------------------------------------------
+
+def test_renaming_a_slice_renames_its_own_group_and_its_unticked_box(app, tmp_path,
+                                                                     monkeypatch):
+    """An own group that was the Slice's name follows a rename, and so does
+    the Slice's entry in omit.slices; an own group named otherwise stays."""
+    _no_dialogs(monkeypatch)
+    path = _standalone(tmp_path, {**DESIGN, "omit": {"slices": ["late"]}, "slices": {
+        **SLICES, "mid": {"start": 100, "end": 200, "exclusion_group": "middle"}}})
+    editor = FLICConfigEditor(path)
+    try:
+        table = editor._slices_widget._table
+        table.item(1, 0).setText("tail")
+        table.item(2, 0).setText("centre")
+        assert table.item(1, 3).text() == "tail"
+        assert table.item(2, 3).text() == "middle"
+        assert editor._slices_widget.renamed() == {"late": "tail", "mid": "centre"}
+
+        editor._write_yaml(path)
+
+        g = yaml.safe_load(path.read_text(encoding="utf-8"))["global"]
+        assert list(g["slices"]) == ["early", "tail", "centre"]
+        assert g["slices"]["tail"]["exclusion_group"] == "tail"
+        assert g["slices"]["centre"]["exclusion_group"] == "middle"
+        assert g["omit"] == {"slices": ["tail"]}
+    finally:
+        editor.close()
+
+
+def test_a_new_slices_own_group_follows_its_name_until_changed(app):
+    widget = SlicesWidget()
+    row = _type_row(widget, "first")
+    assert widget._table.item(row, 3).text() == "first"
+    widget._table.item(row, 3).setText("mine")
+    widget._table.item(row, 0).setText("second")
+    assert widget._table.item(row, 3).text() == "mine"
+    ## Added here, so nothing loaded was renamed.
+    assert widget.renamed() == {}
+
+
+def test_the_design_dialog_follows_a_rename_into_the_selection(app, tmp_path):
+    root = _project(tmp_path / "Proj", {**DESIGN, "omit": {"slices": ["early"]}})
+    dialog = ProjectDesignDialog(start_dir=str(root))
+    dialog.slices_widget._table.item(0, 0).setText("first")
+
+    dialog._save()
+
+    assert dialog.saved_dir == str(root)
+    g = yaml.safe_load((root / "project.yaml").read_text(encoding="utf-8"))["design"]["global"]
+    assert g["slices"]["first"]["exclusion_group"] == "first"
+    assert g["omit"] == {"slices": ["first"]}
+
+
+def test_a_slice_may_override_the_unexplained_light_failure_fraction(app, tmp_path):
+    """The fraction that decides the FAIL verdict exclude_failed_opto_chambers
+    acts on, beside the seconds before it is judged."""
+    root = _project(tmp_path / "Proj", {**DESIGN, "slices": {
+        "early": {"start": 0, "end": 360,
+                  "constants": {"opto_unexplained_fail_fraction": 0.5}}}})
+    dialog = ProjectDesignDialog(start_dir=str(root))
+    widget = dialog.slices_widget
+    column = CONSTANT_COLUMN["opto_unexplained_fail_fraction"]
+    assert _cells(widget, 0)[column] == "0.5"
+
+    widget._table.item(0, column).setText("1.5")
+    _declared, problems = widget.get_values()
+    assert any("opto_unexplained_fail_fraction" in p for p in problems)
+
+    widget._table.item(0, column).setText("0.4")
+    assert dialog._build_design()["global"]["slices"]["early"]["constants"] == {
+        "opto_unexplained_fail_fraction": 0.4}
+    ## An optogenetic setting, shown where the design's are.
+    dialog.opto_combo.setCurrentIndex(dialog.opto_combo.findData(False))
+    assert widget._table.isColumnHidden(column)

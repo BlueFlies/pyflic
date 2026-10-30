@@ -309,6 +309,11 @@ touch. Light no Activation owns is judged sample by sample with the window rule.
 **On generations 1 and 2** every lit sample of `OptoCol1` is judged with the window rule and
 the interval's Hold (the old export's decay).
 
+**Light already on at a Slice's first row** came on before the Slice, so the onset that
+explains it is not in the Slice's rows. It is not judged for up to one Hold plus the
+tolerance, on every generation; light still on after that is judged as usual, so a stuck LED
+still shows.
+
 The thresholds are the same for every type: at least `opto_unexplained_warn_fraction` (10%)
 of the group's judged lit time unexplained warns, at least `opto_unexplained_fail_fraction`
 (30%) fails, and neither is judged until a group has `opto_unexplained_min_sec` (30 s) of
@@ -453,7 +458,9 @@ own test on the recorded signal: raw minus the mean of the run's first ten secon
 the interval's threshold. `ContactWithoutActivitySec` is how long that **emulated trigger**
 read a trigger well above threshold while pyflic saw no lick or touch.
 `EmulationApproximate` marks it approximate when the data begin more than two seconds after
-the program, so the baseline window was not recorded. On generation 3 nothing is emulated and
+the program, so the baseline window was not recorded. A
+[Slice](concepts-slices.md) that starts later still reads the baseline from the run's first
+ten seconds, which the load keeps aside; only without them is it approximate, with a note. On generation 3 nothing is emulated and
 the column is `NA`.
 
 ## Thresholds

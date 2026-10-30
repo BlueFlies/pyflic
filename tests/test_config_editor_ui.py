@@ -252,6 +252,99 @@ def test_keys_the_editor_knows_nothing_about_survive_a_save(app, tmp_path):
         win.close()
 
 
+def test_global_and_dfm_keys_the_editor_has_no_field_for_survive_a_save(app, tmp_path):
+    """facet_cutoffs, facet_labels, a single-well design's well_names and a
+    DFM's own well_names have no field here: a save rebuilt from the widgets
+    used to drop every one of them."""
+    win = _open(app, tmp_path, {
+        "global": {"chamber_layout": "single_well",
+                   "facet_cutoffs": [10, 70],
+                   "facet_labels": ["Acclimation", "Experiment", "Cooldown"],
+                   "well_names": {1: "sucrose", 2: "yeast"},
+                   "note": "kept"},
+        "dfms": [{"id": 1, "chambers": {1: "Ctrl"},
+                  "well_names": {1: "left"}, "lid": "B7"},
+                 {"id": 2, "chambers": {1: "Exp"}}],
+    })
+    try:
+        out = win._collect_yaml()
+        g = out["global"]
+        assert g["facet_cutoffs"] == [10, 70]
+        assert g["facet_labels"] == ["Acclimation", "Experiment", "Cooldown"]
+        assert g["well_names"] == {1: "sucrose", 2: "yeast"}
+        assert g["note"] == "kept"
+        assert out["dfms"][0]["well_names"] == {1: "left"}
+        assert out["dfms"][0]["lid"] == "B7"
+        assert "well_names" not in out["dfms"][1]
+    finally:
+        win.close()
+
+
+def test_a_cleared_field_is_not_put_back_from_the_file(app, tmp_path):
+    """A key the editor manages is written from its field or, cleared, not at
+    all: keeping what the file said would undo the clear."""
+    win = _open(app, tmp_path, {
+        "global": {"chamber_layout": "two_well", "well_names": {"A": "S5", "B": "Y5"},
+                   "exclusion_group": "main", "facet_cutoffs": [10]},
+        "dfms": [{"id": 1, "chambers": {1: "Ctrl"}, "optogenetics": True}],
+    })
+    try:
+        win._well_a_edit.clear()
+        win._well_b_edit.clear()
+        win._exclusion_group_edit.clear()
+        win._dfm_widgets[0]._opto_combo.setCurrentIndex(0)          # inherit
+        out = win._collect_yaml()
+        assert "well_names" not in out["global"]
+        assert "exclusion_group" not in out["global"]
+        assert out["global"]["facet_cutoffs"] == [10]
+        assert "optogenetics" not in out["dfms"][0]
+    finally:
+        win.close()
+
+
+def test_opening_another_file_forgets_the_last_files_dfm_keys(app, tmp_path):
+    first = tmp_path / "first"
+    first.mkdir()
+    win = _open(app, first, {"global": {"chamber_layout": "two_well"},
+                             "dfms": [{"id": 1, "chambers": {1: "Ctrl"},
+                                       "well_names": {1: "left"}}]})
+    try:
+        win._load_config({"global": {"chamber_layout": "two_well"}, "dfms": []})
+        assert "well_names" not in win._collect_yaml()["dfms"][0]
+    finally:
+        win.close()
+
+
+def test_the_wheel_never_changes_a_choice_on_a_scrolling_page(app, tmp_path):
+    """Both tabs scroll: a wheel over a combo or a spin box scrolls the page
+    instead of quietly changing the Experiment Type, a DFM id or a
+    parameter."""
+    from PyQt6.QtCore import QPoint, QPointF, Qt
+    from PyQt6.QtGui import QWheelEvent
+    from PyQt6.QtWidgets import QAbstractSpinBox, QScrollArea
+
+    win = _open(app, tmp_path, {"global": {"chamber_layout": "two_well"},
+                                "dfms": [{"id": 1, "chambers": {1: "Ctrl"}}]})
+    try:
+        hosted = [w for area in win.findChildren(QScrollArea)
+                  for w in area.widget().findChildren((QComboBox, QAbstractSpinBox))]
+        assert win._experiment_type_combo in hosted and win._dfm_widgets[0]._id_spin in hosted
+        for widget in hosted:
+            before = widget.currentIndex() if isinstance(widget, QComboBox) \
+                else widget.value()
+            for step in (-120, 120):
+                event = QWheelEvent(QPointF(5, 5), QPointF(5, 5), QPoint(0, 0),
+                                    QPoint(0, step), Qt.MouseButton.NoButton,
+                                    Qt.KeyboardModifier.NoModifier,
+                                    Qt.ScrollPhase.NoScrollPhase, False)
+                QApplication.sendEvent(widget, event)
+            after = widget.currentIndex() if isinstance(widget, QComboBox) \
+                else widget.value()
+            assert after == before, widget
+    finally:
+        win.close()
+
+
 def test_a_factor_round_trip_keeps_the_declaration_order(app, tmp_path):
     """Assignments are positional, so a reordered declaration is a rewritten
     design, not a cosmetic difference."""

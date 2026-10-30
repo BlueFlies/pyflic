@@ -62,9 +62,7 @@ def each_slice(exp, *, only: Any = SELECTED, log=print) -> Iterator[Any]:
             yield exp.load_slice(name)
         except _slices.SliceNotCovered as err:
             if exp.experiment_dir is not None:
-                _slices.write_record(exp.experiment_dir, err.slice,
-                                     tol=_slices.tolerance(exp.global_config),
-                                     dfm_ends=err.dfm_ends, reason=err.reason)
+                _slices.record_not_covered(exp.experiment_dir, err)
             log(f"Slice {name}: not covered, left out ({err.reason})")
 #: The resolution of the Progressive Ratio's cumulative curves, the table's
 #: and the figures' — their script actions' default (and Basic analysis's),
@@ -415,6 +413,8 @@ def run_qc(exp, *, omit: Iterable[str] | None = None, log=print) -> SelectionRun
     ctx.qc_dir = exp.qc_output_dir()
     _run_items(exp, run, todo, ctx)
     exp.qc_report_dir = ctx.qc_dir
+    ## A Slice's outputs say which definition of it they describe (ADR-0020).
+    exp.write_slice_record(qc_only=True)
     log(f"{sel.RUN_NAMES[QC]} complete — {len(run.ran)} item(s) → {ctx.qc_dir}")
     return run
 
@@ -444,6 +444,11 @@ def _write_core(exp, run: SelectionRun, todo: list[Item], ctx: _Context) -> list
         ctx.log("  Not faceted: no feeding_summary_facet.csv.")
     else:
         written.append(facet)
+    ## A Slice's results say which definition of it they describe, so a
+    ## later edit of its bounds, groups or cutoffs shows them stale (ADR-0020).
+    record = exp.write_slice_record()
+    if record is not None:
+        written.append(record)
     ctx.log(_describe(written, getattr(exp, "experiment_dir", None)))
     return written
 
@@ -479,6 +484,24 @@ def run_analysis(exp, *, binsize_min: float = 30.0, omit: Iterable[str] | None =
     return run
 
 
+#: Between a figure's title and the Slice it was drawn for (ADR-0020).
+SLICE_TITLE_MARK = " · Slice "
+
+
+def slice_title(title: str, slice_name: str | None) -> str:
+    """*title* naming the Slice its figure was drawn for —
+    ``"Feeding Summary · Slice early"`` — and as it is for the whole
+    recording's."""
+    return str(title) if slice_name is None else f"{title}{SLICE_TITLE_MARK}{slice_name}"
+
+
+def title_slice(title: str) -> str | None:
+    """The Slice a :func:`slice_title` names; ``None`` for the whole
+    recording's figure."""
+    head, mark, name = str(title).rpartition(SLICE_TITLE_MARK)
+    return name if mark and head and name else None
+
+
 def run_plots(exp, *, metric: str = "Licks", binsize_min: float = 30.0,
               omit: Iterable[str] | None = None, log=print,
               keep_figures: bool = True) -> SelectionRun:
@@ -486,12 +509,17 @@ def run_plots(exp, *, metric: str = "Licks", binsize_min: float = 30.0,
     Selection), each saved into ``analysis/``.  *metric* and *binsize_min*
     are the Chosen metric figures' (the binned time course's bin).  With
     *keep_figures* the figures come back in :attr:`SelectionRun.figures`
-    for the Hub's tabs; pass ``False`` where nothing shows them."""
+    for the Hub's tabs, a Slice's titled with its name
+    (:func:`slice_title`); pass ``False`` where nothing shows them."""
     run, todo = _plan(exp, PLOTS, omit)
     _announce(run, todo, log)
     ctx = _Context(exp, log, binsize_min=binsize_min, metric=metric,
                    keep_figures=keep_figures)
     _run_items(exp, run, todo, ctx)
-    run.figures = ctx.figures
+    ## A run of every Slice hands back the same figures once per Slice: the
+    ## title says which, so no Slice's figure takes the whole recording's tab
+    ## and the Hub can show the Slice it shows.
+    name = getattr(exp, "slice_name", None)
+    run.figures = [(slice_title(title, name), fig) for title, fig in ctx.figures]
     log(f"{sel.RUN_NAMES[PLOTS]} complete — {len(run.ran)} item(s)")
     return run

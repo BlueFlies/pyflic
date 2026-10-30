@@ -370,6 +370,34 @@ def test_late_and_unknown_instruction_rows_warn_the_dfm(tmp_path):
     assert oq.UNKNOWN_INSTRUCTION in set(e.opto.interval_table()["Mode"])
 
 
+def test_an_activation_lit_across_a_slice_start_is_not_judged_for_its_hold(tmp_path):
+    """Review C4, generation 3: a range that starts inside an Activation's
+    Hold has the light without its onset or the activity behind it; that
+    light is not judged, so the range's first minute holds no unexplained
+    light the whole recording explains."""
+    e = load(tmp_path / "one", "one_of_each")
+    dfm = e.dfms[3]                                       # FixedInterval
+    state = dfm.paradigm
+    lit = state.on_ms[:, 0] > 0
+    activity = (dfm.lick_df["W1"].to_numpy(bool) | dfm.tasting_df["W1"].to_numpy(bool))
+    row = next(r for r in range(600, len(state) - 20)
+               if lit[r] and lit[r + 1] and not activity[r:r + 12].any()
+               and activity[r - 3:r].any())
+    start = float(state.minutes[row - 1])
+    with contextlib.redirect_stdout(io.StringIO()):
+        part = load_experiment_yaml(tmp_path / "one", parallel=False, use_disk_cache=False,
+                                    range_minutes=(start, 0))
+    minute = float(np.floor(start))
+    whole_tl = e.opto.result(3).timelines[1].set_index("Minute")
+    part_tl = part.opto.result(3).timelines[1].set_index("Minute")
+    assert part_tl.index[0] == minute
+    assert part_tl.loc[minute, "UnexplainedSec"] <= whole_tl.loc[minute, "UnexplainedSec"] + 1e-9
+    later = part_tl.index[1:]
+    pd.testing.assert_series_equal(part_tl.loc[later, "UnexplainedSec"],
+                                   whole_tl.loc[later, "UnexplainedSec"],
+                                   check_exact=False, atol=1e-9)
+
+
 def test_without_a_program_the_data_give_the_linkage_and_nothing_fails(tmp_path):
     e = load(tmp_path / "exp", "choice1", program=False)
     result = e.opto.result(1)

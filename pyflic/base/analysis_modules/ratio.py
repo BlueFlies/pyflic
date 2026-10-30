@@ -182,6 +182,8 @@ class RatioModule(AnalysisModule):
                                     "group is one chamber, lit by its own fly alone, so "
                                     "there is no paired − yoked difference.")]
         if test is not None and not test.empty:
+            ## A lick difference of transformed licks is on the fourth-root scale.
+            licks = rc.metric_label("dLicksA", names, transformed=project.transform_licks)
             blocks += [
                 rl.Heading("Paired − yoked difference, Test phase", level=2),
                 rl.Paragraph("One point per chamber group, pooled across members: the "
@@ -192,8 +194,7 @@ class RatioModule(AnalysisModule):
                              f"last {well_a} feeding event before a pause longer than "
                              f"{settings.gap_min:g} minutes."),
                 rl.PlotRow([
-                    rl.Plot(dot(test, "dLicksA", rc.metric_label("dLicksA", names), 0.0),
-                            title=rc.metric_label("dLicksA", names)),
+                    rl.Plot(dot(test, "dLicksA", licks, 0.0), title=licks),
                     rl.Plot(dot(test, "dPI", rc.metric_label("dPI", names), 0.0),
                             title=rc.metric_label("dPI", names)),
                 ], height=3.0),

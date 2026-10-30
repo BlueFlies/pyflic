@@ -247,6 +247,37 @@ def test_every_control_is_on_one_scrolling_panel(editor):
     assert editor.roles_group.isHidden()
 
 
+def test_the_wheel_scrolls_the_panel_and_changes_no_field(editor):
+    """A field that moved under a passing pointer would change the Spec or
+    the Style, and the close-time save would keep it."""
+    from PyQt6.QtWidgets import QAbstractSpinBox, QComboBox
+
+    from pyflic.base.ui.widgets import NoWheelComboBox, NoWheelDoubleSpinBox
+
+    hosted = editor.controls_scroll.widget().findChildren((QComboBox, QAbstractSpinBox))
+    assert editor.width_mm in hosted and editor.style_combo in hosted
+    for widget in hosted:
+        assert isinstance(widget, (NoWheelComboBox, NoWheelDoubleSpinBox)), widget
+
+
+def test_a_slice_the_design_no_longer_declares_falls_back_and_says_so(editor, app):
+    """A Spec naming a Slice the design dropped would preview the whole
+    recording and then be skipped at Render; it draws the whole recording in
+    both, and the preview says why."""
+    _select(editor, app, "faceted_pi")
+    assert editor.preview_note.isHidden()
+    spec = editor.current_spec()
+    spec.slice = "gone"
+    editor._load_spec_into_form()
+    assert spec.slice is None
+    assert editor.slice_combo.currentIndex() == 0
+    assert not editor.preview_note.isHidden()
+    assert "Slice 'gone'" in editor.preview_note.text()
+    ## Another plot, nothing to say.
+    _select(editor, app, "faceted_licks")
+    assert editor.preview_note.isHidden()
+
+
 def test_the_facets_group_is_hidden_for_a_time_course(editor, app):
     _select(editor, app, "faceted_pi")
     assert not editor.facets_group.isHidden()

@@ -730,8 +730,10 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
         Well (:meth:`_activation_events`; an Acclimation Activation is a
         Training Light Event).  Columns:
 
-        * ``Facet`` — Training or Test (onset after the group's training end;
-          ``Recording`` on a DFM that records no Training);
+        * ``Facet`` — Training or Test (onset after the group's training end,
+          on generation 1 after the row that clears the flag:
+          :meth:`_test_onsets_after`; ``Recording`` on a DFM that records no
+          Training);
         * ``RecordingMinute`` — the onset, in recording minutes;
         * ``Minutes`` — the onset in minutes since training end (NaN when
           training never ended);
@@ -789,7 +791,8 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
         else:
             rest = np.full(onsets.size, np.nan)
         if gt.known:
-            facet = np.where(on_min > end, TEST_LABEL, TRAINING_LABEL)
+            facet = np.where(on_min > self._test_onsets_after(dfm, gt), TEST_LABEL,
+                             TRAINING_LABEL)
         else:
             facet = np.full(onsets.size, RECORDING_LABEL)
         table = pd.DataFrame({
@@ -806,6 +809,26 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
         })
         cache[key] = table
         return table
+
+    def _test_onsets_after(self, dfm: DFM, gt: GroupTraining) -> float:
+        """The recording minute after which a Light Event's onset is a Test
+        one: the group's training end, or on generation 1 the row after it.
+
+        Generation 1's training end is the last row its flag marks, and the
+        firmware lights the last Training pairing in the record that clears
+        the flag: in MBON02, 46 of 48 groups' first unflagged row holds an
+        onset credited with Training licks, which made every Breaking Point
+        one too many.  So an onset within one sample period of the training
+        end is Training's (review C10).  Generation 3 records the Phase, and
+        its first Main row's Activation is the first Test one."""
+        if not gt.complete:
+            return np.inf
+        end = float(gt.training_end)
+        if self._reads_phase(dfm):
+            return end
+        period = 1.0 / (60.0 * float(dfm.params.samples_per_second))
+        ## Half a period of slack for the minutes' floating point.
+        return end + 1.5 * period
 
     @staticmethod
     def _activation_events(state: ParadigmState, well: int) -> tuple[np.ndarray, np.ndarray]:
@@ -915,6 +938,7 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
                       self._test_ledger_rows(dfm_id, group), paradigm)
                   if phase and paradigm is not None and paradigm.type in RATIO_PARADIGMS
                   else None)
+        windowed = test[self._in_test_window(dfm_id, group, test)]
         verdict = lqc.judge_group(
             settings,
             training_complete=gt.training_complete,
@@ -925,12 +949,13 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
             reference_level=reference_level,
             any_light=len(events) > 0,
             lick_free=test["LickFree"].to_numpy(dtype=bool),
-            firmware_events=(test["FirmwareEvents"].to_numpy(dtype=float, na_value=np.nan)
+            firmware_events=(windowed["FirmwareEvents"].to_numpy(dtype=float, na_value=np.nan)
                              if phase else None),
             check_trend=not self._fixed_ratio(dfm_id, group),
             light_source=("Activations at the paired Sucrose Well" if phase
                           else "OptoCol1 light bits"),
             series_mismatches=series,
+            trend_counts=windowed["LicksSincePrev"].to_numpy(),
         )
         notes = list(verdict.notes)
         if name is not None and paradigm is None:
@@ -1067,10 +1092,23 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
             group = layout.number
             if not self.group_training(dfm_id, group).complete or self._fixed_ratio(dfm_id, group):
                 continue
-            events = self.light_events_table(dfm_id, group)
-            series.append(events.loc[events["Facet"] == TEST_LABEL,
-                                     "LicksSincePrev"].to_numpy())
+            test = self._test_events(dfm_id, group)
+            series.append(test.loc[self._in_test_window(dfm_id, group, test),
+                                   "LicksSincePrev"].to_numpy())
         return lqc.estimate_increment(series)
+
+    def _in_test_window(self, dfm_id: int, group: int, test: pd.DataFrame) -> np.ndarray:
+        """``(n,)`` bool over the Test rows of :meth:`light_events_table`:
+        the onsets inside the group's Test window (:meth:`_test_window`),
+        the events the Breaking Point is read from.  The licks-per-event
+        trend and the requirement estimate are read from the same events, not
+        from a later ratio run, the Acclimation after a DFM restart, or past
+        ``pr_test_window_min``."""
+        window = self._test_window(dfm_id, group, self.break_settings())
+        minutes = test["Minutes"].to_numpy(dtype=float)
+        if window is None:
+            return np.ones(minutes.size, dtype=bool)
+        return minutes <= float(window)
 
     def progressive_groups(self, dfm_id: int | None = None) -> list[tuple[int, int]]:
         """``(dfm_id, group)`` of the groups whose Test Paradigm is, or is
@@ -1343,7 +1381,8 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
         if base is None or base.empty:
             return base
         out = self._augment_rows(base)
-        key = (float(range_minutes[0]), float(range_minutes[1])), bool(transform_licks)
+        ## The base class's key: range_minutes may be a list of windows.
+        key = windowing.range_key(range_minutes), bool(transform_licks)
         self._feeding_summary_cache[key] = out
         return out
 
@@ -1617,8 +1656,10 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
             return pd.DataFrame(columns=cols)
 
         per_chamber = per_chamber.copy()
+        transformed = bool(self.transform_licks if transform_licks is None else transform_licks)
         per_chamber["_Value"] = self._metric_series_from_binned_rows(
-            per_chamber, metric=metric, two_well_mode=two_well_mode)
+            per_chamber, metric=metric, two_well_mode=two_well_mode,
+            transform_licks=transformed)
 
         rows: list[dict] = []
         for (dfm_id, group, label), sub in per_chamber.groupby(
@@ -1687,6 +1728,11 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
             panel, categories=list(dict.fromkeys(panel)), ordered=True)
 
         label = f"\u0394{metric} (paired \u2212 yoked)"
+        transformed = bool(self.transform_licks if transform_licks is None else transform_licks)
+        if transformed and str(metric).startswith("Licks"):
+            from . import report_content as rc
+
+            label = rc.on_root_scale(label)
         return self.plot_jitter_summary(
             df,
             x_col=x_col,
@@ -2355,8 +2401,9 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
         Point (:meth:`group_break`).  The Yoked chamber's rows are the same
         onsets with its own licks; it has no breaking point of its own.
 
-        An onset is a light event beginning after training end; an event lit
-        across the training end belongs to training.
+        An onset is a light event beginning after training end (on generation
+        1, after the row that clears the flag: :meth:`_test_onsets_after`); an
+        event lit across the training end belongs to training.
         """
         dfm_id, chamber = int(dfm_id), int(chamber)
         role = self.role_of(dfm_id, chamber)
@@ -2392,7 +2439,8 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
             else:
                 onsets, _ends = lqc.light_events(
                     self._chamber_light(dfm, chamber).to_numpy(dtype=bool))
-            onsets = onsets[mins[onsets] > end]
+            ## The Paired chamber's Test onsets, by the same boundary.
+            onsets = onsets[mins[onsets] > self._test_onsets_after(dfm, gt)]
             out = pd.DataFrame({"Minutes": mins[onsets] - end, "CumLicks": cum[onsets]})
         if out.empty:
             return pd.DataFrame(columns=cols)
@@ -2553,9 +2601,10 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
     # ------------------------------------------------------------------
 
     def breaking_point_summary(self) -> pd.DataFrame:
-        """One row per Chamber Group in the analysis — every chamber of it
-        (both of a pair, the one of a solo group) in the design and training
-        complete — as ``analysis/pr_breaking_point.csv``.
+        """One row per Chamber Group in the analysis — its Paired chamber in
+        the design (a pair's Yoked chamber may be excluded: the Breaking Point
+        is read from the Paired fly alone) and training complete — as
+        ``analysis/pr_breaking_point.csv``.
 
         ``BreakingPoint`` is the paired fly's lick-backed Test Light Events
         before the first gap longer than ``pr_break_gap_min`` (ADR-0014);
@@ -2583,8 +2632,10 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
         rows = []
         for dfm_id, layout in self._group_pairs():
             group = layout.number
-            ## A pair still needs both chambers; a solo group, its one.
-            if any(self.design.treatment_for(dfm_id, c) is None for c in layout.chambers):
+            ## The Breaking Point is the Paired fly's alone, so only its chamber
+            ## must still be in the analysis: a pair whose Yoked chamber was
+            ## excluded (lick cutoff, remove_chambers.csv) keeps its row.
+            if self.design.treatment_for(dfm_id, layout.paired) is None:
                 continue
             result = self.group_break(dfm_id, group, settings)
             if result is None:
@@ -3003,6 +3054,12 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
         names = self.well_names or {}
         diff = self.paired_yoked_diff()
         test = diff[diff["Facet"] == TEST_LABEL] if not diff.empty else diff
+        ## paired_yoked_diff() differences the summary as this experiment
+        ## transforms it: a lick difference on the fourth-root scale says so.
+        transformed = bool(self.transform_licks)
+        scale = (f"  Lick differences are on the {rc.ROOT_SCALE} (transform_licks): "
+                 f"the paired fly's licks^0.25 minus its yoked partner's."
+                 if transformed else "")
         solo = self.solo_groups()
         left_out = ""
         if solo:
@@ -3028,15 +3085,16 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
                 f"within each treatment.  Sucrose persistence is the time from training end "
                 f"to a fly's last {well_a} feeding event before a pause longer than "
                 f"{settings.gap_min:g} minutes; where either fly was still feeding when "
-                f"the recording ended, the difference is one of lower bounds."),
+                f"the recording ended, the difference is one of lower bounds.{scale}"),
         ]
         if test.empty:
             blocks.append(rl.Callout("No chamber group has both chambers and a Test phase "
                                      "in the analysis.", tone="warning"))
         else:
             blocks.append(rl.PlotRow([
-                rl.Plot(dot(test, "dLicksA", rc.metric_label("dLicksA", names), 0.0),
-                        title=rc.metric_label("dLicksA", names)),
+                rl.Plot(dot(test, "dLicksA", rc.metric_label("dLicksA", names,
+                                                             transformed=transformed), 0.0),
+                        title=rc.metric_label("dLicksA", names, transformed=transformed)),
                 rl.Plot(dot(test, "dPI", rc.metric_label("dPI", names), 0.0),
                         title=rc.metric_label("dPI", names)),
             ], height=3.0))
@@ -3050,11 +3108,12 @@ class ProgressiveRatioExperiment(TwoWellExperiment):
                 rows = treatment_comparisons([(TEST_LABEL, test)], metrics)
                 blocks += rc.stats_table(rows, caption="Treatment comparisons: paired − "
                                                        "yoked difference, Test phase",
-                                         well_names=names, show_phase=False)
+                                         well_names=names, show_phase=False,
+                                         transformed=transformed)
                 blocks += rc.zero_test_table(
                     zero_tests([(TEST_LABEL, test)], metrics),
                     caption="Paired − yoked difference against zero, per treatment, "
-                            "Test phase", well_names=names)
+                            "Test phase", well_names=names, transformed=transformed)
         return blocks
 
     def _breaking_point_blocks(self, options: Any, settings) -> list[Any]:

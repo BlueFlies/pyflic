@@ -222,6 +222,29 @@ def test_generation_1_training_is_unchanged(tmp_path):
     assert dfm.raw_df[[f"W{w}" for w in range(1, 13)]].max().max() < 40000
 
 
+def test_a_range_after_training_end_keeps_generation_1_s_training(tmp_path):
+    """Review C5: the training flags are read from the whole recording before
+    a range clips it, so a range starting after a group's training end does
+    not make the group look untrained (and auto-remove it)."""
+    root = make_pr_experiment_dir(tmp_path)
+    whole = load(root)
+    part = load_experiment_yaml(root, parallel=False, use_disk_cache=False,
+                                range_minutes=(8, 0))
+    for well in range(1, 13):
+        assert part.dfms[1].training_flag_state(well) == whole.dfms[1].training_flag_state(well)
+        assert part.dfms[1].training_end_minutes(well) == whole.dfms[1].training_end_minutes(well)
+    gt = part.group_training(1, 1)
+    assert gt.complete and gt.training_end == pytest.approx(6.0, abs=0.01)
+    assert not any("never carried the training flag" in n for n in gt.notes)
+    assert part.dfms[1].raw_df[[f"W{w}" for w in range(1, 13)]].max().max() < 40000
+    ## What the clip cut from the front is kept for the rows it left: the
+    ## recording's first minutes, the flag taken off, and the light before.
+    before = part.dfms[1].before_range
+    assert before.start_min == 8.0 and before.start_minutes[0] == whole.dfms[1].raw_df["Minutes"].iloc[0]
+    assert np.nanmax(before.start_raw) < 40000 and before.lit.shape == (12,)
+    assert whole.dfms[1].before_range is None
+
+
 # ---------------------------------------------------------------------------
 # Light seconds
 # ---------------------------------------------------------------------------

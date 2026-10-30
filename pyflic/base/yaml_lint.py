@@ -475,21 +475,27 @@ def _lint_slices(issues: list[LintIssue], path: Path, g: dict) -> None:
     from .experiment_types import get_experiment_type
     from .project import PROJECT_FILENAME, read_design
 
-    def check(source: dict, where: str, prefix: str = "") -> None:
+    keys = ("slices", "also_exclude", "slice_tolerance_min")
+
+    def check(source: dict, where: str, type_dir: Path, prefix: str = "") -> None:
+        ## A lab type is read from its copy beside the file that names it:
+        ## the design's beside project.yaml, not beside the Member.
         try:
-            etype = get_experiment_type(source.get("experiment_type"), path.parent)
+            etype = get_experiment_type(source.get("experiment_type"), type_dir)
         except ValueError:
             etype = None
         for problem in _slices.slice_problems(source, etype):
             _emit(issues, "error", f"{prefix}{problem}", path=where)
 
-    if g.get("slices") is not None:
-        check(g, "global.slices")
+    if any(g.get(key) is not None for key in keys):
+        check(g, "global.slices", path.parent)
     project_dir = path.parent.parent
     if (project_dir / PROJECT_FILENAME).is_file():
         design_global = read_design(project_dir).get("global") or {}
-        if isinstance(design_global, dict) and design_global.get("slices") is not None:
-            check(design_global, "design.global.slices", f"{PROJECT_FILENAME} design: ")
+        if isinstance(design_global, dict) and any(
+                design_global.get(key) is not None for key in keys):
+            check(design_global, "design.global.slices", project_dir,
+                  f"{PROJECT_FILENAME} design: ")
 
 
 def _lint_facet_source(issues: list[LintIssue], path: Path, g: dict, dfm_items,

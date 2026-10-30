@@ -46,10 +46,8 @@ from PyQt6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QCheckBox,
-    QComboBox,
     QDialog,
     QDialogButtonBox,
-    QDoubleSpinBox,
     QFileDialog,
     QGridLayout,
     QHBoxLayout,
@@ -62,7 +60,6 @@ from PyQt6.QtWidgets import (
     QMenu,
     QMessageBox,
     QSizePolicy,
-    QSpinBox,
     QSplitter,
     QTableWidget,
     QTableWidgetItem,
@@ -80,6 +77,7 @@ from .light_summary import NO_TRAINING_INFORMATION
 from .light_summary import no_training_information as _no_training_information
 from .opto_light import dfms_without_program as _dfms_without_program
 from .opto_light import no_program_warning as _no_program_warning
+from .run_selection import title_slice
 from .ui import (
     Category,
     OutputLog,
@@ -91,7 +89,14 @@ from .ui import (
 )
 from .ui import settings as ui_settings
 from .ui.tiles import TILE_HEIGHT, ClickAwayFilter, StatusReadout, StatusTile, TilePanel
-from .ui.widgets import ActionButton, Card, CardGroup, NoWheelComboBox
+from .ui.widgets import (
+    ActionButton,
+    Card,
+    CardGroup,
+    NoWheelComboBox,
+    NoWheelDoubleSpinBox,
+    NoWheelSpinBox,
+)
 
 #: Top strip: (key, title, icon, category, panel width).  Order is strip
 #: order — the containment hierarchy reads left to right (a Batch holds
@@ -129,15 +134,8 @@ EXPERIMENT_SUBTILES = tuple(spec[0] for spec in SUBTILE_SPECS)
 #: ``None``, which is "built with nothing loaded".
 _NOT_BUILT = object()
 
-#: The Slice picker's first entry: the implicit Slice every experiment has.
-WHOLE_RECORDING_LABEL = "Whole recording"
 #: The title of the Slices group on the QC, Analyze and Plots panels.
 SLICES_GROUP = "Slices"
-
-
-def _slice_label(item: slices_mod.Slice) -> str:
-    """``"early  (0, 360] min"``: a Slice as the picker and its box name it."""
-    return f"{item.name}  {item.bounds_label()}"
 
 
 def _help_button(ref: str, tooltip: str) -> QWidget | None:
@@ -521,7 +519,9 @@ class AnalysisHubWindow(QMainWindow):
 
         run_row = QHBoxLayout()
         run_row.addWidget(QLabel("Project Script:"))
-        self.batch_script = QComboBox()
+        ## The wheel scrolls the panel, never the script: a change is written
+        ## to batch.yaml at once.
+        self.batch_script = NoWheelComboBox()
         self.batch_script.setMinimumWidth(200)
         self.batch_script.setToolTip(
             "The designated Project Script — resolved per Project from "
@@ -699,7 +699,7 @@ class AnalysisHubWindow(QMainWindow):
         ## the loaded member.
         self.slice_picker = NoWheelComboBox()
         self.slice_picker.setMinimumWidth(200)
-        self.slice_picker.addItem(WHOLE_RECORDING_LABEL, None)
+        self.slice_picker.addItem(slices_mod.WHOLE_RECORDING_LABEL, None)
         self.slice_picker.setToolTip(
             "Which Slice the Hub shows: the table's Analyzed and Report "
             "columns, what a double-click loads, the QC Viewer and the plots.  "
@@ -795,7 +795,7 @@ class AnalysisHubWindow(QMainWindow):
         self.chk_parallel.setChecked(True)
         opts.addWidget(self.chk_parallel)
         opts.addWidget(QLabel("Workers:"))
-        self.spin_workers = QSpinBox()
+        self.spin_workers = NoWheelSpinBox()
         self.spin_workers.setRange(0, 64)
         self.spin_workers.setSpecialValueText("auto")
         opts.addWidget(self.spin_workers)
@@ -901,7 +901,7 @@ class AnalysisHubWindow(QMainWindow):
         ## split PyTrackingAnalysis draws.
         srow = QHBoxLayout()
         srow.addWidget(QLabel("Script:"))
-        self.project_script = QComboBox()
+        self.project_script = NoWheelComboBox()
         self.project_script.setMinimumWidth(200)
         srow.addWidget(self.project_script, 1)
         _add_row_help(srow, "scripts-overview#two-levels",
@@ -974,7 +974,7 @@ class AnalysisHubWindow(QMainWindow):
                              "run_analysis leaves out the same.")
         row = QHBoxLayout()
         row.addWidget(QLabel("Bin size (min):"))
-        self.spin_binsize = QDoubleSpinBox()
+        self.spin_binsize = NoWheelDoubleSpinBox()
         self.spin_binsize.setRange(0.5, 600.0)
         self.spin_binsize.setValue(30.0)
         self.spin_binsize.setToolTip(
@@ -1077,7 +1077,7 @@ class AnalysisHubWindow(QMainWindow):
         row = QHBoxLayout(self._metric_row)
         row.setContentsMargins(0, 0, 0, 0)
         row.addWidget(QLabel("Metric:"))
-        self.plot_metric = QComboBox()
+        self.plot_metric = NoWheelComboBox()
         self.plot_metric.setMinimumWidth(150)
         self.plot_metric.setToolTip(
             "The metric of the Binned time course and the Dot plot.  The "
@@ -1192,7 +1192,7 @@ class AnalysisHubWindow(QMainWindow):
             "The whole recording always runs.  Each ticked Slice runs too, "
             "into slices/<name>/."))
         for item in declared:
-            box = QCheckBox(_slice_label(item))
+            box = QCheckBox(item.label())
             box.setChecked(item.name not in left_out)
             box.setToolTip(
                 f"Run QC, Run analysis and Generate plots also run Slice "
@@ -1361,56 +1361,9 @@ class AnalysisHubWindow(QMainWindow):
             step = {"action": "run_plots",
                     "metric": self.plot_metric.currentData() or "Licks",
                     "binsize": self.spin_binsize.value()}
-        if kind == sel.PLOTS and self.experiment is not None \
-                and self._usable_slices(self.experiment):
-            self._generate_plots_by_slice(step)
-            return
         self._run_experiment_action(step, label=sel.RUN_NAMES[kind],
-                                    replace_tabs=kind == sel.PLOTS)
-
-    def _generate_plots_by_slice(self, step: dict) -> None:
-        """Generate plots for a design with Slices: the run_plots step's own
-        loop — each_slice, then run_plots on each — so the files are the
-        step's, keeping the figures of the shown Slice only.
-
-        Not the step itself: it hands back every Slice's figures under the
-        same titles, and a tab replaced by the next Slice's figure would
-        show a Slice nobody picked under the whole recording's name.  A
-        Slice's tabs carry its name, so they never replace the whole
-        recording's."""
-        if not self._require_experiment():
-            return
-        from .run_selection import each_slice, run_plots
-
-        exp = self.experiment
-        shown = getattr(exp, "slice_name", None)
-        metric = str(step.get("metric") or "Licks")
-        binsize = float(step["binsize"])
-
-        def task():
-            figures: list[tuple[str, Any]] = []
-            ran: list[str | None] = []
-            for target in each_slice(exp, log=print):
-                ran.append(target.slice_name)
-                run = run_plots(target, metric=metric, binsize_min=binsize,
-                                log=print,
-                                keep_figures=target.slice_name == shown)
-                figures += [(title if shown is None else f"{title} · {shown}", fig)
-                            for title, fig in run.figures]
-            if shown not in ran:
-                ## Unticked, or not covered: nothing was drawn for it, so no
-                ## tab can show it.  Said, so an empty result is not
-                ## mistaken for a failed one.
-                print(f"Slice {shown} was not in this run, so no figure is "
-                      "shown: its box in the Slices group is unticked, or the "
-                      "member does not cover it.")
-            return figures
-
-        def on_done(result):
-            self._show_figures(result, replace=True)
-            self.refresh()
-
-        self._start(task, sel.RUN_NAMES[sel.PLOTS], on_done)
+                                    replace_tabs=kind == sel.PLOTS,
+                                    shown_slice_only=kind == sel.PLOTS)
 
     def _build_scripts_panel(self) -> None:
         """The **member** script level, and only that.
@@ -1430,7 +1383,7 @@ class AnalysisHubWindow(QMainWindow):
         card.add_body(self.scripts_hint)
 
         erow = QHBoxLayout()
-        self.experiment_script = QComboBox()
+        self.experiment_script = NoWheelComboBox()
         self.experiment_script.setMinimumWidth(200)
         erow.addWidget(self.experiment_script, 1)
         self.run_experiment_script_btn = ActionButton("Run", Category.SCRIPTS,
@@ -1459,7 +1412,7 @@ class AnalysisHubWindow(QMainWindow):
 
         row = QHBoxLayout()
         row.addWidget(QLabel("Provider:"))
-        self.ai_provider = QComboBox()
+        self.ai_provider = NoWheelComboBox()
         self.ai_provider.currentTextChanged.connect(self._refresh_ai_models)
         row.addWidget(self.ai_provider, 1)
         _add_row_help(row, "concepts-ai-summary#providers-and-keys",
@@ -1468,7 +1421,7 @@ class AnalysisHubWindow(QMainWindow):
 
         mrow = QHBoxLayout()
         mrow.addWidget(QLabel("Model:"))
-        self.ai_model = QComboBox()
+        self.ai_model = NoWheelComboBox()
         self.ai_model.setEditable(True)
         mrow.addWidget(self.ai_model, 1)
         card.add_body(mrow)
@@ -2085,6 +2038,9 @@ class AnalysisHubWindow(QMainWindow):
         one is named, in the worker."""
         from .yaml_config import load_experiment_yaml
 
+        ## No exclusion_group: the loader excludes the config's own group
+        ## (global.exclusion_group, general when it names none), as a run of
+        ## each Slice reloading the whole recording does.
         kwargs = self._load_kwargs()
         if slice_name is not None:
             kwargs["slice"] = slice_name
@@ -2139,12 +2095,8 @@ class AnalysisHubWindow(QMainWindow):
     def _usable_slices(exp) -> list[slices_mod.Slice]:
         """The Slices *exp*'s design declares that it can run: none for a
         type that has no Slices."""
-        try:
-            return slices_mod.usable_slices(
-                getattr(exp, "global_config", None),
-                getattr(exp, "experiment_type", None))
-        except Exception:  # noqa: BLE001 - a status display must not fail
-            return []
+        return slices_mod.usable_slices(getattr(exp, "global_config", None),
+                                        getattr(exp, "experiment_type", None))
 
     def _declared_slices(self) -> list[slices_mod.Slice]:
         """The Slices of what the Hub has open: the Project's design, or a
@@ -2176,8 +2128,8 @@ class AnalysisHubWindow(QMainWindow):
         follows it: a load that failed or was refused leaves the picker on
         the Slice the member still is."""
         declared = self._declared_slices()
-        wanted = [(None, WHOLE_RECORDING_LABEL)] + [
-            (item.name, _slice_label(item)) for item in declared]
+        wanted = [(None, slices_mod.WHOLE_RECORDING_LABEL)] + [
+            (item.name, item.label()) for item in declared]
         picker = self.slice_picker
         current = self._shown_slice()
         if self.experiment is not None:
@@ -2373,12 +2325,19 @@ class AnalysisHubWindow(QMainWindow):
         return True
 
     def _run_experiment_action(self, step: dict, *, label: str | None = None,
-                               replace_tabs: bool = False) -> None:
+                               replace_tabs: bool = False,
+                               shown_slice_only: bool = False) -> None:
         """Run one script step on the loaded member in the worker.
 
         *replace_tabs* opens each returned figure in the tab of the same
         title, if one is open, rather than beside it: Generate plots run
         twice should not leave two of every figure.
+
+        *shown_slice_only* opens only the figures of the Slice the member is
+        loaded as (the whole recording's when it is loaded whole).  The step
+        runs the whole recording and every ticked Slice (ADR-0020) and writes
+        every one's files, as a script's step does; a tab per Slice per
+        figure would show Slices nobody picked.
         """
         if not self._require_experiment():
             return
@@ -2387,17 +2346,48 @@ class AnalysisHubWindow(QMainWindow):
         exp = self.experiment
         context = ScriptContext(binsize=self.spin_binsize.value())
         script = {"name": "hub", "steps": [dict(step)]}
+        shown = getattr(exp, "slice_name", None)
+        ## The shown Slice runs only while its box is ticked: each_slice
+        ## reuses the loaded member for it, so it is never "not covered".
+        unticked = (shown_slice_only and shown is not None
+                    and shown not in sel.selected_slices(exp))
 
         def task():
             return run_experiment_script(exp, script, context=context)
 
         on_done = None
-        if replace_tabs:
+        if replace_tabs or shown_slice_only:
             def on_done(result):
-                self._show_figures(result, replace=True)
+                if shown_slice_only and isinstance(result, list):
+                    result = self._figures_of_slice(result, shown)
+                if unticked:
+                    ## Said, so an empty result is not mistaken for a failed
+                    ## one.
+                    self.log.append_line(
+                        f"Slice {shown} was not in this run, so no figure is "
+                        "shown: its box in the Slices group is unticked.")
+                self._show_figures(result, replace=replace_tabs)
                 self.refresh()
 
         self._start(task, label or step["action"], on_done)
+
+    @staticmethod
+    def _figures_of_slice(result: list, shown: str | None) -> list:
+        """The ``(title, figure)`` entries of *result* drawn for Slice
+        *shown* (``None``: the whole recording), the others' figures closed:
+        they are on disk, and no tab will hold them."""
+        kept: list = []
+        for entry in result:
+            if isinstance(entry, tuple) and len(entry) == 2 \
+                    and title_slice(entry[0]) != shown:
+                figure = entry[1]
+                if type(figure).__module__.startswith("matplotlib"):
+                    import matplotlib.pyplot as plt
+
+                    plt.close(figure)
+                continue
+            kept.append(entry)
+        return kept
 
     def _run_experiment_script(self) -> None:
         if not self._require_experiment():
@@ -3677,7 +3667,7 @@ class AnalysisHubWindow(QMainWindow):
         declared_slices = list(getattr(project, "slices", None) or [])
         if declared_slices:
             parts.append(f"{len(declared_slices)} Slice(s): "
-                         + ", ".join(_slice_label(s) for s in declared_slices)
+                         + ", ".join(s.label() for s in declared_slices)
                          + f" · shown: {view.view_label()}")
         for warning in getattr(project, "warnings", []) or []:
             parts.append(f"⚠ {warning}")
@@ -3894,7 +3884,7 @@ class AnalysisHubWindow(QMainWindow):
         ## The Slice it is loaded as (ADR-0020), on the same line.
         shown = getattr(self.experiment, "slice", None)
         if isinstance(shown, slices_mod.Slice):
-            loaded = f"{loaded} · Slice {_slice_label(shown)}"
+            loaded = f"{loaded} · Slice {shown.label()}"
         ## On the member's own line, which the strip always shows: a fifth
         ## row would go to the tooltip when a Batch is open.
         if self.experiment is not None and _no_training_information(self.experiment):

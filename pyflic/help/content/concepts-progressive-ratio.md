@@ -122,7 +122,7 @@ of the paired fly turns the light on. Where the recording says so depends on its
 
 | Generation | Training is read from | A group's training end |
 |---|---|---|
-| 1 (older firmware, 27 columns) | a flag inside the signal: while a well is in training its raw value is offset by 65536 (any sample above 40000) | the last flagged minute of the paired chamber's sucrose well |
+| 1 (older firmware, 27 columns) | a flag inside the signal: while a well is in training its raw value is offset by 65536 (any sample above 40000) | the last flagged minute of the paired chamber's sucrose well; a light event that begins on the row that clears the flag is the last Training pairing, not the first Test one |
 | 2 (PyMCU 4.0.0 with an older DFM) | nowhere | none: see [No training information](#no-training-information) |
 | 3 (firmware 4.0.0) | the paired sucrose well's `Phase` | its first row in Phase `M` (Main) under a ratio Paradigm |
 
@@ -202,7 +202,7 @@ its `Activations` count: the firmware's own record of each light it earned.
 | **Self-triggered light**: at least `pr_lick_free_run` (5) consecutive Test light events with no sucrose licks since the previous one | **fails** the group |
 | **Implausible training**: training completed with light events but not a single sucrose lick | **fails** the group |
 | **Requirement series wrong** (generation 3): a Test light event met a Requirement the Test Paradigm's series in `Program.txt` does not give | **fails** the group |
-| **No increasing trend**: with at least `pr_trend_min_events` (5) Test light events, Spearman's rho of licks per event against event number is below `pr_trend_min_rho` (0.3) | warning |
+| **No increasing trend**: with at least `pr_trend_min_events` (5) Test light events inside the Test window, Spearman's rho of licks per event against event number is below `pr_trend_min_rho` (0.3) | warning |
 | **Resting level rise**: the sucrose well's resting level peaks at least `pr_resting_level_rise` (15) counts above its first 30 minutes | warning |
 | **Resting level elevated**: the sucrose well rests at `pr_resting_level_ratio` (3) times the DFM's other sucrose wells, and at least `pr_resting_level_rise` counts above them | warning |
 
@@ -390,8 +390,9 @@ In the ledger, `FirmwareEvents` counts the Firmware Events from the previous lig
 this one, so under a ratio Paradigm's Main phase it equals the `Requirement` met. An
 Acclimation light event meets no Requirement, and its `Phase` is `A`.
 
-Lick tables obey `transform_licks` as in every type; the cumulative curves always use raw
-lick counts. A Project's Combined Analysis stacks the difference table, the light QC and the
+Lick tables obey `transform_licks` as in every type, and with it the paired − yoked
+`dLicksA/B` are differences on the fourth-root scale, labelled so in the reports; the
+cumulative curves always use raw lick counts. A Project's Combined Analysis stacks the difference table, the light QC and the
 breaking point into `<project>_PairedYokedDiff.csv`, `<project>_LightQC.csv` and
 `<project>_BreakingPoint.csv`. The figures themselves are described in the
 [Plot catalogue](plots-catalog.md#progressive-ratio-plots).

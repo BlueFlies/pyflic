@@ -177,7 +177,9 @@ both in minutes, defaulting to 60 and 30.
 | `plot_moving_median_treatment` | Treatment mean ± SEM of median bout duration |
 
 Where binned plots cut time into non-overlapping slices, these slide a window across it, so
-a step smaller than the window gives overlapping data and a smoother curve. That smoothing
+a step smaller than the window gives overlapping data and a smoother curve. Only windows
+that end by the end of the recording are drawn, so the last point never stands for half a
+window. That smoothing
 is cosmetic: adjacent points share data and are not independent observations, so do not
 treat them as such in a test.
 

@@ -15,7 +15,7 @@ Python. For a short reference, see the help topic *Slices* (`pyflic help`, or **
 
 Earlier pyflic analysed a time range by loading only those minutes, from a script step with
 a start and an end time, and applied an exclusion group to it. Each range got its own
-results folder, and replicates were pooled afterwards, by hand or in R.
+results folder, and the recordings were pooled afterwards, by hand or in R.
 
 A **Slice** is the same analysis, set up once for the whole Project:
 
@@ -187,8 +187,8 @@ MyProject/
 
 **How a Slice is labelled:**
 
-- Tables label its rows `Slice 0_360`, with the range `(0, 360)`, where the whole recording's
-  say `Whole recording`.
+- Tables label its rows `Slice 0_360`, with `FacetRange` `(0, 360)` for its minutes, where the
+  whole recording's say `Whole recording`.
 - The experiment report's cover and `summary.txt` name the Slice and its minutes.
 - The Project Report's title reads `MyProject · Slice 0_360`. It also names any member left
   out of the Slice, and warns when pooled members cover spans of different lengths.
@@ -234,23 +234,23 @@ when their ends are more than the tolerance apart.
 ## 8. Converting an older experiment
 
 1. **Arrange the folders.**
-   - Put the replicate folders together in one folder.
+   - Put the recording folders together in one folder. Each becomes a member.
    - In each, rename `Data/` to `data/`, and move `Program.txt` and `Messages.csv` into it.
    - Move old outputs and R files (`flic_config_results/`, `ExpDesign.csv`, ...) into an
      `extra_files/` folder, which pyflic ignores.
 2. **Make it a Project.** In the Hub's Project panel, click **Initialize existing
-   directory…** and choose that folder. The design is filled in from the first replicate's
+   directory…** and choose that folder. The design is filled in from the first member's
    old settings, so review every field:
    - **Experiment type:** an old `two_well` type is now the **Custom** type with a two-well
      layout.
-   - **Design factors:** they must suit every replicate. Drop a factor that only numbers the
+   - **Design factors:** they must suit every member. Drop a factor that only numbers the
      pairs; for an optogenetic experiment, `Program.txt` already says which chambers are
      paired.
    - **Exclusion group and Slices:** set them as in sections 2 and 3, one Slice per range the
      old script ran.
-3. **Save.** When asked, let the window remove each replicate's own copy of the old
+3. **Save.** When asked, let the window remove each member's own copy of the old
    settings, so they all follow the design. If you changed the design factors, update each
-   replicate's chamber assignments in the Config Editor.
+   member's chamber assignments in the Config Editor.
 4. **Check and run.**
    - Run `pyflic lint` on the Project. It lists what is left to fix, including old script
      time ranges and old `analysis_<start>_<end>` folders, each with the Slice that replaces
@@ -258,7 +258,7 @@ when their ends are more than the tolerance apart.
    - Then click **Analyze all**, **Combine** and **Create report**.
    - Compare a Slice's `feeding_summary.csv` with the old range's in `extra_files/`.
 
-`test_data/MBabap` was converted this way. Its original settings are kept in each replicate's
+`test_data/MBabap` was converted this way. Its original settings are kept in each member's
 `extra_files/flic_config.yaml.orig`.
 
 ---
@@ -293,8 +293,8 @@ design:
 - **Quote a Slice name that starts with a digit.** Unquoted, YAML reads `0_360` as the number
   240. pyflic refuses that rather than run a Slice called "240".
 - `whole`, `all` and `none` are reserved and cannot be Slice names.
-- `constants:` accepts only `min_untransformed_licks_cutoff`, `exclude_failed_opto_chambers`
-  and `opto_unexplained_min_sec`.
+- `constants:` accepts only `min_untransformed_licks_cutoff`, `exclude_failed_opto_chambers`,
+  `opto_unexplained_fail_fraction` and `opto_unexplained_min_sec`.
 - The Hub's Slice boxes are saved as `omit: slices: [...]`, listing the Slices left out.
 
 `remove_chambers.csv`, in each member, holds one row per chamber and group:

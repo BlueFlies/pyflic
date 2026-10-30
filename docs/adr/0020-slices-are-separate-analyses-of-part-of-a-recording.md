@@ -55,6 +55,10 @@ Members whose recording covers it.
   the whole recording and every Slice kept. *Analyze all* and a Batch Run cover every Slice.
 - A Plot Spec names its Slice, so a figure stays regenerable from its Spec.
 - The stale rule (ADR-0010) applies per Slice, and a Slice whose definition changed since
-  its run also reads "re-run needed".
+  its run also reads "re-run needed". A Member's `slice.json` describes its analysis of the
+  Slice: a QC-only run writes one only where no analysis under another definition would be
+  hidden by it, and a "not covered" record left by another definition is no verdict on the
+  current one. The Project's `slices/<name>/` records no definition: its Combined Analysis
+  is rebuilt from the Members' outputs, whose records already carry it.
 - The feeding-summary disk cache is now keyed by the Design's `global:`, the chambers
   excluded and the Slice; before, an exclusion edit could return the summary from before it.

@@ -78,6 +78,106 @@ def _subplots(*args, figsize=None, **kwargs):
     return fig, axes
 
 
+#: Minutes of the recording's start a range's clip keeps aside
+#: (:class:`BeforeRange`): the firmware captures its baseline in the first ten
+#: seconds of the run, which starts with the recording or within a minute of
+#: it (a later start is a program mismatch the light QC flags).
+START_KEPT_MIN = 5.0
+
+#: A raw sample above this carries the generation-1 training flag: its true
+#: value is the raw value minus :data:`_TRAINING_FLAG`.
+_TRAINING_FLAG_ABOVE = 40000
+_TRAINING_FLAG = 65536
+
+
+@dataclass(frozen=True, slots=True)
+class BeforeRange:
+    """What a range's clip cut from the front of the recording that the rows
+    it kept still need (ADR-0020).  A Slice that starts after minute 0 is
+    analysed from its own rows, but the firmware's baseline was captured at
+    the start of the run, and a light on at the Slice's first row may have
+    come on before it.
+
+    ``start_min`` is the range's start ``a`` of ``(a, b]``; ``start_minutes``
+    and ``start_raw`` the recording's first rows (up to
+    :data:`START_KEPT_MIN` minutes) and their raw signal, ``(k, 12)`` with
+    wells 1-12 as columns and the training flag removed; ``lit`` each well's
+    ``OptoCol1`` light on the last row before the range, ``(12,)``.  On
+    generation 3 the Paradigm state keeps its own row before
+    (:attr:`ParadigmState.activations_before`).
+    """
+
+    start_min: float
+    start_minutes: np.ndarray
+    start_raw: np.ndarray
+    lit: np.ndarray
+
+
+def _without_training_flag(values: np.ndarray) -> np.ndarray:
+    """Raw values with the generation-1 training flag taken off."""
+    values = np.asarray(values, dtype=float).copy()
+    flagged = np.nan_to_num(values, nan=0.0) > _TRAINING_FLAG_ABOVE
+    values[flagged] -= _TRAINING_FLAG
+    return values
+
+
+def _flag_training_table(df: pd.DataFrame) -> pd.DataFrame:
+    """Port of ``GetDoneTrainingInfo()``, extended with a per-well verdict:
+    one row per well of *df* (the raw, still-flagged signal).
+
+    ``Minutes`` is the last minute the well's own column carried the flag
+    (NaN when it never did).  ``Cleared`` says whether the flag went away
+    before the recording ended — the firmware clears it on a well whose
+    training completed, so a well flagged through the last sample never
+    finished (or, for a well that is not the paired sucrose well, simply
+    never reports).  Only a cleared well has a training end."""
+    minutes = pd.to_numeric(df["Minutes"], errors="coerce").to_numpy(dtype=float)
+    samples = (pd.to_numeric(df["Sample"], errors="coerce").to_numpy(dtype=float)
+               if "Sample" in df.columns else None)
+    rows = []
+    for i in range(1, 13):
+        col = f"W{i}"
+        if col not in df.columns:
+            continue
+        mask = (pd.to_numeric(df[col], errors="coerce").fillna(0)
+                > _TRAINING_FLAG_ABOVE).to_numpy(dtype=bool)
+        if not np.any(mask):
+            rows.append({"well": col, "Minutes": np.nan, "Sample": np.nan,
+                         "EverFlagged": False, "Cleared": False})
+            continue
+        rows.append({
+            "well": col,
+            "Minutes": float(minutes[mask].max()),
+            "Sample": (float(samples[mask].max()) if samples is not None
+                       else float(np.flatnonzero(mask).max() + 1)),
+            "EverFlagged": True,
+            "Cleared": not bool(mask[-1]),
+        })
+    return pd.DataFrame(rows)
+
+
+def _before_range(df: pd.DataFrame, a: float, *, flagged: bool) -> BeforeRange | None:
+    """:class:`BeforeRange` of the whole-recording frame *df* for a range
+    starting at *a*; ``None`` when the clip cuts nothing from the front."""
+    minutes = pd.to_numeric(df["Minutes"], errors="coerce").to_numpy(dtype=float)
+    cut = np.flatnonzero(minutes <= a)
+    if not cut.size or a <= 0.0:
+        return None
+    head = minutes <= (minutes[0] + START_KEPT_MIN)
+    raw = np.full((int(head.sum()), 12), np.nan)
+    for w in range(1, 13):
+        if f"W{w}" in df.columns:
+            values = pd.to_numeric(df[f"W{w}"], errors="coerce").to_numpy(dtype=float)[head]
+            raw[:, w - 1] = _without_training_flag(values) if flagged else values
+    lit = np.zeros(12, dtype=bool)
+    if "OptoCol1" in df.columns:
+        last = pd.to_numeric(df["OptoCol1"], errors="coerce").iloc[int(cut[-1])]
+        bits = 0 if pd.isna(last) else int(last)
+        lit = (bits & (1 << np.arange(12, dtype=np.int64))) > 0
+    return BeforeRange(start_min=float(a), start_minutes=minutes[head].copy(),
+                       start_raw=raw, lit=lit)
+
+
 @dataclass(frozen=True, slots=True)
 class _LoadedDFM:
     df: pd.DataFrame
@@ -94,6 +194,13 @@ class _LoadedDFM:
     #: The last minute of the recording before any range clipped it: whether
     #: a Slice is covered is read from this (ADR-0020).
     recording_end: float = float("nan")
+    #: What the clip cut from the front that the kept rows still need.
+    before_range: BeforeRange | None = None
+    #: Generation 1's per-well training table (:func:`_flag_training_table`)
+    #: read from the whole recording before a range clipped it: a range that
+    #: starts after a group's training end must not make that group look as
+    #: if it never trained.  ``None`` when nothing was clipped.
+    training: pd.DataFrame | None = None
 
 
 class EmptyRangeError(ValueError):
@@ -236,10 +343,19 @@ def _load_dfm_csvs(dfm_id: int, data_dir: str | Path = ".", range_minutes: Seque
             state = state.subset(~repeated)
     minutes = pd.to_numeric(df["Minutes"], errors="coerce")
     recording_end = float(minutes.max()) if len(minutes) else float("nan")
+    before = None
+    training = None
     if range_is_specified(range_minutes):
         ## (a, b], the rule every Facet window follows, so adjacent Slices
         ## share no row and lose none at their common boundary.
         a, b = range_bounds(range_minutes)
+        ## Read before the clip, as recording_end is: the firmware's baseline,
+        ## the light on the row before, and generation 1's training flags all
+        ## live in rows the clip removes.
+        flagged = version == 3 and generation == GENERATION_FLAG
+        before = _before_range(df, a, flagged=flagged)
+        if flagged:
+            training = _flag_training_table(df)
         keep = ((minutes > a) & (minutes <= b)).to_numpy(dtype=bool)
         df = df[keep]
         if state is not None:
@@ -248,7 +364,8 @@ def _load_dfm_csvs(dfm_id: int, data_dir: str | Path = ".", range_minutes: Seque
             raise EmptyRangeError(dfm_id, recording_end)
     return _LoadedDFM(df=df.reset_index(drop=True), version=version, source_files=files,
                       generation=generation, paradigm=state, repeated_records=n_repeated,
-                      notes=notes, recording_end=recording_end)
+                      notes=notes, recording_end=recording_end, before_range=before,
+                      training=training)
 
 
 @dataclass(slots=True)
@@ -276,6 +393,9 @@ class DFM:
     load_notes: tuple[str, ...] = ()
     #: The recording's last minute before a range clipped it (ADR-0020).
     recording_end_minutes: float | None = None
+    #: What a range's clip cut from the front that the kept rows still need
+    #: (:class:`BeforeRange`); ``None`` when the rows start with the recording.
+    before_range: BeforeRange | None = None
 
     well_names: dict[str, str] | None = None  # e.g. {"A": "Sucrose", "B": "Yeast"}
 
@@ -324,6 +444,7 @@ class DFM:
             repeated_records=int(loaded.repeated_records),
             load_notes=tuple(loaded.notes),
             recording_end_minutes=float(loaded.recording_end),
+            before_range=loaded.before_range,
         )
 
         if correct_for_dual_feeding is None:
@@ -338,6 +459,10 @@ class DFM:
             obj._calculate_no_training()
         elif obj.version == 3:
             obj._calculate_progressive_ratio_training()
+            ## A range clipped the rows: the training ends come from the whole
+            ## recording, read before the clip, not from the rows kept.
+            if loaded.training is not None:
+                obj.in_training_data = loaded.training
 
         obj.recompute_all(correct_for_dual_feeding=bool(correct_for_dual_feeding))
         return obj
@@ -365,6 +490,7 @@ class DFM:
             repeated_records=self.repeated_records,
             load_notes=self.load_notes,
             recording_end_minutes=self.recording_end_minutes,
+            before_range=self.before_range,
             well_names=self.well_names,
             in_training_data=(None if self.in_training_data is None
                               else self.in_training_data.copy()),
@@ -419,48 +545,15 @@ class DFM:
             raise NotImplementedError("Unsupported chamber_size")
 
     def _calculate_progressive_ratio_training(self) -> None:
-        # Port of `CalculateProgressiveRatioTraining()`.
+        # Port of `CalculateProgressiveRatioTraining()`: the per-well training
+        # table (:func:`_flag_training_table`), then the flag taken off.
         df = self.raw_df
-        wcols = [f"W{i}" for i in range(1, 13) if f"W{i}" in df.columns]
-        in_training_df = df[["Minutes", "Sample", *wcols]].copy() if "Sample" in df.columns else df[
-            ["Minutes", *wcols]
-        ].copy()
-        for col in wcols:
-            intraining = pd.to_numeric(df[col], errors="coerce").fillna(0) > 40000
-            in_training_df[col] = intraining.to_numpy(dtype=bool)
-            df.loc[intraining, col] = pd.to_numeric(df.loc[intraining, col], errors="coerce").fillna(0) - 65536
+        self.in_training_data = _flag_training_table(df)
+        for col in [f"W{i}" for i in range(1, 13) if f"W{i}" in df.columns]:
+            values = pd.to_numeric(df[col], errors="coerce")
+            intraining = values.fillna(0) > _TRAINING_FLAG_ABOVE
+            df.loc[intraining, col] = values[intraining].fillna(0) - _TRAINING_FLAG
         self.raw_df = df
-
-        # Port of `GetDoneTrainingInfo()`, extended with a per-well verdict.
-        #
-        # ``Minutes`` is the last minute the well's own column carried the
-        # flag (NaN when it never did).  ``Cleared`` says whether the flag went
-        # away before the recording ended — the firmware clears it on a well
-        # whose training completed, so a well flagged through the last sample
-        # never finished (or, for a well that is not the paired sucrose well,
-        # simply never reports).  Only a cleared well has a training end.
-        rows = []
-        for i in range(1, 13):
-            col = f"W{i}"
-            if col not in in_training_df.columns:
-                continue
-            mask = in_training_df[col].to_numpy(dtype=bool)
-            if not np.any(mask):
-                rows.append({"well": col, "Minutes": np.nan, "Sample": np.nan,
-                             "EverFlagged": False, "Cleared": False})
-            else:
-                rows.append(
-                    {
-                        "well": col,
-                        "Minutes": float(in_training_df.loc[mask, "Minutes"].max()),
-                        "Sample": float(in_training_df.loc[mask, "Sample"].max())
-                        if "Sample" in in_training_df.columns
-                        else float(np.flatnonzero(mask).max() + 1),
-                        "EverFlagged": True,
-                        "Cleared": not bool(mask[-1]),
-                    }
-                )
-        self.in_training_data = pd.DataFrame(rows)
 
     def _calculate_paradigm_training(self) -> None:
         """Training on generation 3, from each well's Phase: the same
@@ -1225,22 +1318,30 @@ class DFM:
         return {"baselined": adjusted, "dual_feeding_data": pd.concat(dual_rows, ignore_index=True) if dual_rows else pd.DataFrame()}
 
     # ---- Stats ----
-    @staticmethod
-    def _chamber_from_well(well: int, params) -> int:
-        if params.chamber_size == 1:
-            return well
-        return (well - 1) // 2 + 1
+    def _chamber_from_well(self, well: int) -> int:
+        """The Chamber *well* belongs to, read from :attr:`chambers` — so a
+        ``chamber_sets`` other than ``[[1, 2], [3, 4], ...]`` labels it right,
+        where well parity would not."""
+        if self.chambers is None:
+            self._build_chambers()
+        for ch in self.chambers:
+            if int(well) in (int(w) for w in ch.wells):
+                return int(ch.index)
+        return int(well) if self.params.chamber_size == 1 else (int(well) - 1) // 2 + 1
 
-    @staticmethod
-    def _tcwell_from_well(well: int, params) -> str | None:
-        if params.chamber_size != 2:
+    def _tcwell_from_well(self, well: int) -> str | None:
+        """``WellA`` / ``WellB`` for *well* in a two-well Chamber (A/B follow
+        ``pi_direction``), from :attr:`chambers`; ``None`` single-well."""
+        if self.params.chamber_size != 2:
             return None
-        even = (well % 2 == 0)
-        if params.pi_direction == "left":
-            return "WellA" if not even else "WellB"
-        if params.pi_direction == "right":
-            return "WellB" if not even else "WellA"
-        raise ValueError(f"Invalid pi_direction: {params.pi_direction!r}")
+        if self.chambers is None:
+            self._build_chambers()
+        for ch in self.chambers:
+            if int(well) == int(ch.well_a):
+                return "WellA"
+            if int(well) == int(ch.well_b):
+                return "WellB"
+        return None
 
     @staticmethod
     def _range_rows(minutes, range_minutes: Sequence[float]) -> np.ndarray | None:
@@ -1255,10 +1356,16 @@ class DFM:
 
     @staticmethod
     def _interval_summary(interval_df, range_minutes: Sequence[float]) -> tuple[float, float]:
+        """``(MeanTimeBtw, MedTimeBtw)`` of the intervals that start inside
+        the window.  NaN, as for the bout durations, when none does or the
+        well has none at all: 0 s would read as feeding without pause, and
+        it entered treatment means and tests as if measured.  The intervals
+        themselves keep R's ``Get.Intervals`` rule, lead-in and tail gaps
+        included."""
         from . import windowing
 
         if not isinstance(interval_df, pd.DataFrame) or interval_df.empty:
-            return 0.0, 0.0
+            return np.nan, np.nan
         if windowing.is_window_list(range_minutes):
             tmp = interval_df[DFM._range_rows(interval_df["Minutes"], range_minutes)]
         elif range_is_specified(range_minutes):
@@ -1267,7 +1374,7 @@ class DFM:
         else:
             tmp = interval_df
         if tmp.empty:
-            return 0.0, 0.0
+            return np.nan, np.nan
         return float(tmp["IntervalSec"].mean()), float(tmp["IntervalSec"].median())
 
     @staticmethod
@@ -1434,6 +1541,37 @@ class DFM:
 
         raise NotImplementedError("Feeding summary not implemented for this DFM type.")
 
+    def _sweep_bounds(self, range_minutes: Sequence[float]) -> tuple[float, float]:
+        """``(m_min, m_max)`` a binned or moving-window sweep covers: the
+        range given, an open end at the last row; for the whole rows, from
+        the start of the range they were loaded with (a Slice's start, not
+        minute 0, whose bins before it would hold no row) to the last row."""
+        last = float(self.raw_df["Minutes"].max())
+        if range_is_specified(range_minutes):
+            m_min, m_max = range_bounds(range_minutes)
+            return m_min, (last if m_max == float("inf") else m_max)
+        ## getattr: a DFM built by hand (tests, ``object.__new__``) has no slot set.
+        before = getattr(self, "before_range", None)
+        return float(before.start_min if before is not None else 0.0), last
+
+    def _sample_minutes(self) -> float:
+        """One sample period, in minutes."""
+        return 1.0 / (60.0 * float(self.params.samples_per_second))
+
+    def _window_starts(self, m_min: float, m_max: float, window_min: float,
+                       step_min: float) -> np.ndarray:
+        """Starts of the moving windows ``(a, a + window_min]`` that fit inside
+        ``(m_min, m_max]``: a window running past the last row would be
+        labelled with a minute the recording never reached and hold part of
+        its width.  The last row's minute may fall a sample short of a whole
+        minute, so a window may end up to one sample period past it.  A sweep
+        narrower than one window is that one window."""
+        last_start = m_max - float(window_min) + self._sample_minutes() + 1e-9
+        starts = np.arange(m_min, last_start, step_min, dtype=float)
+        if starts.size == 0:
+            starts = np.array([m_min], dtype=float)
+        return starts
+
     def binned_feeding_summary(
         self,
         *,
@@ -1441,12 +1579,7 @@ class DFM:
         range_minutes: Sequence[float] = (0, 0),
         transform_licks: bool = True,
     ) -> pd.DataFrame:
-        if range_is_specified(range_minutes):
-            m_min, m_max = range_bounds(range_minutes)
-            if m_max == float("inf"):
-                m_max = float(self.raw_df["Minutes"].max())
-        else:
-            m_min, m_max = 0.0, float(self.raw_df["Minutes"].max())
+        m_min, m_max = self._sweep_bounds(range_minutes)
         if m_min > m_max:
             m_max = m_min + 1.0
         y = np.arange(m_min, m_max + 1e-9, binsize_min, dtype=float)
@@ -1460,7 +1593,8 @@ class DFM:
             summ.insert(0, "Minutes", float((a + b) / 2.0))
             summ.insert(0, "Interval", label)
             parts.append(summ)
-        return pd.concat(parts, ignore_index=True)
+        ## A range that starts on the last row's minute has no bin to hold.
+        return pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
 
     def moving_window_feeding_summary(
         self,
@@ -1478,7 +1612,8 @@ class DFM:
         *step_min* increments, so successive windows may overlap.  Each window
         spans ``(a, a + window_min]`` and is labelled by its right edge
         (``a + window_min``) in the ``Minutes`` column — matching the
-        convention used by :meth:`moving_median_duration`.
+        convention used by :meth:`moving_median_duration`.  Only windows that
+        end by the last row are swept (:meth:`_window_starts`).
 
         Because every metric is produced by the same per-window
         :meth:`feeding_summary` call, downstream code can extract any feeding
@@ -1493,7 +1628,8 @@ class DFM:
             Distance the window advances each step, in minutes (default 30.0).
         range_minutes:
             ``(start, end)`` window the sweep is bounded to.  ``(0, 0)`` (the
-            default) sweeps from 0 to the end of this DFM's recording.
+            default) sweeps the rows loaded: from 0, or a Slice's start, to
+            the end of this DFM's recording.
         transform_licks:
             Apply the fourth-root lick transform (see :meth:`feeding_summary`).
         """
@@ -1501,18 +1637,11 @@ class DFM:
             raise ValueError("window_min must be positive.")
         if step_min <= 0:
             raise ValueError("step_min must be positive.")
-        if range_is_specified(range_minutes):
-            m_min, m_max = range_bounds(range_minutes)
-            if m_max == float("inf"):
-                m_max = float(self.raw_df["Minutes"].max())
-        else:
-            m_min, m_max = 0.0, float(self.raw_df["Minutes"].max())
+        m_min, m_max = self._sweep_bounds(range_minutes)
         if m_min >= m_max:
             raise ValueError(f"range start ({m_min}) must be less than end ({m_max}).")
 
-        starts = np.arange(m_min, m_max, step_min, dtype=float)
-        if starts.size == 0:
-            starts = np.array([m_min], dtype=float)
+        starts = self._window_starts(m_min, m_max, window_min, step_min)
 
         parts: list[pd.DataFrame] = []
         for a in starts:
@@ -1538,8 +1667,8 @@ class DFM:
             if tmp.empty:
                 continue
             tmp.insert(0, "Well", well)
-            tmp.insert(0, "TCWell", self._tcwell_from_well(well, self.params) or "")
-            tmp.insert(0, "Chamber", self._chamber_from_well(well, self.params))
+            tmp.insert(0, "TCWell", self._tcwell_from_well(well) or "")
+            tmp.insert(0, "Chamber", self._chamber_from_well(well))
             tmp.insert(0, "DFM", self.id)
             frames.append(tmp)
         return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
@@ -1557,8 +1686,8 @@ class DFM:
             if tmp.empty:
                 continue
             tmp.insert(0, "Well", well)
-            tmp.insert(0, "TCWell", self._tcwell_from_well(well, self.params) or "")
-            tmp.insert(0, "Chamber", self._chamber_from_well(well, self.params))
+            tmp.insert(0, "TCWell", self._tcwell_from_well(well) or "")
+            tmp.insert(0, "Chamber", self._chamber_from_well(well))
             tmp.insert(0, "DFM", self.id)
             frames.append(tmp)
         return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
@@ -1600,24 +1729,19 @@ class DFM:
             Distance the window advances each step, in minutes (default 30.0).
         range_minutes:
             ``(start, end)`` window the sweep is bounded to.  ``(0, 0)`` (the
-            default) sweeps from 0 to the end of this DFM's recording.
+            default) sweeps the rows loaded: from 0, or a Slice's start, to
+            the end of this DFM's recording.  Only windows that end by the
+            last row are swept (:meth:`_window_starts`).
         """
         if window_min <= 0:
             raise ValueError("window_min must be positive.")
         if step_min <= 0:
             raise ValueError("step_min must be positive.")
-        if range_is_specified(range_minutes):
-            m_min, m_max = range_bounds(range_minutes)
-            if m_max == float("inf"):
-                m_max = float(self.raw_df["Minutes"].max())
-        else:
-            m_min, m_max = 0.0, float(self.raw_df["Minutes"].max())
+        m_min, m_max = self._sweep_bounds(range_minutes)
         if m_min >= m_max:
             raise ValueError(f"range start ({m_min}) must be less than end ({m_max}).")
 
-        starts = np.arange(m_min, m_max, step_min, dtype=float)
-        if starts.size == 0:
-            starts = np.array([m_min], dtype=float)
+        starts = self._window_starts(m_min, m_max, window_min, step_min)
         ends = starts + float(window_min)
         # Each window is labelled by its endpoint (right edge).
         labels = ends

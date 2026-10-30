@@ -140,8 +140,7 @@ def _window(holder: dict) -> tuple[float, float] | None:
 
 
 def _slice_example(start: float, end: float) -> str:
-    def tidy(v: float):
-        return int(v) if float(v).is_integer() else v
+    from .slices import tidy_minute as tidy
 
     stop = "end" if end <= 0 else tidy(end)
     name = f"m{tidy(start)}_{stop}".replace(".", "p")

@@ -180,7 +180,7 @@ the Hub shows, one at a time:
 - the loaded member. Picking another Slice reloads it as that Slice, and the status strip
   names the Slice it is loaded as.
 - so what the QC Viewer opens on, what **View QC plots** and **Open qc folder** show, which
-  figures **Generate plots** opens in tabs (a Slice's tabs end with its name), and which
+  figures **Generate plots** opens in tabs (a Slice's tabs end with `· Slice <name>`), and which
   reports **View reports** opens.
 
 It does not choose what runs: **Run QC**, **Run analysis** and **Generate plots** run the

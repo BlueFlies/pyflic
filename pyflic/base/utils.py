@@ -32,7 +32,25 @@ def natural_sorted(paths: Iterable[Path]) -> list[Path]:
 
 
 def range_is_specified(rng: Sequence[float]) -> bool:
-    return len(rng) == 2 and (float(rng[0]) + float(rng[1]) != 0.0)
+    """Whether *rng* names a window rather than the whole-recording sentinel
+    ``(0, 0)``.  Compares the pair, not its sum, as
+    :func:`pyflic.base.windowing.is_full_range` does, so ``(-5, 5)`` is a
+    window."""
+    return len(rng) == 2 and not (float(rng[0]) == 0.0 and float(rng[1]) == 0.0)
+
+
+#: The power of pyflic's lick transform (``transform_licks``): Licks^0.25.
+LICK_TRANSFORM_POWER = 0.25
+
+
+def lick_total(a, b, *, transformed: bool):
+    """Two wells' Licks together.  On the fourth-root scale the total is the
+    root of the summed counts, (A + B)^¼, never A^¼ + B^¼: the counts are
+    recovered (``value ** 4``), summed and transformed again.  Works on
+    numbers, arrays and Series alike; NaN propagates."""
+    if not transformed:
+        return a + b
+    return (a ** 4 + b ** 4) ** LICK_TRANSFORM_POWER
 
 
 def range_bounds(rng: Sequence[float]) -> tuple[float, float]:

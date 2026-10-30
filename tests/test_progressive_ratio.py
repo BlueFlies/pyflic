@@ -159,6 +159,43 @@ def test_wells_that_never_clear_are_notes_not_errors(exp):
     assert "Training-flag notes" in summary
 
 
+def test_an_onset_on_the_row_that_clears_the_flag_is_training(tmp_path):
+    """Review C10 (owner decision): generation 1's training end is the last
+    flagged row, and the firmware lights the last Training pairing in the
+    record that clears the flag; an onset within one sample of the training
+    end is Training's, the next one is the first Test event."""
+    root = make_pr_experiment_dir(tmp_path / "exp")
+    path = root / "data" / "DFM1_0.csv"
+    data = pd.read_csv(path)
+    end_row = int(6.0 * 60 * 5)                       # group 1's first unflagged row
+    bits = sum(1 << (w - 1) for w in (1, 2, 3, 4))
+    opto = data["OptoCol1"].to_numpy().copy()
+    opto[end_row:end_row + 3] |= bits                 # +1 sample: the last pairing
+    opto[end_row + 10:end_row + 13] |= bits           # +11 samples: the first Test event
+    data["OptoCol1"] = opto
+    data.to_csv(path, index=False)
+    e = load_experiment_yaml(root, parallel=False, use_disk_cache=False)
+    gt = e.group_training(1, 1)
+    minutes = e.dfms[1].raw_df["Minutes"].to_numpy()
+    assert gt.training_end == pytest.approx(minutes[end_row - 1])
+    events = e.light_events_table(1, 1).set_index("RecordingMinute")
+    assert events.loc[minutes[end_row], "Facet"] == "Training"
+    assert events.loc[minutes[end_row + 10], "Facet"] == "Test"
+    test = e._test_events(1, 1)
+    assert test["RecordingMinute"].iloc[0] == pytest.approx(minutes[end_row + 10])
+    ## The yoked chamber's breaking-point rows are the same onsets.
+    yoked = e.breaking_point_table(1, gt.yoked_chamber)
+    assert yoked["Minutes"].iloc[0] == pytest.approx(minutes[end_row + 10] - gt.training_end)
+
+
+def test_a_list_of_windows_is_summarised_and_cached(exp):
+    """Review C14: the type's cache key took float() of each window, which a
+    list of windows (a Program Facet) is not."""
+    windows = [(0.0, 5.0), (10.0, 15.0)]
+    out = exp.feeding_summary(range_minutes=windows, transform_licks=False)
+    assert not out.empty and {"Group", "Role"} <= set(out.columns)
+
+
 def test_all_four_wells_clearing_together_gives_no_notes(tmp_path):
     root = make_pr_experiment_dir(tmp_path / "exp", flag_mode="all_clear",
                                   incomplete_group_on_dfm2=False)

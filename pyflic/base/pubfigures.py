@@ -487,10 +487,18 @@ def save_project_specs(project_dir: str, specs: ProjectSpecs) -> str:
 # Data
 # --------------------------------------------------------------------------
 
-def _metric_values(df: pd.DataFrame, metric: str) -> pd.Series:
+def _metric_values(df: pd.DataFrame, metric: str, *, transformed: bool = False) -> pd.Series:
     from .analytics import _resolve_metric_col
 
-    return pd.to_numeric(_resolve_metric_col(df, metric), errors="coerce")
+    return pd.to_numeric(_resolve_metric_col(df, metric, transformed=transformed),
+                         errors="coerce")
+
+
+def licks_transformed(project, plot_id: str) -> bool:
+    """Whether *plot_id*'s source table holds Licks on the fourth-root
+    scale: the feeding summaries (Facet and binned) follow the Design's
+    ``transform_licks``, so a two-well Licks total is (A + B)^¼."""
+    return bool(project.transform_licks) and source_of(plot_id) in ("facet", "binned")
 
 
 def _panels_roles(frame: pd.DataFrame) -> bool:
@@ -505,7 +513,8 @@ def _panels_roles(frame: pd.DataFrame) -> bool:
 
 
 def faceted_data(frame: pd.DataFrame, metric: str,
-                 label_order: list[str] | None = None) -> pd.DataFrame:
+                 label_order: list[str] | None = None, *,
+                 transformed: bool = False) -> pd.DataFrame:
     """Tidy per-chamber data for one metric: Treatment, Phase, Value
     [, Role, Experiment].
 
@@ -523,12 +532,14 @@ def faceted_data(frame: pd.DataFrame, metric: str,
         phase = frame["Facet"].astype(str)
         order = label_order or list(dict.fromkeys(phase))
     else:
-        phase = pd.Series(["Whole recording"] * len(frame), index=frame.index)
-        order = ["Whole recording"]
+        from .slices import WHOLE_RECORDING_LABEL
+
+        phase = pd.Series([WHOLE_RECORDING_LABEL] * len(frame), index=frame.index)
+        order = [WHOLE_RECORDING_LABEL]
     out = pd.DataFrame({
         "Treatment": frame["Treatment"].astype(str).str.strip(),
         "Phase": pd.Categorical(phase, categories=order, ordered=True),
-        "Value": _metric_values(frame, metric),
+        "Value": _metric_values(frame, metric, transformed=transformed),
     })
     if _panels_roles(frame):
         roles = frame["Role"].astype(str).str.strip()
@@ -544,7 +555,8 @@ def faceted_data(frame: pd.DataFrame, metric: str,
     return out.reset_index(drop=True)
 
 
-def timecourse_data(frame: pd.DataFrame, metric: str) -> pd.DataFrame:
+def timecourse_data(frame: pd.DataFrame, metric: str, *,
+                    transformed: bool = False) -> pd.DataFrame:
     """Tidy per-chamber binned data: Treatment, Minutes, Value [, Experiment].
 
     *frame* is a binned summary (``binned_feeding_summary.csv``), which carries
@@ -555,7 +567,7 @@ def timecourse_data(frame: pd.DataFrame, metric: str) -> pd.DataFrame:
     out = pd.DataFrame({
         "Treatment": frame["Treatment"].astype(str).str.strip(),
         "Minutes": pd.to_numeric(frame["Minutes"], errors="coerce"),
-        "Value": _metric_values(frame, metric),
+        "Value": _metric_values(frame, metric, transformed=transformed),
     })
     if "Experiment" in frame.columns:
         out["Experiment"] = frame["Experiment"].astype(str)
@@ -1082,15 +1094,13 @@ def save_figure(g, path: str, fmt: str = "svg") -> str:
 def _member_out(project, name: str) -> str:
     """A Member's outputs in the Project's view: its directory, or
     ``slices/<name>/`` inside it for a Slice (ADR-0020)."""
-    method = getattr(project, "member_output_dir", None)
-    return method(name) if method is not None else project.member_dir(name)
+    return project.member_output_dir(name)
 
 
 def _pooled(project) -> list[str]:
     """The Members the view pools: a Slice leaves out those that do not
     cover it."""
-    method = getattr(project, "_pooled_members", None)
-    return method() if method is not None else list(project.member_names)
+    return project._pooled_members()
 
 
 def project_frames(project):
@@ -1194,7 +1204,7 @@ def render_all(project, fmt: str = "svg", out_dir: str | None = None,
     unattended Batch Run.
     """
     specs = load_project_specs(project.project_directory)
-    whole = getattr(project, "whole", project)
+    whole = project.whole
     ## Each Spec names the Slice it draws from (ADR-0020); the frames of each
     ## view are read once.
     views: dict[str | None, tuple] = {}
@@ -1241,13 +1251,14 @@ def render_all(project, fmt: str = "svg", out_dir: str | None = None,
             where = "" if spec.slice is None else f" in Slice {spec.slice}"
             log(f"    skipped {plot_id}: no {source_of(plot_id)} data{where}")
             continue
+        transformed = licks_transformed(whole, plot_id)
         if family == FAMILY_TIMECOURSE:
-            df = timecourse_data(source, metric)
+            df = timecourse_data(source, metric, transformed=transformed)
         elif family == FAMILY_SCATTER:
             df = breaking_point_data(source)
         else:
             df = faceted_data(source, metric, label_order if source_of(plot_id) == "facet"
-                              else facet_order(source))
+                              else facet_order(source), transformed=transformed)
         if df.empty:
             log(f"    skipped {plot_id}: metric '{metric}' not in the data")
             continue

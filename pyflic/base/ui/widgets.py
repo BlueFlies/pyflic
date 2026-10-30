@@ -18,6 +18,7 @@ from PyQt6.QtGui import QColor, QIcon, QPalette, QPixmap, QTextCursor
 from PyQt6.QtWidgets import (
     QButtonGroup,
     QComboBox,
+    QDoubleSpinBox,
     QFrame,
     QGroupBox,
     QHBoxLayout,
@@ -25,6 +26,7 @@ from PyQt6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QSizePolicy,
+    QSpinBox,
     QTabWidget,
     QToolButton,
     QVBoxLayout,
@@ -523,6 +525,25 @@ class NoWheelComboBox(QComboBox):
     quietly picking another entry — for a Slice picker, another Slice, and a
     reload of what it shows.  Click it, or use the keyboard, to choose.
     """
+
+    def wheelEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        event.ignore()
+
+
+class NoWheelSpinBox(QSpinBox):
+    """A spin box the mouse wheel never changes, as :class:`NoWheelComboBox`:
+    in a scrolling panel the wheel scrolls the panel, and a number that moved
+    under a passing pointer — a worker count, a DFM id — is not noticed until
+    it has done its damage.  Type, use the arrows or the keyboard to change it.
+    """
+
+    def wheelEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        event.ignore()
+
+
+class NoWheelDoubleSpinBox(QDoubleSpinBox):
+    """A decimal spin box the mouse wheel never changes, as
+    :class:`NoWheelSpinBox`."""
 
     def wheelEvent(self, event) -> None:  # noqa: N802 (Qt override)
         event.ignore()

@@ -111,7 +111,8 @@ writes its copy, `experiment_type.yaml`, beside it, and a new Project starts its
 One dialog, titled *New Project*, *Edit Project design* or *Initialize existing directory*
 by what it is doing, with four cards:
 
-- **Project** — the **Directory** (its **Browse…** can make a new folder), the **Project
+- **Project** — the **Directory** (its **Browse…** can make a new folder; an existing
+  Project's design fills the form once you finish typing the path or pick it), the **Project
   name** (the folder's name by default, and fixed when initializing in place) and
   **Notes**, shown near the top of the Project Report.
 - **Design** — what every member inherits: the **Experiment type**, with **New type…** to

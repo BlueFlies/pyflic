@@ -258,13 +258,20 @@ class _DFMLight:
         self.state = state
         self.source = SOURCE_ON_MS if state is not None else SOURCE_OPTOCOL1
         self.steps = None
+        lit_first = np.zeros(op.N_WELLS, dtype=bool)
         if state is not None:
             self.on_ms = np.asarray(state.on_ms)
             self.lit = self.on_ms > 0
-            ## Activations counted in each row; row 0's total predates the file.
+            ## Activations counted in each row; row 0's against the row before
+            ## it when a range clipped the recording there, else its total
+            ## predates the file.
             counts = np.asarray(state.activations)
-            self.steps = np.clip(np.diff(counts, axis=0, prepend=counts[:1]), 0, None) \
+            first = (counts[:1] if state.activations_before is None
+                     else np.asarray(state.activations_before).reshape(1, -1))
+            self.steps = np.clip(np.diff(counts, axis=0, prepend=first), 0, None) \
                 if n else np.zeros((0, op.N_WELLS), dtype=np.int64)
+            if state.on_ms_before is not None:
+                lit_first = np.asarray(state.on_ms_before) > 0
         else:
             self.on_ms = None
             self.lit = np.zeros((n, op.N_WELLS), dtype=bool)
@@ -273,8 +280,15 @@ class _DFMLight:
                 for w in range(1, op.N_WELLS + 1):
                     if f"W{w}" in frame.columns:
                         self.lit[:, w - 1] = frame[f"W{w}"].to_numpy()[:n].astype(bool)
-        ## Before row 0 is taken as dark: a light on at the first record came on.
+            before = getattr(dfm, "before_range", None)
+            if before is not None:
+                lit_first = np.asarray(before.lit, dtype=bool)
+        ## Before row 0 is the row a range clipped off (a Slice's light already
+        ## on at its first row came on before it), else dark: a light on at
+        ## the recording's first record came on.
         self.lit_before = np.zeros_like(self.lit)
+        if n:
+            self.lit_before[0] = lit_first
         self.lit_before[1:] = self.lit[:-1]
         self.licks = _matrix(dfm.lick_df, n, bool)
         self.events = _matrix(dfm.event_df, n, np.int64) > 0

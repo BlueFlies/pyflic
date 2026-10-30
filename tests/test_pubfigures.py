@@ -363,3 +363,22 @@ def test_breaking_point_data_of_an_empty_frame_is_empty():
     assert df.empty
     assert list(df.columns) == ["Treatment", "BreakMin", "BreakingPoint",
                                 "Censored"]
+
+
+def test_a_two_well_licks_figure_roots_the_summed_counts():
+    """Review C2: on the fourth-root scale the two wells' Licks total is
+    (A + B)^0.25, never A^0.25 + B^0.25; light and difference tables are left
+    alone."""
+    from types import SimpleNamespace
+
+    frame = pd.DataFrame({"Treatment": ["Ctrl"], "LicksA": [16 ** 0.25],
+                          "LicksB": [65 ** 0.25]})
+    assert pubfigures.faceted_data(frame, "Licks", transformed=True)["Value"].iloc[0] \
+        == pytest.approx(3.0)
+    assert pubfigures.faceted_data(frame, "Licks")["Value"].iloc[0] \
+        == pytest.approx(16 ** 0.25 + 65 ** 0.25)
+    transformed, raw = SimpleNamespace(transform_licks=True), SimpleNamespace(transform_licks=False)
+    assert pubfigures.licks_transformed(transformed, "faceted_licks")
+    assert pubfigures.licks_transformed(transformed, "timecourse_licks")
+    assert not pubfigures.licks_transformed(transformed, "faceted_licksperminlit")
+    assert not pubfigures.licks_transformed(raw, "faceted_licks")

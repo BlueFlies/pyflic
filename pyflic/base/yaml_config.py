@@ -198,9 +198,9 @@ def _safe_setting(value) -> str:
         return _opto.SETTING_AUTO
 
 
-def _group_label(groups: Sequence[str]) -> str:
-    """``'general'`` or ``'early' + 'dead'`` for the log lines."""
-    return " + ".join(f"'{g}'" for g in groups) or "(none)"
+#: ``exclusion_group``'s default: the whole recording's own group as the
+#: design names it (``global.exclusion_group``; ``general`` when unset).
+DESIGN_GROUP: Any = object()
 
 
 def _cache_signature(global_cfg: Mapping[str, Any], excluded: Mapping[int, Sequence[int]],
@@ -239,7 +239,7 @@ def load_experiment_yaml(
     executor: Literal["threads", "processes"] = "threads",
     eager: bool = True,
     use_disk_cache: bool = True,
-    exclusion_group: str | None = "general",
+    exclusion_group: str | None = DESIGN_GROUP,
     design_global: Mapping[str, Any] | None = None,
     in_project: bool = False,
     strict_type: bool = True,
@@ -271,6 +271,12 @@ def load_experiment_yaml(
     in_project:
         True when loading a Member.  Restricts per-DFM ``params:`` overrides
         to the physical keys (ADR-0005).
+    exclusion_group:
+        The ``remove_chambers.csv`` group whose chambers are excluded, beside
+        the design's ``also_exclude`` groups.  By default the design's own
+        ``exclusion_group`` (``general`` when it names none).  ``None``
+        excludes nothing, loading the design as written; the experiment
+        still names the design's group as the one its removals go to.
     strict_type:
         Raise when the config violates its Experiment Type instead of warning.
         The linter passes False so it can report every problem at once.
@@ -358,9 +364,13 @@ def load_experiment_yaml(
     the_slice = None
     also_groups = _slices.also_exclude(global_cfg)
     ## exclusion_group=None loads the design as written (the QC Viewer shows
-    ## every chamber); a Slice still names its own group as the one its
-    ## removals are written to.
+    ## every chamber), but the experiment still names the group its removals
+    ## are written to: the design's, as a Slice names its own.  Every load of
+    ## the whole recording that names no group reads the design's, so the
+    ## Hub, the QC Viewer and a script exclude the same chambers.
     apply_exclusions = exclusion_group is not None
+    if exclusion_group is None or exclusion_group is DESIGN_GROUP:
+        exclusion_group = _slices.whole_recording_group(global_cfg)
     if slice is not None:
         if not _slices.allows_slices(exp_type):
             raise _slices.SliceError(f"{path.name}: {_slices.refusal(exp_type)}")
@@ -461,8 +471,8 @@ def load_experiment_yaml(
     from .exclusions import read_exclusions as _read_exclusions
     file_excl_for_group: dict[int, list[int]] = {}
     applied_groups: list[str] = []
-    if apply_exclusions and exclusion_group is not None:
-        applied_groups = [exclusion_group] + [g for g in also_groups if g != exclusion_group]
+    if apply_exclusions:
+        applied_groups = list(_slices.exclusion_groups(exclusion_group, also_groups))
         _all_file_excl = _read_exclusions(resolved_experiment_dir)
         for group in applied_groups:
             for dfm_id_, chambers_ in (_all_file_excl.get(group) or {}).items():
@@ -470,7 +480,7 @@ def load_experiment_yaml(
                 file_excl_for_group[dfm_id_] = sorted(merged_)
         if file_excl_for_group:
             print(
-                f"\nApplying exclusion group(s) {_group_label(applied_groups)} from "
+                f"\nApplying exclusion group(s) {_slices.groups_label(applied_groups)} from "
                 f"remove_chambers.csv:",
                 flush=True,
             )
@@ -575,7 +585,7 @@ def load_experiment_yaml(
             excluded_by_dfm[dfm_id] = sorted(excl_set)
             print(
                 f"  DFM {dfm_id}: excluding chamber(s) {sorted(excl_set)} "
-                f"(group {_group_label(applied_groups)})",
+                f"(group {_slices.groups_label(applied_groups)})",
                 flush=True,
             )
 
@@ -701,7 +711,8 @@ def load_experiment_yaml(
                                if x.recording_end_minutes is not None}}
         reason = _slices.coverage(the_slice, dfm_ends, _slices.tolerance(global_cfg))
         if reason is not None:
-            raise _slices.SliceNotCovered(the_slice, reason, dfm_ends)
+            raise _slices.SliceNotCovered(the_slice, reason, dfm_ends,
+                                          _slices.tolerance(global_cfg))
     elif empty:
         raise ValueError(
             f"No data in range {tuple(range_minutes)} for DFM(s) {sorted(empty)}: the "

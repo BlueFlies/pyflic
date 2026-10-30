@@ -4,7 +4,7 @@ from contextlib import redirect_stdout
 from dataclasses import dataclass, field
 from io import StringIO
 from pathlib import Path
-from typing import Any, Literal, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Literal, Mapping, Sequence
 
 import numpy as np
 import pandas as pd
@@ -12,6 +12,9 @@ import pandas as pd
 from .dfm import DFM
 from .experiment_design import ExperimentDesign
 from .paradigm_state import GENERATION_DESCRIPTIONS
+
+if TYPE_CHECKING:
+    from .slices import Slice
 
 # Okabe-Ito color-blind-safe palette (8 colors).
 _OKABE_ITO = [
@@ -74,7 +77,7 @@ class Experiment:
     exclusion_group: str | None = None
     #: The Slice this experiment is (ADR-0020), or ``None`` for the whole
     #: recording; its outputs then go to ``slices/<name>/``.
-    slice: Any = None
+    slice: Slice | None = None
     #: The groups excluded beside the own ``exclusion_group`` (never written).
     also_exclude: tuple[str, ...] = ()
     #: Where each DFM's recording ended, for a Slice's ``slice.json``.
@@ -82,6 +85,10 @@ class Experiment:
     #: How the loader was called, so :meth:`load_slice` loads a sibling Slice
     #: the same way (a Member's design, the parallel options).
     load_options: dict = field(default_factory=dict)
+    #: A Member's design as it stands now, from the Project that loaded it
+    #: (``None`` for a standalone experiment): :meth:`load_slice` loads a
+    #: sibling with it, not with the copy taken at load.
+    design_source: Callable[[], Mapping[str, Any]] | None = None
     #: The ``optogenetics:`` setting (auto | yes | no) and the Opto Program read
     #: from ``data/Program.txt`` (:mod:`pyflic.base.opto_program`), or why that
     #: file could not be used.  ``program_notes`` records what the loader took
@@ -131,8 +138,10 @@ class Experiment:
         """``'general'``, or ``'early' + 'dead'`` with ``also_exclude``."""
         if not self.exclusion_group:
             return "file"
-        groups = [self.exclusion_group, *self.also_exclude]
-        return " + ".join(f"'{g}'" for g in groups)
+        from . import slices
+
+        return slices.groups_label(slices.exclusion_groups(self.exclusion_group,
+                                                           self.also_exclude))
 
     def get_dfm(self, dfm_id: int) -> DFM | None:
         """Return the DFM with the given id, or None if it does not exist."""
@@ -346,32 +355,36 @@ class Experiment:
         if self.experiment_dir is None:
             raise ValueError("a Slice is loaded from an Experiment Directory")
         options = dict(self.load_options)
-        if options.get("in_project"):
-            ## A Member's design is re-read from project.yaml, the authority: the
-            ## copy taken at load misses a Selection tick or a design edit made
-            ## since, and the sibling would run with the old one.
-            from .project import PROJECT_FILENAME, read_design
+        if self.design_source is not None:
+            ## A Member's design is re-read, the authority: the copy taken at
+            ## load misses a Selection tick or a design edit made since, and
+            ## the sibling would run with the old one.  The whole recording
+            ## then takes the design's own group, as every load naming none
+            ## does.
+            options["design_global"] = (dict(self.design_source() or {})
+                                        or options.get("design_global"))
+        sibling = load_experiment_yaml(self.experiment_dir, slice=name, **options)
+        sibling.design_source = self.design_source
+        return sibling
 
-            project_dir = Path(self.experiment_dir).parent
-            if (project_dir / PROJECT_FILENAME).is_file():
-                options["design_global"] = dict(read_design(project_dir).get("global")
-                                                or {}) or options.get("design_global")
-        if name is None:
-            ## The whole recording's own group: a Member's comes from the
-            ## design, a standalone experiment's default is general.
-            from . import slices
-
-            options["exclusion_group"] = slices.whole_recording_group(self.global_config)
-        return load_experiment_yaml(self.experiment_dir, slice=name, **options)
-
-    def write_slice_record(self) -> Path | None:
+    def write_slice_record(self, *, qc_only: bool = False) -> Path | None:
         """Write ``slices/<name>/slice.json`` for a covered Slice: the
         definition it ran with, which the stale rule compares with the Design.
-        Nothing for the whole recording."""
+        Nothing for the whole recording.
+
+        The record describes the Slice's analysis.  A run that wrote only QC
+        (*qc_only*) leaves the record of an analysis run under another
+        definition in place, so that analysis still reads as stale."""
         if self.slice is None or self.experiment_dir is None:
             return None
         from . import slices
 
+        if qc_only:
+            record = slices.read_record(self.experiment_dir, self.slice.name)
+            analysed = (self.analysis_dir / "feeding_summary.csv").is_file()
+            if (record is not None and record.get("covered", True) and analysed
+                    and slices.definition_changed(record, self.slice)):
+                return None
         return slices.write_record(self.experiment_dir, self.slice,
                                    tol=slices.tolerance(self.global_config),
                                    dfm_ends=self.slice_dfm_ends, reason=None)
@@ -543,6 +556,8 @@ class Experiment:
                                data_breaks_multiplier=data_breaks_multiplier)
         print(f"  QC complete — {len(self.dfms)} DFM(s) processed.", flush=True)
         self.qc_report_dir = out
+        if out_dir is None:
+            self.write_slice_record(qc_only=True)
         return out
 
     # ---- the QC reports, one item at a time (the QC Set, ADR-0018) ----------
@@ -1420,6 +1435,7 @@ class Experiment:
         *,
         metric: str,
         two_well_mode: Literal["total", "mean_ab", "A", "B"] = "total",
+        transform_licks: bool = False,
     ) -> pd.Series:
         """
         Given binned feeding-summary rows, compute a 1D series of metric values.
@@ -1431,7 +1447,9 @@ class Experiment:
 
         For two-well summaries and base names, `two_well_mode` controls how A/B are combined:
         - 'A' / 'B': use the A or B column
-        - 'total': sum A+B (best for Licks/Events)
+        - 'total': sum A+B (best for Licks/Events); with *transform_licks* (the
+          rows' Licks are on the fourth-root scale) the Licks total is
+          (A + B)^0.25, not A^0.25 + B^0.25 (:func:`pyflic.base.utils.lick_total`)
         - 'mean_ab': mean of A and B (best for duration/interval/time-between metrics)
         """
 
@@ -1467,7 +1485,10 @@ class Experiment:
             if mode == "mean_ab":
                 return (a + b) / 2.0
             # total — preserve NaN when *both* wells have no data for a bin
-            result = a.fillna(0.0) + b.fillna(0.0)
+            from .utils import lick_total
+
+            result = lick_total(a.fillna(0.0), b.fillna(0.0),
+                                transformed=bool(transform_licks) and base == "Licks")
             result[a.isna() & b.isna()] = np.nan
             return result
 
@@ -1606,7 +1627,8 @@ class Experiment:
             )
 
         df = df.copy()
-        df["MetricValue"] = self._metric_series_from_binned_rows(df, metric=metric, two_well_mode=two_well_mode)
+        df["MetricValue"] = self._metric_series_from_binned_rows(
+            df, metric=metric, two_well_mode=two_well_mode, transform_licks=transform_licks)
         df = df.dropna(subset=["Minutes", "MetricValue"]).copy()
         df["Minutes"] = pd.to_numeric(df["Minutes"], errors="coerce")
         df["MetricValue"] = pd.to_numeric(df["MetricValue"], errors="coerce")
@@ -1938,14 +1960,17 @@ class Experiment:
             return ggplot() + annotate("text", x=0, y=0, label="No data") + theme_bw()
 
         df = df.copy()
+        transformed = bool(self.transform_licks if transform_licks is None else transform_licks)
         df["_MetricValue"] = self._metric_series_from_binned_rows(
-            df, metric=metric, two_well_mode=two_well_mode
+            df, metric=metric, two_well_mode=two_well_mode, transform_licks=transformed
         )
         df = df.dropna(subset=["_MetricValue"])
 
         label = metric
         if metric in ("Licks", "Events") and two_well_mode == "total":
             label = f"{metric} (total)"
+        if transformed and metric.startswith("Licks"):
+            label = f"Transformed {label}"
 
         factors = self.design_factors or []
         factor_cols = [f for f in factors if f in df.columns]
@@ -2053,7 +2078,8 @@ class Experiment:
             tmp = df.copy()
             try:
                 tmp["MetricValue"] = self._metric_series_from_binned_rows(
-                    tmp, metric=metric, two_well_mode=two_well_mode
+                    tmp, metric=metric, two_well_mode=two_well_mode,
+                    transform_licks=bool(transform_licks)
                 )
             except ValueError:
                 continue
@@ -2264,7 +2290,8 @@ class Experiment:
         key = windowing.range_key(range_minutes), bool(transform_licks)
         if key in self._feeding_summary_cache:
             return with_light_columns(
-                self, self.opto.with_columns(self._feeding_summary_cache[key]), range_minutes)
+                self, self.opto.with_columns(self._with_slice_span(
+                    self._feeding_summary_cache[key], range_minutes)), range_minutes)
 
         if self.parallel:
             from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
@@ -2296,7 +2323,23 @@ class Experiment:
             )
 
         self._feeding_summary_cache[key] = result
-        return with_light_columns(self, self.opto.with_columns(result), range_minutes)
+        return with_light_columns(
+            self, self.opto.with_columns(self._with_slice_span(result, range_minutes)),
+            range_minutes)
+
+    def _with_slice_span(self, frame: pd.DataFrame, range_minutes) -> pd.DataFrame:
+        """*frame* with a Slice's bounds in ``StartMin`` / ``EndMin`` when it is
+        the Slice's whole summary, whose rows the loader clipped: not the
+        ``(0, 0)`` sentinel, which reads as the whole recording (ADR-0020)."""
+        from . import windowing
+
+        the_slice = getattr(self, "slice", None)
+        if (the_slice is None or frame is None or frame.empty
+                or "StartMin" not in frame.columns or windowing.is_window_list(range_minutes)
+                or not windowing.is_full_range(range_minutes)):
+            return frame
+        start, end = the_slice.bounds
+        return frame.assign(StartMin=float(start), EndMin=float(end))
 
     def binned_feeding_summary(
         self,
@@ -2378,7 +2421,14 @@ class Experiment:
             if bsize <= 0:
                 raise ValueError("'binsize_min' must be positive.")
             if float(range_minutes[0]) == 0.0 and float(range_minutes[1]) == 0.0:
-                m_min = 0.0
+                ## The rows loaded, from the start of the range they were
+                ## loaded with: a Slice's bins begin at its start, not at
+                ## minute 0 with empty bins before it.
+                from .utils import range_is_specified
+
+                loaded = getattr(self, "range_minutes", None)
+                m_min = (float(loaded[0]) if loaded is not None
+                         and range_is_specified(loaded) else 0.0)
                 m_max = max(
                     float(dfm.raw_df["Minutes"].max()) for dfm in self.dfms.values()
                 )

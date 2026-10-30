@@ -201,3 +201,77 @@ def test_an_open_ended_range_runs_to_the_end_of_the_recording(experiment):
     whole = experiment.feeding_summary(transform_licks=False)
     assert head["LicksA"].sum() + tail["LicksA"].sum() == pytest.approx(
         whole["LicksA"].sum())
+
+
+# ---------------------------------------------------------------------------
+# The fourth-root transform in sums and differences (review C2, owner decision)
+# ---------------------------------------------------------------------------
+
+def test_a_two_well_lick_total_is_the_root_of_the_summed_counts(experiment):
+    """Licks summed over the two wells of a transformed summary are
+    (A + B)^0.25, the transform of the total, never A^0.25 + B^0.25; Events
+    are never transformed and sum as before."""
+    from pyflic.base.analytics import _resolve_metric_col, treatment_comparisons
+    from pyflic.base.utils import lick_total
+
+    raw = experiment.feeding_summary(transform_licks=False)
+    root = experiment.feeding_summary(transform_licks=True)
+    expected = (raw["LicksA"] + raw["LicksB"]) ** 0.25
+    got = _resolve_metric_col(root, "Licks", transformed=True)
+    np.testing.assert_allclose(got.to_numpy(), expected.to_numpy())
+    assert not np.allclose(got, root["LicksA"] + root["LicksB"])
+    pd.testing.assert_series_equal(_resolve_metric_col(raw, "Licks"),
+                                   raw["LicksA"] + raw["LicksB"], check_names=False)
+    pd.testing.assert_series_equal(_resolve_metric_col(root, "Events", transformed=True),
+                                   root["EventsA"] + root["EventsB"], check_names=False)
+    assert lick_total(16.0, 65.0, transformed=False) == 81.0
+    assert lick_total(2.0, 0.0, transformed=True) == pytest.approx(2.0)
+    rows = treatment_comparisons([("all", root)], ["Licks"], transformed=True)
+    means = {r["a"]: r["mean_a"] for r in rows} | {r["b"]: r["mean_b"] for r in rows}
+    for treatment, mean in means.items():
+        mask = root["Treatment"] == treatment
+        assert mean == pytest.approx(float(expected[mask].mean()))
+
+
+def test_the_binned_and_dot_totals_use_the_root_of_the_sum(experiment):
+    binned = experiment._binned_licks_table_by_treatment(binsize_min=2,
+                                                         transform_licks=False)
+    root = experiment._binned_licks_table_by_treatment(binsize_min=2, transform_licks=True)
+    total = experiment._metric_series_from_binned_rows(root, metric="Licks",
+                                                       two_well_mode="total",
+                                                       transform_licks=True)
+    np.testing.assert_allclose(total.to_numpy(),
+                               ((binned["LicksA"] + binned["LicksB"]) ** 0.25).to_numpy())
+    ## mean_ab and the single wells are unchanged by the flag.
+    a = experiment._metric_series_from_binned_rows(root, metric="Licks", two_well_mode="A",
+                                                   transform_licks=True)
+    pd.testing.assert_series_equal(a, root["LicksA"], check_names=False)
+    res = bootstrap_metric(experiment, metric="Licks", two_well_mode="total",
+                           transform_licks=True, n_boot=50, seed=1)
+    raw = experiment.feeding_summary(transform_licks=False)
+    expected = ((raw["LicksA"] + raw["LicksB"]) ** 0.25).groupby(raw["Treatment"]).mean()
+    for group, mean in zip(res.summary[res.group_col], res.summary["mean"]):
+        assert mean == pytest.approx(float(expected[str(group)]))
+
+
+def test_a_lick_difference_says_it_is_on_the_root_scale_when_transformed():
+    from pyflic.base import report_content as rc
+
+    names = {"A": "Sucrose", "B": "Yeast"}
+    assert rc.metric_label("dLicksA", names) == "Δ Sucrose licks (paired − yoked)"
+    assert rc.metric_label("dLicksA", names, transformed=True) == \
+        "Δ Sucrose licks (¼-root scale, paired − yoked)"
+    ## Only licks are transformed: other differences read as before.
+    assert rc.metric_label("dEventsA", names, transformed=True) == \
+        rc.metric_label("dEventsA", names)
+    assert rc.metric_label("dPI", names, transformed=True) == "Δ PI (paired − yoked)"
+    rows = [{"metric": "dLicksA", "phase": "Test", "a": "Ctrl", "n_a": 3, "mean_a": 0.1,
+             "b": "Exp", "n_b": 3, "mean_b": 0.4, "diff": 0.3, "p_pooled": 0.2,
+             "p_mixed": None, "test": "Welch t"}]
+    table = rc.stats_table(rows, well_names=names, transformed=True)[0]
+    assert "¼-root scale" in table.frame["Measure"].iloc[0]
+    zero = [{"metric": "dLicksA", "phase": "Test", "treatment": "Ctrl", "n": 3, "mean": 0.1,
+             "sem": 0.05, "p_t": 0.3, "p_wilcoxon": 0.4, "p_mixed": None}]
+    assert "¼-root scale" in rc.zero_test_table(zero, well_names=names,
+                                               transformed=True)[0].frame["Measure"].iloc[0]
+    assert "¼-root" not in rc.zero_test_table(zero, well_names=names)[0].frame["Measure"].iloc[0]

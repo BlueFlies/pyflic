@@ -275,10 +275,12 @@ What each item writes, and which members it is offered for, is in the Analysis H
 
 ## `global.exclusion_group`
 
-The `remove_chambers.csv` group every member of a Project is loaded with: `general` when
-it is left out. It belongs in the Project's design, where the Project Design dialog's
-**Exclusion group** field writes it. A standalone experiment is always loaded with
-`general`. See [Excluding chambers](config-dfms-chambers.md#excluding-chambers).
+The `remove_chambers.csv` group the whole recording is loaded with, and the one the QC
+Viewer saves its removals to: `general` when it is left out. In a Project it belongs in
+the design, where the Project Design dialog's **Exclusion group** field writes it; a
+standalone experiment states it in its own `global:`, where the Config Editor writes it.
+Each Slice has its own group (see [Slices](concepts-slices.md)). See
+[Excluding chambers](config-dfms-chambers.md#excluding-chambers).
 
 ## `dfms`
 

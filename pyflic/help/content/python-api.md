@@ -15,7 +15,8 @@ exp = load_experiment_yaml(
     parallel=True,                   # load DFMs concurrently
     eager=True,                      # pre-compute the feeding summary now
     use_disk_cache=True,             # read/write .pyflic_cache/
-    exclusion_group="general",       # a remove_chambers.csv group; None disables
+    exclusion_group="general",       # a remove_chambers.csv group; default the config's
+                                     # exclusion_group:, None excludes nothing
 )
 ```
 

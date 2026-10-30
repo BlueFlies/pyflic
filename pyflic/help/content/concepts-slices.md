@@ -34,10 +34,12 @@ global:
 - `start` and `end` are minutes. `end: end` runs to the end of each recording.
 - A name is letters, digits, `_` and `-`; it names a folder. `whole`, `all` and `none` are
   reserved.
-- `constants:` may change only the cutoffs that decide which chambers auto-removal takes
-  out (`min_untransformed_licks_cutoff`, `exclude_failed_opto_chambers`,
+- `constants:` may change only the lick cutoff and the unexplained-light verdict, with the
+  switch that removes the chambers it fails (`min_untransformed_licks_cutoff`,
+  `exclude_failed_opto_chambers`, `opto_unexplained_fail_fraction`,
   `opto_unexplained_min_sec`): a 6-hour Slice needs a lower lick cutoff than 24 hours.
-  Detection settings stay the design's, so a Slice is the same analysis of fewer minutes.
+  Detection settings and the firmware rule checks stay the design's, so a Slice is the same
+  analysis of fewer minutes.
 
 The **whole recording** is always analysed too, exactly as before: its results stay in
 `analysis/` and `qc/`. Slices may overlap, and they are never compared with one another.
@@ -48,6 +50,11 @@ The rows outside the Slice are dropped when the data is loaded, before the basel
 thresholds, event detection and auto-removal. Nothing outside the Slice can change its
 results. A Slice's windows include their end minute and exclude their start, as Facets' do,
 so `first_6h` and `last_18h` share no sample and lose none at minute 360.
+
+Two things are still read from before the Slice, because they happened there: the
+firmware's baseline for the optogenetic light QC, captured in the run's first ten seconds,
+and whether a light on at the Slice's first row had just come on (an onset, an Activation)
+or was already lit. A Slice's binned summary starts at the Slice's start.
 
 Its outputs go in `slices/<name>/` inside the experiment directory: `analysis/`, `qc/`, the
 experiment report, and `slice.json`, which records the Slice's definition and where each
@@ -81,7 +88,9 @@ Each Slice has its own Combined Analysis, Project Report and figures, in `slices
 at the Project root, pooled from the members that cover it. **Analyze all** and a Batch
 Run's `run_all_analyses` run the whole recording and every Slice; building the Combined
 Analysis or the Project Report does the same. A publication figure's Plot Spec names the
-Slice it draws from (`slice:`), blank for the whole recording.
+Slice it draws from (`slice:`), blank for the whole recording. A Spec naming a Slice the
+design no longer declares opens in the Plot Editor on the whole recording, with a note above
+the preview, and is saved that way.
 
 ## Scripts and the Hub
 
@@ -90,7 +99,9 @@ neither, on the whole recording. The `start` and `end` a step once took are reti
 that still states a window is skipped, and `pyflic lint` names the Slice to declare instead.
 
 `run_qc`, `run_analysis` and `run_plots`, like the Hub's buttons, run the whole recording and
-every Slice the Selection keeps (`omit: slices:` leaves one out).
+every Slice the Selection keeps (`omit: slices:` leaves one out). A Slice's figures are
+titled `… · Slice <name>`; the Hub's **Generate plots** runs the same step and opens the
+figures of the Slice it shows.
 
 ## Progressive Ratio and Fixed Ratio
 

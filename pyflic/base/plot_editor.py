@@ -42,7 +42,6 @@ from PyQt6.QtWidgets import (
     QCheckBox,
     QColorDialog,
     QComboBox,
-    QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
     QFrame,
@@ -65,10 +64,17 @@ from PyQt6.QtWidgets import (
 
 from . import project as project_mod
 from . import pubfigures
+from . import slices as slices_mod
 from .gui_env import sanitize_input_method_environment
 from .ui import Category, apply_theme, icon
 from .ui import settings as ui_settings
-from .ui.widgets import ActionButton, Card, CardGroup, NoWheelComboBox
+from .ui.widgets import (
+    ActionButton,
+    Card,
+    CardGroup,
+    NoWheelComboBox,
+    NoWheelDoubleSpinBox,
+)
 
 
 def _readable_on(colour: str) -> str:
@@ -235,9 +241,12 @@ class PlotEditorWindow(QMainWindow):
         form.addRow("Y label:", self.ylabel_edit)
 
         limits = QHBoxLayout()
-        self.ymin = QDoubleSpinBox()
+        ## Every field in this column ignores the wheel, which scrolls the
+        ## column: a value that moved under a passing pointer would quietly
+        ## change the Spec, and the close-time save would keep it.
+        self.ymin = NoWheelDoubleSpinBox()
         self.ymin.setRange(-1e6, 1e6)
-        self.ymax = QDoubleSpinBox()
+        self.ymax = NoWheelDoubleSpinBox()
         self.ymax.setRange(-1e6, 1e6)
         self.use_limits = QCheckBox("Fix y limits")
         for widget in (self.ymin, self.ymax):
@@ -265,7 +274,7 @@ class PlotEditorWindow(QMainWindow):
 
         ## Family-specific rows, built once and shown or hidden, so switching
         ## plots never rebuilds the form (and never steals focus mid-edit).
-        self.binsize = QDoubleSpinBox()
+        self.binsize = NoWheelDoubleSpinBox()
         self.binsize.setRange(0.5, 600.0)
         self.binsize.setValue(30.0)
         self.binsize.valueChanged.connect(self._apply_content)
@@ -345,7 +354,7 @@ class PlotEditorWindow(QMainWindow):
         form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
 
         row = QHBoxLayout()
-        self.style_combo = QComboBox()
+        self.style_combo = NoWheelComboBox()
         self.style_combo.currentTextChanged.connect(self._on_style_selected)
         row.addWidget(self.style_combo, 1)
         add = QPushButton("New")
@@ -353,9 +362,9 @@ class PlotEditorWindow(QMainWindow):
         row.addWidget(add)
         form.addRow("Style:", row)
 
-        self.width_mm = QDoubleSpinBox()
+        self.width_mm = NoWheelDoubleSpinBox()
         self.width_mm.setRange(20.0, 600.0)
-        self.height_mm = QDoubleSpinBox()
+        self.height_mm = NoWheelDoubleSpinBox()
         self.height_mm.setRange(20.0, 600.0)
         size = QHBoxLayout()
         size.setSpacing(4)
@@ -368,44 +377,44 @@ class PlotEditorWindow(QMainWindow):
         ## facets is not three squeezed panels in the width of a one-facet
         ## plot.  Zero means off — the figure keeps the size above, which is
         ## what ``effective_width_mm``/``effective_height_mm`` already do.
-        self.facet_width_mm = QDoubleSpinBox()
+        self.facet_width_mm = NoWheelDoubleSpinBox()
         self.facet_width_mm.setRange(0.0, 300.0)
         self.facet_width_mm.setSpecialValueText("off")
         form.addRow("Facet width (mm):", self.facet_width_mm)
 
-        self.facet_height_mm = QDoubleSpinBox()
+        self.facet_height_mm = NoWheelDoubleSpinBox()
         self.facet_height_mm.setRange(0.0, 300.0)
         self.facet_height_mm.setSpecialValueText("off")
         form.addRow("Facet height (mm):", self.facet_height_mm)
 
-        self.theme_combo = QComboBox()
+        self.theme_combo = NoWheelComboBox()
         self.theme_combo.addItems(list(pubfigures._THEMES))
         form.addRow("Theme:", self.theme_combo)
 
         self.font_edit = QLineEdit()
         form.addRow("Font family:", self.font_edit)
 
-        self.base_pt = QDoubleSpinBox()
+        self.base_pt = NoWheelDoubleSpinBox()
         self.base_pt.setRange(4.0, 32.0)
         form.addRow("Base size (pt):", self.base_pt)
 
-        self.geom_combo = QComboBox()
+        self.geom_combo = NoWheelComboBox()
         self.geom_combo.addItems(list(pubfigures._GEOMS))
         form.addRow("Data geometry:", self.geom_combo)
 
-        self.mean_combo = QComboBox()
+        self.mean_combo = NoWheelComboBox()
         self.mean_combo.addItems(list(pubfigures._MEAN_STYLES))
         form.addRow("Mean overlay:", self.mean_combo)
 
-        self.strip_combo = QComboBox()
+        self.strip_combo = NoWheelComboBox()
         self.strip_combo.addItems(list(pubfigures._STRIP_STYLES))
         form.addRow("Facet strips:", self.strip_combo)
 
-        self.point_size = QDoubleSpinBox()
+        self.point_size = NoWheelDoubleSpinBox()
         self.point_size.setRange(0.1, 12.0)
         form.addRow("Point size:", self.point_size)
 
-        self.line_pt = QDoubleSpinBox()
+        self.line_pt = NoWheelDoubleSpinBox()
         self.line_pt.setRange(0.1, 6.0)
         form.addRow("Line weight:", self.line_pt)
 
@@ -438,8 +447,20 @@ class PlotEditorWindow(QMainWindow):
         self.preview_label = QLabel("Open a Project to begin.")
         self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.preview_scroll.setWidget(self.preview_label)
+        ## Above the figure, not in place of it: what the editor changed in
+        ## the Spec on its own, beside what that change draws.
+        self.preview_note = QLabel("")
+        self.preview_note.setObjectName("PyflicCardSubtitle")
+        self.preview_note.setWordWrap(True)
+        self.preview_note.setVisible(False)
+        card.add_body(self.preview_note)
         card.add_body(self.preview_scroll)
         return card
+
+    def _set_preview_note(self, text: str) -> None:
+        """Say *text* above the preview, or hide the note when it is empty."""
+        self.preview_note.setText(text)
+        self.preview_note.setVisible(bool(text))
 
     def eventFilter(self, watched, event):  # noqa: N802 (Qt override)
         """Refit the preview when its pane changes width.
@@ -539,9 +560,9 @@ class PlotEditorWindow(QMainWindow):
     def _reload_lists(self) -> None:
         self._loading = True
         self.slice_combo.clear()
-        self.slice_combo.addItem("Whole recording", None)
+        self.slice_combo.addItem(slices_mod.WHOLE_RECORDING_LABEL, None)
         for item in (self.project.slices if self.project else []):
-            self.slice_combo.addItem(f"{item.name} {item.bounds_label()}", item.name)
+            self.slice_combo.addItem(item.label(), item.name)
         for widget in (self.slice_combo, self.slice_label):
             widget.setVisible(self.slice_combo.count() > 1)
         self.plot_combo.clear()
@@ -624,6 +645,18 @@ class PlotEditorWindow(QMainWindow):
         self.free_y.setChecked(spec.free_y)
         self.mark_experiments.setChecked(spec.mark_experiments)
         index = self.slice_combo.findData(spec.slice)
+        ## A Slice the design no longer declares draws nothing at Render
+        ## (pubfigures skips it): the Spec falls back to the whole recording,
+        ## which is what the preview shows, and says so.
+        stale = spec.slice if spec.slice is not None and index < 0 else None
+        if stale is not None:
+            spec.slice = None
+            index = 0
+        self._set_preview_note(
+            "" if stale is None else
+            f"This plot's Spec named Slice '{stale}', which the design no longer "
+            f"declares: it now draws from the whole recording, and is saved that "
+            f"way.  Pick a Slice above to draw from one.")
         self.slice_combo.setCurrentIndex(index if index >= 0 else 0)
         self._facet_frame, self._binned_frame = self._frames_for(
             self.slice_combo.currentData())
@@ -711,7 +744,9 @@ class PlotEditorWindow(QMainWindow):
                                           self._binned_frame, self._view())
             if source is None or source.empty:
                 return None
-            return pubfigures.timecourse_data(source, info["metric"])
+            return pubfigures.timecourse_data(
+                source, info["metric"],
+                transformed=pubfigures.licks_transformed(self.project, plot_id))
         if family == pubfigures.FAMILY_SCATTER:
             source = pubfigures.frame_for(plot_id, self._facet_frame,
                                           self._binned_frame, self._view())
@@ -725,8 +760,9 @@ class PlotEditorWindow(QMainWindow):
                                             self._binned_frame, self._view()))
         if source is None or source.empty:
             return None
-        return pubfigures.faceted_data(source, info["metric"],
-                                       pubfigures.facet_order(source))
+        return pubfigures.faceted_data(
+            source, info["metric"], pubfigures.facet_order(source),
+            transformed=pubfigures.licks_transformed(self.project, plot_id))
 
     def _apply_content(self, *_args) -> None:
         if self._loading:

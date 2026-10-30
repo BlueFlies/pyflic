@@ -46,14 +46,41 @@ SINGLE_WELL_LABELS: dict[str, str] = {
     "MedDuration": "Median duration (s)", "MeanDuration": "Mean duration (s)",
 }
 
+#: How a label says its licks are on the fourth-root scale
+#: (``transform_licks``).  A paired − yoked difference of transformed licks
+#: is kept on that scale — a variance-stabilised contrast — and says so.
+ROOT_SCALE = "¼-root scale"
+
+
+def is_lick_difference(metric: str) -> bool:
+    """Whether *metric* is a difference of Licks (``dLicksA``, ``dLicks``):
+    on the fourth-root scale when the licks were transformed."""
+    return str(metric).startswith("dLicks")
+
+
+def on_root_scale(label: str) -> str:
+    """*label* marked as on the fourth-root scale, inside its last
+    parentheses when it has them: ``Δ Sucrose licks (paired − yoked)`` →
+    ``Δ Sucrose licks (¼-root scale, paired − yoked)``."""
+    if label.endswith(")") and "(" in label:
+        at = label.rindex("(")
+        return f"{label[:at + 1]}{ROOT_SCALE}, {label[at + 1:]}"
+    return f"{label} ({ROOT_SCALE})"
+
 
 def metric_label(metric: str, well_names: dict | None = None, *,
-                 two_well: bool = True) -> str:
+                 two_well: bool = True, transformed: bool = False) -> str:
+    """How *metric* reads in a table or on an axis.  With *transformed* (the
+    licks were fourth-root transformed), a lick difference says it is on the
+    ¼-root scale (:func:`on_root_scale`)."""
     if not two_well and metric in SINGLE_WELL_LABELS:
         return SINGLE_WELL_LABELS[metric]
     names = well_names or {}
     template = METRIC_LABELS.get(metric, metric)
-    return template.format(A=names.get("A") or "A", B=names.get("B") or "B")
+    label = template.format(A=names.get("A") or "A", B=names.get("B") or "B")
+    if transformed and is_lick_difference(metric):
+        label = on_root_scale(label)
+    return label
 
 
 def _p_tone(value: Any) -> str | None:
@@ -105,12 +132,13 @@ def light_comparison_blocks(metrics: Sequence[str], rows: pd.DataFrame,
 
 def stats_table(rows: Sequence[dict], *, caption: str | None = None,
                 well_names: dict | None = None, show_phase: bool = True,
-                two_well: bool = True) -> list[Any]:
+                two_well: bool = True, transformed: bool = False) -> list[Any]:
     """Treatment comparisons (:func:`pyflic.base.analytics.treatment_comparisons`)
     as a report table, significant p-values highlighted, plus a note on the
     tests; a short paragraph instead when there is nothing to compare.  Rows
     from :func:`~pyflic.base.analytics.breaking_point_comparisons` add a
-    log-rank column."""
+    log-rank column.  *transformed*: the licks were fourth-root transformed,
+    so a lick difference is labelled as on that scale."""
     if not rows:
         return [rl.Paragraph("No treatment comparison was possible here: at least two "
                              "treatments with two or more observations each are needed.",
@@ -119,7 +147,8 @@ def stats_table(rows: Sequence[dict], *, caption: str | None = None,
     has_mixed = any(r.get("p_mixed") is not None for r in rows)
     has_logrank = any(r.get("p_logrank") is not None for r in rows)
     for r in rows:
-        rec = {"Measure": metric_label(r["metric"], well_names, two_well=two_well)}
+        rec = {"Measure": metric_label(r["metric"], well_names, two_well=two_well,
+                                       transformed=transformed)}
         if show_phase:
             rec["Phase"] = r["phase"]
         rec.update({
@@ -159,10 +188,12 @@ def stats_table(rows: Sequence[dict], *, caption: str | None = None,
 
 def zero_test_table(rows: Sequence[dict], *, caption: str | None = None,
                     well_names: dict | None = None,
-                    show_phase: bool = False) -> list[Any]:
+                    show_phase: bool = False, transformed: bool = False) -> list[Any]:
     """Paired − yoked differences tested against zero within each treatment
     (:func:`pyflic.base.analytics.zero_tests`) as a report table, plus a note
-    on the tests; a short paragraph instead when nothing could be tested."""
+    on the tests; a short paragraph instead when nothing could be tested.
+    *transformed*: the licks were fourth-root transformed, so a lick
+    difference is labelled as on that scale."""
     if not rows:
         return [rl.Paragraph("No test against zero was possible here: a treatment needs "
                              "at least two chamber groups whose differences are not all "
@@ -170,7 +201,7 @@ def zero_test_table(rows: Sequence[dict], *, caption: str | None = None,
     has_mixed = any(r.get("p_mixed") is not None for r in rows)
     records = []
     for r in rows:
-        rec = {"Measure": metric_label(r["metric"], well_names)}
+        rec = {"Measure": metric_label(r["metric"], well_names, transformed=transformed)}
         if show_phase:
             rec["Phase"] = r["phase"]
         rec.update({

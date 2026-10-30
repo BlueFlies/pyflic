@@ -60,6 +60,7 @@ from .gui_env import sanitize_input_method_environment
 from .ui import ActionButton, Card, Category, TopBar, apply_theme, icon, resolved_mode
 from .ui.icons import help_color
 from .ui import settings as ui_settings
+from .ui.widgets import NoWheelComboBox, NoWheelSpinBox
 
 # ---------------------------------------------------------------------------
 # Parameter metadata
@@ -128,9 +129,12 @@ _PARAM_ORDER: list[str] = [
 
 
 def _make_param_widget(key: str, default: Any) -> QWidget:
-    """Return an appropriate input widget for the given parameter key."""
+    """Return an appropriate input widget for the given parameter key.
+
+    Both editors host the form in a scrolling page, so the wheel never
+    changes a value: it scrolls the page."""
     if key == "pi_direction":
-        w = QComboBox()
+        w = NoWheelComboBox()
         w.addItems(["left", "right"])
         w.setCurrentText(str(default))
         w.setFixedWidth(75)
@@ -139,7 +143,7 @@ def _make_param_widget(key: str, default: Any) -> QWidget:
         w = QCheckBox()
         w.setChecked(bool(default))
         return w
-    w = QSpinBox()
+    w = NoWheelSpinBox()
     w.setFixedWidth(75)
     if key == "samples_per_second":
         w.setRange(1, 1000)
@@ -509,12 +513,17 @@ _SLICE_CONSTANT_COLUMNS: tuple[tuple[str, str, str, str], ...] = (
      "exclude_failed_opto_chambers for this Slice — blank takes the design's; yes "
      "excludes the chambers whose optogenetic light QC fails, no keeps and flags "
      "them."),
+    ("opto_unexplained_fail_fraction", "Fail fraction", "number",
+     "opto_unexplained_fail_fraction for this Slice — blank takes the design's; the "
+     "fraction of a linkage group's lit time, 0 to 1, that unexplained light must "
+     "reach to fail the group.  Not below the design's warning fraction."),
     ("opto_unexplained_min_sec", "Unexplained (s)", "number",
      "opto_unexplained_min_sec for this Slice — blank takes the design's; the "
      "seconds of unexplained light before the optogenetic light QC judges a group."),
 )
 #: The optogenetic light QC's columns, shown only where the design's are.
-_SLICE_OPTO_KEYS = frozenset({"exclude_failed_opto_chambers", "opto_unexplained_min_sec"})
+_SLICE_OPTO_KEYS = frozenset({"exclude_failed_opto_chambers",
+                              "opto_unexplained_fail_fraction", "opto_unexplained_min_sec"})
 #: A Slice's keys that have a column; any other is kept as the file says, so
 #: the check names it rather than the editor dropping it.
 _SLICE_BODY_KEYS = frozenset({"start", "end", "exclusion_group", "also_exclude",
@@ -597,7 +606,15 @@ def _slice_constant(kind: str, text: str) -> tuple[Any, bool]:
         return None, False
     if not math.isfinite(value):
         return None, False
-    return (int(value) if value.is_integer() else value), True
+    return slices_mod.tidy_minute(value), True
+
+
+#: On a row's Name item: the name it had before the edit being made, so an
+#: own group that equalled it can follow a rename.
+_PREVIOUS_NAME_ROLE = Qt.ItemDataRole.UserRole + 1
+#: On a row's Name item: the name the row was loaded with ("" for a row
+#: added here), so the Selection's ``omit.slices`` can follow a rename.
+_LOADED_NAME_ROLE = Qt.ItemDataRole.UserRole + 2
 
 
 class _SliceKept:
@@ -657,7 +674,7 @@ class SlicesWidget(QWidget):
         self._table.verticalHeader().setVisible(False)
         self._table.setAlternatingRowColors(True)
         self._table.setMinimumHeight(90)
-        self._table.itemChanged.connect(lambda _item: self.changed.emit())
+        self._table.itemChanged.connect(self._on_item_changed)
         layout.addWidget(self._table, stretch=1)
 
         self._controls = QWidget()
@@ -690,6 +707,52 @@ class SlicesWidget(QWidget):
         self._apply_state()
 
     # ---- editing ------------------------------------------------------
+
+    def _on_item_changed(self, item: QTableWidgetItem) -> None:
+        """Any edit; a renamed Slice whose own group was its old name takes
+        the new one too.  Left behind, the old group would still collect the
+        Slice's removals under a name nothing shows, and a later Slice of the
+        old name would be refused for sharing it."""
+        if item.column() == 0:
+            row = item.row()
+            name = item.text().strip()
+            previous = item.data(_PREVIOUS_NAME_ROLE) or ""
+            own = self._table.item(row, 3)
+            blocked = self._table.blockSignals(True)
+            try:
+                if own is not None and name != previous \
+                        and own.text().strip() == previous:
+                    own.setText(name)
+                item.setData(_PREVIOUS_NAME_ROLE, name)
+            finally:
+                self._table.blockSignals(blocked)
+        self.changed.emit()
+
+    def renamed(self) -> dict[str, str]:
+        """``{name loaded: name now}`` for every loaded Slice renamed here."""
+        out: dict[str, str] = {}
+        for row in range(self._table.rowCount()):
+            item = self._table.item(row, 0)
+            if item is None:
+                continue
+            loaded = item.data(_LOADED_NAME_ROLE) or ""
+            name = item.text().strip()
+            if loaded and name and name != loaded:
+                out[loaded] = name
+        return out
+
+    def follow_renames(self, omit: Any) -> Any:
+        """*omit* (``global.omit``, the Selection) with each renamed Slice's
+        entry in ``slices`` renamed too: a box left unticked stays unticked,
+        and no entry is left naming a Slice that is no longer declared."""
+        renames = self.renamed()
+        if not renames or not isinstance(omit, Mapping) \
+                or not isinstance(omit.get("slices"), list):
+            return omit
+        out = dict(omit)
+        out["slices"] = [renames.get(name, name) if isinstance(name, str) else name
+                         for name in omit["slices"]]
+        return out
 
     def _add_row(self) -> None:
         row = self._append("", {})
@@ -739,8 +802,10 @@ class SlicesWidget(QWidget):
         self._table.setRowCount(row + 1)
         for column, text in enumerate(cells):
             self._table.setItem(row, column, QTableWidgetItem(text))
-        self._table.item(row, 0).setData(
-            Qt.ItemDataRole.UserRole, _SliceKept(extra_body, extra_constants))
+        first = self._table.item(row, 0)
+        first.setData(Qt.ItemDataRole.UserRole, _SliceKept(extra_body, extra_constants))
+        first.setData(_PREVIOUS_NAME_ROLE, name)
+        first.setData(_LOADED_NAME_ROLE, name)
         self._table.blockSignals(blocked)
         return row
 
@@ -882,6 +947,12 @@ class SlicesWidget(QWidget):
 # ---------------------------------------------------------------------------
 # DFMWidget
 # ---------------------------------------------------------------------------
+
+#: The ``dfms:`` entry keys a DFM tab writes (or, cleared, leaves out); any
+#: other key it loaded is kept as the file says.
+_MANAGED_DFM_KEYS = frozenset({"id", "optogenetics", "params", "parameters",
+                               "chambers", "Chambers", "paired_chambers",
+                               "chamber_groups"})
 
 
 def _sanitize_treatment(text: str) -> str:
@@ -1105,6 +1176,8 @@ class DFMWidget(QWidget):
         super().__init__(parent)
         self._chamber_size = chamber_size
         self._factor_levels: dict[str, list[str]] = {}
+        #: The keys of the loaded ``dfms:`` entry this tab has no field for.
+        self._unmanaged: dict[str, Any] = {}
 
         outer = QVBoxLayout(self)
         outer.setAlignment(Qt.AlignmentFlag.AlignTop)
@@ -1118,7 +1191,8 @@ class DFMWidget(QWidget):
         id_inner = QHBoxLayout()
         id_inner.setContentsMargins(0, 0, 0, 0)
         id_inner.addWidget(QLabel("DFM ID:"))
-        self._id_spin = QSpinBox()
+        ## Each DFM tab scrolls: the wheel scrolls it, never a choice on it.
+        self._id_spin = NoWheelSpinBox()
         self._id_spin.setRange(1, 99)
         self._id_spin.setValue(dfm_id)
         self._id_spin.setMaximumWidth(80)
@@ -1127,7 +1201,7 @@ class DFMWidget(QWidget):
         ## Per-DFM optogenetics: a physical fact about this DFM (was its lid
         ## lit?), so it stays free inside a Project, like the rest of dfms:.
         id_inner.addWidget(QLabel("Optogenetics:"))
-        self._opto_combo = QComboBox()
+        self._opto_combo = NoWheelComboBox()
         self._opto_combo.addItem("inherit", None)
         for label, value in _OPTO_CHOICES:
             self._opto_combo.addItem(label.split(" —")[0], value)
@@ -1185,7 +1259,7 @@ class DFMWidget(QWidget):
             pass
         pr_row = QHBoxLayout()
         pr_row.setContentsMargins(0, 0, 0, 0)
-        self._groups_combo = QComboBox()
+        self._groups_combo = NoWheelComboBox()
         for label, value in (("Pairs", PR_GROUPS_PAIRED), ("Single chambers", PR_GROUPS_SINGLE),
                              ("From Program.txt", PR_GROUPS_PROGRAM)):
             self._groups_combo.addItem(label, value)
@@ -1199,7 +1273,7 @@ class DFMWidget(QWidget):
         self._paired_combos: list[QComboBox] = []
         for g, (a, b) in CHAMBER_GROUPS.items():
             pr_row.addWidget(QLabel(f"Group {g} ({a}+{b}):"))
-            combo = QComboBox()
+            combo = NoWheelComboBox()
             combo.addItem(f"Chamber {a}", a)
             combo.addItem(f"Chamber {b}", b)
             combo.setFixedWidth(110)
@@ -1557,10 +1631,16 @@ class DFMWidget(QWidget):
             result["chamber_groups"] = PR_GROUPS_SINGLE
         if chambers:
             result["chambers"] = chambers
+        ## A key this tab has no field for (well_names, a note) was written
+        ## by hand; keep it.  A key it does manage is written above or, when
+        ## cleared, not at all.
+        for key, value in self._unmanaged.items():
+            result.setdefault(key, value)
 
         return result
 
     def load_dict(self, data: dict[str, Any], chamber_size: int) -> None:
+        self._unmanaged = {k: v for k, v in data.items() if k not in _MANAGED_DFM_KEYS}
         self._id_spin.setValue(int(data.get("id", self._id_spin.value())))
         self._opto_combo.setCurrentIndex(_opto_index(data.get("optogenetics"),
                                                      inherit=True))
@@ -1600,6 +1680,17 @@ class DFMWidget(QWidget):
 # ---------------------------------------------------------------------------
 # Main window
 # ---------------------------------------------------------------------------
+
+
+#: The ``global:`` keys the Experiment tab writes (or, cleared, leaves out).
+#: ``well_names`` is one only for a two-well layout, the one with fields for
+#: it; every other key the file states is kept on save.
+_MANAGED_GLOBAL_KEYS = frozenset({
+    "experiment_type", "chamber_layout", "params", "parameters", "transform_licks",
+    "optogenetics", "facet_source", "constants", "experimental_design_factors",
+    "exclusion_group", "also_exclude", "slice_tolerance_min", "slices", "omit",
+    "control_level",
+})
 
 
 class FLICConfigEditor(QMainWindow):
@@ -1803,7 +1894,10 @@ class FLICConfigEditor(QMainWindow):
         ## names (two_well, single_well) cannot reappear in it (ADR-0007).
         ## A lab's own types are listed too, and New type… builds one in the
         ## Experiment Type Editor (ADR-0019).
-        self._experiment_type_combo = QComboBox()
+        ## The page scrolls; the wheel scrolls it and never changes a choice
+        ## here — a type or layout changed by a passing pointer reshapes the
+        ## whole config.
+        self._experiment_type_combo = NoWheelComboBox()
         self._fill_type_combo()
         self._experiment_type_combo.setMaximumWidth(240)
         self._last_type_index = self._experiment_type_combo.currentIndex()
@@ -1829,7 +1923,7 @@ class FLICConfigEditor(QMainWindow):
         ## Shown even when the type owns it: the layout is what decides
         ## whether the other tab has 6 chambers or 12, and a derived value
         ## that drives visible structure elsewhere should be readable.
-        self._chamber_layout_combo = QComboBox()
+        self._chamber_layout_combo = NoWheelComboBox()
         for key, label in _LAYOUT_LABELS.items():
             self._chamber_layout_combo.addItem(label, key)
         self._chamber_layout_combo.setCurrentIndex(
@@ -1885,7 +1979,7 @@ class FLICConfigEditor(QMainWindow):
 
         ## Whether the optogenetic light QC runs (auto | yes | no); a DFM tab
         ## can override it for that DFM.
-        self._opto_combo = QComboBox()
+        self._opto_combo = NoWheelComboBox()
         for label, value in _OPTO_CHOICES:
             self._opto_combo.addItem(label, value)
         self._opto_combo.setMaximumWidth(260)
@@ -1905,7 +1999,7 @@ class FLICConfigEditor(QMainWindow):
         ## type that owns its Facets owns this too (_sync_facet_source).
         from .program_facets import FACET_SOURCES, SOURCE_LABELS
 
-        self._facet_source_combo = QComboBox()
+        self._facet_source_combo = NoWheelComboBox()
         for value in FACET_SOURCES:
             self._facet_source_combo.addItem(SOURCE_LABELS[value], value)
         self._facet_source_combo.setMaximumWidth(260)
@@ -1964,7 +2058,7 @@ class FLICConfigEditor(QMainWindow):
         self._pr_constant_rows: dict[str, int] = {}
         for field in PR_CONSTANT_FIELDS:
             if field.group == "switch":
-                widget = QComboBox()
+                widget = NoWheelComboBox()
                 widget.addItem("default", None)
                 widget.addItem(field.choices[0], True)
                 widget.addItem(field.choices[1], False)
@@ -1998,7 +2092,7 @@ class FLICConfigEditor(QMainWindow):
         for field in OPTO_CONSTANT_FIELDS:
             default = _OPTO_DEFAULTS.get(field.key)
             if field.group == "switch":
-                widget = QComboBox()
+                widget = NoWheelComboBox()
                 widget.addItem("default: " + field.choices[0 if default else 1], None)
                 widget.addItem(field.choices[0], True)
                 widget.addItem(field.choices[1], False)
@@ -2929,8 +3023,10 @@ class FLICConfigEditor(QMainWindow):
         global_section.update(declared)
 
         ## The Selection (ADR-0018) has no field here: the Hub's ticks write
-        ## it.  Kept as the file says, or a save would undo every untick.
-        omit = (self._loaded_raw.get("global") or {}).get("omit")
+        ## it.  Kept as the file says, or a save would undo every untick —
+        ## with a renamed Slice's entry renamed, so its box stays unticked.
+        loaded_global = self._loaded_raw.get("global") or {}
+        omit = self._slices_widget.follow_renames(loaded_global.get("omit"))
         if omit:
             global_section["omit"] = omit
 
@@ -2938,6 +3034,21 @@ class FLICConfigEditor(QMainWindow):
         level = self._control_level_edit.text().strip()
         if level and item.definition is not None and item.definition.treatment_control:
             global_section["control_level"] = level
+
+        ## A key this form has no field for — facet_cutoffs, facet_labels, a
+        ## single-well design's well_names — was written by hand or by
+        ## another editor; keep it.  A key the form manages is written above
+        ## or, cleared, not at all: keeping the file's would undo the clear.
+        ## Nor is a key kept that the choices made here rule out: one the
+        ## type now owns, or minute cutoffs beside Program Facets.
+        managed = set(_MANAGED_GLOBAL_KEYS) | set(item.owned_keys())
+        if self._chamber_size() == 2:
+            managed.add("well_names")
+        if is_program_source(facet_source):
+            managed.add("facet_cutoffs")
+        for key, value in loaded_global.items():
+            if key not in managed:
+                global_section.setdefault(key, value)
 
         return global_section
 
@@ -3224,6 +3335,8 @@ class FLICConfigEditor(QMainWindow):
             widget.update_chamber_size(chamber_size)
         self._sync_dfm_tabs(n, chamber_size)
 
+        for widget in self._dfm_widgets[len(dfm_nodes):]:
+            widget._unmanaged = {}
         for i, node in enumerate(dfm_nodes):
             if i < len(self._dfm_widgets):
                 self._dfm_widgets[i].update_factors(factors)

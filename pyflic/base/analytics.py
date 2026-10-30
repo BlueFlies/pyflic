@@ -22,7 +22,9 @@ import pandas as pd
 from .dfm import DFM
 from .experiment import Experiment
 from .single_well_experiment import SingleWellExperiment
+from .slices import WHOLE_RECORDING_LABEL
 from .two_well_experiment import TwoWellExperiment
+from .utils import lick_total, range_bounds
 
 
 # ---------------------------------------------------------------------------
@@ -139,6 +141,8 @@ def bootstrap_metric(
 
     df, resolved_group = experiment._resolve_group_col(df)
     grp = group_col or resolved_group
+    transformed = bool(experiment.transform_licks if transform_licks is None
+                       else transform_licks)
 
     if metric not in df.columns:
         # Try two-well A/B aggregation modes
@@ -149,7 +153,9 @@ def bootstrap_metric(
             elif two_well_mode == "B":
                 df = df.assign(_metric=df[b_col])
             elif two_well_mode == "total":
-                df = df.assign(_metric=df[a_col] + df[b_col])
+                df = df.assign(_metric=lick_total(df[a_col], df[b_col],
+                                                  transformed=transformed)
+                               if metric == "Licks" else df[a_col] + df[b_col])
             elif two_well_mode == "diff":
                 df = df.assign(_metric=df[a_col] - df[b_col])
             else:
@@ -255,6 +261,8 @@ def compare_treatments(
         raise ValueError("feeding_summary is empty; nothing to compare")
 
     # Normalise metric column for two-well A/B aggregation modes
+    transformed = bool(experiment.transform_licks if transform_licks is None
+                       else transform_licks)
     if metric not in df.columns:
         a_col, b_col = f"{metric}A", f"{metric}B"
         if a_col in df.columns and b_col in df.columns:
@@ -263,7 +271,9 @@ def compare_treatments(
             elif two_well_mode == "B":
                 df = df.assign(_metric=df[b_col])
             elif two_well_mode == "total":
-                df = df.assign(_metric=df[a_col] + df[b_col])
+                df = df.assign(_metric=lick_total(df[a_col], df[b_col],
+                                                  transformed=transformed)
+                               if metric == "Licks" else df[a_col] + df[b_col])
             elif two_well_mode == "diff":
                 df = df.assign(_metric=df[a_col] - df[b_col])
             else:
@@ -515,6 +525,7 @@ def treatment_comparisons(
     metrics: Sequence[str],
     *,
     mixed_p: Any = None,
+    transformed: bool = False,
 ) -> list[dict]:
     """Treatment comparisons for every metric in every ``(label, frame)``.
 
@@ -526,7 +537,9 @@ def treatment_comparisons(
 
     *mixed_p* ``(data, a, b) -> p | None`` adds the linear-mixed-model p-value
     when the frames span more than one ``Experiment`` (the Project's pooled
-    statistics); otherwise ``p_mixed`` is ``None``.
+    statistics); otherwise ``p_mixed`` is ``None``.  *transformed* says the
+    frames' Licks are on the fourth-root scale, so a two-well ``Licks`` total
+    is (A + B)^¼ (:func:`_resolve_metric_col`).
 
     Each row: ``metric, phase, a, n_a, mean_a, b, n_b, mean_b, diff`` (mean
     of *b* minus mean of *a*), ``p_pooled, significant, p_mixed, test``.
@@ -543,7 +556,8 @@ def treatment_comparisons(
         for label, frame in frames:
             if frame is None or frame.empty or "Treatment" not in frame.columns:
                 continue
-            value = pd.to_numeric(_resolve_metric_col(frame, metric), errors="coerce")
+            value = pd.to_numeric(_resolve_metric_col(frame, metric, transformed=transformed),
+                                  errors="coerce")
             if value.isna().all():
                 continue
             data = pd.DataFrame({
@@ -595,12 +609,15 @@ def treatment_comparisons(
     return rows
 
 
-def _resolve_metric_col(df: pd.DataFrame, metric: str) -> pd.Series:
+def _resolve_metric_col(df: pd.DataFrame, metric: str, *,
+                        transformed: bool = False) -> pd.Series:
     """Return per-row values for *metric*.
 
     For single-well DataFrames the column is used directly.  For two-well
     DataFrames (where ``Licks`` is split into ``LicksA`` / ``LicksB``):
-    - Licks and Events are summed across wells (A+B).
+    - Licks and Events are summed across wells (A+B); with *transformed*
+      (the frame's Licks are on the fourth-root scale, ``transform_licks``)
+      the Licks total is (A + B)^¼ (:func:`pyflic.base.utils.lick_total`).
     - MedDuration uses well A only (summing medians is not meaningful).
     """
     if metric in df.columns:
@@ -609,6 +626,8 @@ def _resolve_metric_col(df: pd.DataFrame, metric: str) -> pd.Series:
     if a_col in df.columns and b_col in df.columns:
         if metric == "MedDuration":
             return df[a_col]
+        if metric == "Licks":
+            return lick_total(df[a_col], df[b_col], transformed=transformed)
         return df[a_col] + df[b_col]
     return pd.Series(float("nan"), index=df.index)
 
@@ -868,8 +887,9 @@ def zero_tests(
 #: report's own; per well (``LicksA``, ``LicksB``, ...) on a two-well layout.
 YOKED_METRICS: tuple[str, ...] = ("Licks", "Events", "MedDuration")
 
-#: The ``Facet`` of :func:`yoked_comparison`'s whole-recording rows.
-WHOLE_RECORDING = "Whole recording"
+#: The ``Facet`` of :func:`yoked_comparison`'s whole-recording rows: the
+#: Slices module's label, kept under this name for its importers.
+WHOLE_RECORDING = WHOLE_RECORDING_LABEL
 
 #: :func:`yoked_comparison`'s leading columns; the design's factors follow
 #: ``Treatment``, then ``Paired<m>``, ``Yoked<m>`` and ``d<m>`` per metric.
@@ -972,8 +992,12 @@ def yoked_comparison(
     if not groups or summary is None or summary.empty:
         return pd.DataFrame(columns=[*YOKED_COLUMNS, *factors])
     columns = yoked_metric_columns(summary, metrics)
+    ## The window as a Facet's FacetRange reads, an open end as inf: never the
+    ## "(0, 0)" sentinel.
     whole = (windowing.format_ranges(range_minutes) if windowing.is_window_list(range_minutes)
-             else windowing.format_range(range_minutes))
+             else windowing.format_range((0.0, float("inf"))
+                                         if windowing.is_full_range(range_minutes)
+                                         else range_bounds(range_minutes)))
     ## A Slice's rows are named for it and carry its minutes (ADR-0020).
     from . import slices
 
@@ -1070,6 +1094,8 @@ def parameter_sensitivity(
 
     rows: list[dict[str, Any]] = []
     base_dfms = dict(experiment.dfms)
+    transformed = bool(experiment.transform_licks if transform_licks is None
+                       else transform_licks)
 
     for v in values:
         new_dfms: dict[int, DFM] = {}
@@ -1095,7 +1121,8 @@ def parameter_sensitivity(
                 "n_chambers": int(len(sub)),
             }
             for m in _SENSITIVITY_METRICS:
-                vals = _resolve_metric_col(sub, m).dropna().to_numpy(dtype=float)
+                vals = _resolve_metric_col(sub, m, transformed=transformed).dropna().to_numpy(
+                    dtype=float)
                 n = vals.size
                 row[f"mean_{m}"] = float(vals.mean()) if n else float("nan")
                 row[f"sem_{m}"] = float(vals.std(ddof=1) / np.sqrt(n)) if n > 1 else float("nan")
@@ -1222,7 +1249,8 @@ def _compare_two_experiments(
     rows: list[dict[str, Any]] = []
     for metric in metrics:
         for df in (df_a, df_b):
-            df[f"_{metric}"] = _resolve_metric_col(df, metric)
+            df[f"_{metric}"] = _resolve_metric_col(df, metric,
+                                                   transformed=bool(transform_licks))
 
         groups = sorted(set(df_a[gcol_a]) | set(df_b[gcol_b]))
         for grp in groups:
